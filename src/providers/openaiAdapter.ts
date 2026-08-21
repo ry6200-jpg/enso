@@ -22,7 +22,7 @@ export function createOpenAiAdapter(apiKey: string): ProviderAdapter {
       response = await client.responses.create({
         model: OPENAI_EXTRACTION_MODEL,
         reasoning: { effort: "low" },
-        instructions: buildExtractionSystemPrompt(request.referenceDate ?? new Date().toISOString().slice(0, 10)),
+        instructions: buildExtractionSystemPrompt(request.referenceDate ?? new Date().toISOString().slice(0, 10), request.knownPeopleNames ?? []),
         input: request.text,
         text: {
           format: {

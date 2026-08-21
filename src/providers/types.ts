@@ -92,6 +92,18 @@ export interface ExtractionRequest {
   text: string;
   /** The message's own told-time (ISO date), so relative dates ("last year") resolve against when it was actually said, not whenever extraction happens to run (EN-016). Defaults to today if omitted. */
   referenceDate?: string;
+  /**
+   * Names of people already on record (EN-012, ported from old Enso's
+   * buildKnownPeopleBlock) — lets the model use an already-established
+   * person's real name instead of a bare kinship term or role when both
+   * appear in context ("my mom" -> "Elena", if Elena is already known),
+   * which is what lets structural-atom/social-bond mentions of the same
+   * person link up across separate messages at all. Per-message
+   * extraction has no memory of its own; this is how continuity is passed
+   * in. Callers decide how fresh this list needs to be — the entities
+   * projection as of the last rebuild is a reasonable source.
+   */
+  knownPeopleNames?: string[];
 }
 
 export interface TokenUsage {

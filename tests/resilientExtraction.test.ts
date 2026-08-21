@@ -85,6 +85,25 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
     expect(receivedReferenceDate).toBe(message.recordedAt.slice(0, 10));
   });
 
+  it("passes knownPeopleNames through to the router (EN-012, so the extractor can use an established name instead of a kinship term)", async () => {
+    const message = captureTestMessage("My mom called.");
+    let received: string[] | undefined;
+    const router: ExtractionRouter = {
+      extract: async (request) => {
+        received = request.knownPeopleNames;
+        return {
+          provider: "openai",
+          model: "gpt-5.6-terra",
+          taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
+          usage: { inputTokens: 1, outputTokens: 1 }
+        };
+      }
+    };
+
+    await extractMessageWithResilience(eventLog, router, message, undefined, ["Elena", "Marcus"]);
+    expect(received).toEqual(["Elena", "Marcus"]);
+  });
+
   it("skips the LLM call entirely for non-personal content — no provider/model recorded", async () => {
     const referenceText = `Table of Contents\n1.1 Introduction\n1.2 Background\n- a\n- b\n- c\n${"filler word ".repeat(80)}`;
     const message = captureTestMessage(referenceText);

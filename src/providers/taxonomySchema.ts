@@ -100,8 +100,12 @@ export const TAXONOMY_JSON_SCHEMA = {
  * actually sent, not whenever extraction happens to run — otherwise a
  * reprocess months later would silently shift every relative date.
  */
-export function buildExtractionSystemPrompt(referenceDate: string): string {
-  return `You extract structured facts from a personal journal entry. Today's date (the date this message was sent) is ${referenceDate} — use it to resolve any relative date phrases. Follow these rules exactly:
+export function buildExtractionSystemPrompt(referenceDate: string, knownPeopleNames: string[] = []): string {
+  const knownPeopleBlock =
+    knownPeopleNames.length > 0
+      ? `\nPeople already on record: ${knownPeopleNames.join(", ")}. When the text refers to one of them — even via a kinship term or role instead of their name ("my mom" when Elena is already on record as the mother) — use their EXACT established name from this list in fromName/toName/entityName, not the kinship term or role, so mentions of the same person link up across messages. Only use a bare kinship term or role when the text gives no name at all and no name is already on record for that person.\n`
+      : "";
+  return `You extract structured facts from a personal journal entry. Today's date (the date this message was sent) is ${referenceDate} — use it to resolve any relative date phrases.${knownPeopleBlock}Follow these rules exactly:
 - entities: every person mentioned by name (not the author/narrator). type is always "person".
 - statedFeelings: only feelings the author explicitly states about themselves or others in their own words (e.g. "I was furious", "she seemed relieved"). Do not infer feelings that weren't stated.
 - episodeMarkers: short markers for incidents or narrative boundaries — "incident_reference" for a specific event described, "boundary_start"/"boundary_end" only when the text explicitly signals an incident beginning or concluding.
