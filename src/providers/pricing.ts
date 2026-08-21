@@ -10,6 +10,7 @@ export interface ModelPricing {
 }
 
 export const PRICING: Record<string, ModelPricing> = {
+  "gpt-5.6-sol": { inputPerMillion: 5.0, outputPerMillion: 30.0 },
   "gpt-5.6-terra": { inputPerMillion: 2.0, outputPerMillion: 12.0 },
   "gpt-5.6-luna": { inputPerMillion: 0.2, outputPerMillion: 1.2 },
   "gemini-3.7-flash": { inputPerMillion: 0.75, outputPerMillion: 3.75 }

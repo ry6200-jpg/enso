@@ -97,6 +97,10 @@ export class RetrievalDb {
     return this.db.prepare(`SELECT * FROM content_chunks WHERE user_id = ? ORDER BY id ASC`).all(userId) as ContentChunkRow[];
   }
 
+  getChunkById(id: string): ContentChunkRow | undefined {
+    return this.db.prepare(`SELECT * FROM content_chunks WHERE id = ?`).get(id) as ContentChunkRow | undefined;
+  }
+
   getChunkByFtsRowid(ftsRowid: number): ContentChunkRow | undefined {
     return this.db.prepare(`SELECT * FROM content_chunks WHERE fts_rowid = ?`).get(ftsRowid) as ContentChunkRow | undefined;
   }
