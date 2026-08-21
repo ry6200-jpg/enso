@@ -21,7 +21,7 @@ function recordAttachmentCost(
   costTracker.record({
     provider: result.provider,
     model: result.model,
-    taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [] },
+    taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [] },
     usage: result.usage
   });
 }

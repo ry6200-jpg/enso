@@ -12,6 +12,33 @@ export interface EntityRow {
   created_at: string;
 }
 
+export interface StructuralAtomRow {
+  id: string;
+  user_id: string;
+  type: "parent_of" | "spouse_of" | "sibling_of";
+  from_entity_id: string;
+  to_entity_id: string;
+  basis: "stated" | "derived_from_parents";
+  interval_start: string | null;
+  interval_end: string | null;
+  source_event_ids: string; // JSON array of event ULIDs
+  created_at: string;
+}
+
+export interface SocialBondRow {
+  id: string;
+  user_id: string;
+  type: "friend" | "colleague" | "mentor_of" | "neighbor" | "classmate" | "romantic";
+  from_entity_id: string;
+  to_entity_id: string;
+  qualifier: string | null;
+  opened_basis: "inferred" | "stated";
+  interval_start: string | null;
+  interval_end: string | null;
+  source_event_ids: string; // JSON array of event ULIDs
+  created_at: string;
+}
+
 /**
  * Storage for derived, disposable projection data (EN-052). This is a
  * physically separate SQLite file from the event log, deliberately — the
@@ -47,6 +74,50 @@ export class ProjectionsDb {
         created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_entities_user_id ON entities(user_id);
+
+      -- Class A structural atoms (EN-013): parent_of (directed) and
+      -- spouse_of/sibling_of (symmetric — stored as one canonically-ordered
+      -- row, queried bidirectionally). child_of is never stored. Derived
+      -- relations (grandparent, cousin, in-law) are never stored here —
+      -- only traversal produces them, at query time.
+      CREATE TABLE IF NOT EXISTS structural_atoms (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        type TEXT NOT NULL CHECK (type IN ('parent_of', 'spouse_of', 'sibling_of')),
+        from_entity_id TEXT NOT NULL,
+        to_entity_id TEXT NOT NULL,
+        basis TEXT NOT NULL CHECK (basis IN ('stated', 'derived_from_parents')),
+        interval_start TEXT,
+        interval_end TEXT,
+        source_event_ids TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_atoms_user_id ON structural_atoms(user_id);
+      CREATE INDEX IF NOT EXISTS idx_atoms_from ON structural_atoms(from_entity_id);
+      CREATE INDEX IF NOT EXISTS idx_atoms_to ON structural_atoms(to_entity_id);
+
+      -- Class B social bonds (EN-013): typed coexisting intervals, never
+      -- graph edges — multiple bonds of different types may be concurrently
+      -- open on the same pair (accretion, not transition). opened_basis may
+      -- be 'inferred'; there is deliberately no 'inferred' option wired to
+      -- any code path that sets interval_end — closing a bond always
+      -- requires the caller to have stated evidence (see socialBonds.ts).
+      CREATE TABLE IF NOT EXISTS social_bonds (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        type TEXT NOT NULL CHECK (type IN ('friend', 'colleague', 'mentor_of', 'neighbor', 'classmate', 'romantic')),
+        from_entity_id TEXT NOT NULL,
+        to_entity_id TEXT NOT NULL,
+        qualifier TEXT,
+        opened_basis TEXT NOT NULL CHECK (opened_basis IN ('inferred', 'stated')),
+        interval_start TEXT,
+        interval_end TEXT,
+        source_event_ids TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_bonds_user_id ON social_bonds(user_id);
+      CREATE INDEX IF NOT EXISTS idx_bonds_from ON social_bonds(from_entity_id);
+      CREATE INDEX IF NOT EXISTS idx_bonds_to ON social_bonds(to_entity_id);
     `);
   }
 
@@ -56,7 +127,7 @@ export class ProjectionsDb {
    * must survive rebuilds or EN-056's cost savings are pointless.
    */
   clearProjections(): void {
-    this.db.exec(`DELETE FROM entities;`);
+    this.db.exec(`DELETE FROM entities; DELETE FROM structural_atoms; DELETE FROM social_bonds;`);
   }
 
   insertEntity(row: EntityRow): void {
@@ -72,6 +143,63 @@ export class ProjectionsDb {
     return this.db
       .prepare(`SELECT * FROM entities WHERE user_id = ? ORDER BY name ASC`)
       .all(userId) as EntityRow[];
+  }
+
+  insertStructuralAtom(row: StructuralAtomRow): void {
+    this.db
+      .prepare(
+        `INSERT INTO structural_atoms (id, user_id, type, from_entity_id, to_entity_id, basis, interval_start, interval_end, source_event_ids, created_at)
+         VALUES (@id, @user_id, @type, @from_entity_id, @to_entity_id, @basis, @interval_start, @interval_end, @source_event_ids, @created_at)`
+      )
+      .run(row);
+  }
+
+  closeStructuralAtom(id: string, intervalEnd: string, closingSourceEventId: string): void {
+    const row = this.getStructuralAtomById(id);
+    if (!row) throw new Error(`No structural atom with id ${id}`);
+    const sourceEventIds = [...new Set([...(JSON.parse(row.source_event_ids) as string[]), closingSourceEventId])].sort();
+    this.db
+      .prepare(`UPDATE structural_atoms SET interval_end = ?, source_event_ids = ? WHERE id = ?`)
+      .run(intervalEnd, JSON.stringify(sourceEventIds), id);
+  }
+
+  listStructuralAtoms(userId: string, type?: StructuralAtomRow["type"]): StructuralAtomRow[] {
+    if (type) {
+      return this.db
+        .prepare(`SELECT * FROM structural_atoms WHERE user_id = ? AND type = ?`)
+        .all(userId, type) as StructuralAtomRow[];
+    }
+    return this.db.prepare(`SELECT * FROM structural_atoms WHERE user_id = ?`).all(userId) as StructuralAtomRow[];
+  }
+
+  insertSocialBond(row: SocialBondRow): void {
+    this.db
+      .prepare(
+        `INSERT INTO social_bonds (id, user_id, type, from_entity_id, to_entity_id, qualifier, opened_basis, interval_start, interval_end, source_event_ids, created_at)
+         VALUES (@id, @user_id, @type, @from_entity_id, @to_entity_id, @qualifier, @opened_basis, @interval_start, @interval_end, @source_event_ids, @created_at)`
+      )
+      .run(row);
+  }
+
+  closeSocialBond(id: string, intervalEnd: string, closingSourceEventId: string): void {
+    const row = this.getSocialBondById(id);
+    if (!row) throw new Error(`No social bond with id ${id}`);
+    const sourceEventIds = [...new Set([...(JSON.parse(row.source_event_ids) as string[]), closingSourceEventId])].sort();
+    this.db
+      .prepare(`UPDATE social_bonds SET interval_end = ?, source_event_ids = ? WHERE id = ?`)
+      .run(intervalEnd, JSON.stringify(sourceEventIds), id);
+  }
+
+  listSocialBonds(userId: string): SocialBondRow[] {
+    return this.db.prepare(`SELECT * FROM social_bonds WHERE user_id = ?`).all(userId) as SocialBondRow[];
+  }
+
+  getStructuralAtomById(id: string): StructuralAtomRow | undefined {
+    return this.db.prepare(`SELECT * FROM structural_atoms WHERE id = ?`).get(id) as StructuralAtomRow | undefined;
+  }
+
+  getSocialBondById(id: string): SocialBondRow | undefined {
+    return this.db.prepare(`SELECT * FROM social_bonds WHERE id = ?`).get(id) as SocialBondRow | undefined;
   }
 
   close(): void {

@@ -16,7 +16,7 @@ describe("createCachedRouter (EN-056, real-provider reuse)", () => {
     const fakeRouter: ExtractionRouter = {
       extract: async () => {
         calls++;
-        return { provider: "openai", model: "gpt-5.6-terra", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [] }, usage: { inputTokens: 5, outputTokens: 5 } };
+        return { provider: "openai", model: "gpt-5.6-terra", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [] }, usage: { inputTokens: 5, outputTokens: 5 } };
       }
     };
     const { router: cachedRouter, stats } = createCachedRouter(cache, fakeRouter, "message-v1");
@@ -30,7 +30,7 @@ describe("createCachedRouter (EN-056, real-provider reuse)", () => {
 
   it("misses separately for different extractor_version, even with identical text", async () => {
     const fakeRouter: ExtractionRouter = {
-      extract: async () => ({ provider: "gemini", model: "gemini-3.7-flash", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [] }, usage: { inputTokens: 1, outputTokens: 1 } })
+      extract: async () => ({ provider: "gemini", model: "gemini-3.7-flash", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [] }, usage: { inputTokens: 1, outputTokens: 1 } })
     };
     const a = createCachedRouter(cache, fakeRouter, "message-v1");
     const b = createCachedRouter(cache, fakeRouter, "message-v2");

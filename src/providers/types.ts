@@ -23,10 +23,44 @@ export interface EpisodeMarker {
   text: string;
 }
 
+/**
+ * Class A structural atom mentions (EN-013), extracted by name — resolution
+ * from name to entity id happens after extraction (Phase 3 Part 2). "me" is
+ * the reserved name for the author/narrator. `action: "close"` is only ever
+ * emitted for spouse_of, and only when the text explicitly states closure
+ * (divorce, passing) — never inferred from absence, since there is no
+ * "this wasn't mentioned" signal available to an extractor working from one
+ * message at a time in the first place.
+ */
+export interface StructuralAtomMention {
+  type: "parent_of" | "spouse_of" | "sibling_of";
+  fromName: string;
+  toName: string;
+  action: "assert" | "close";
+}
+
+/**
+ * Class B social bond mentions (EN-013). `basis` records whether the text
+ * directly stated the bond ("we became friends") or merely implied it
+ * ("my coworker Priya" implies colleague) — opening is allowed on either;
+ * `action: "close"` must only be emitted when the text explicitly states
+ * the bond ended ("we don't talk anymore"), never inferred from silence.
+ */
+export interface SocialBondMention {
+  type: "friend" | "colleague" | "mentor_of" | "neighbor" | "classmate" | "romantic";
+  fromName: string;
+  toName: string;
+  qualifier: string | null;
+  basis: "inferred" | "stated";
+  action: "open" | "close";
+}
+
 export interface ExtractionTaxonomy {
   entities: ExtractedEntity[];
   statedFeelings: StatedFeeling[];
   episodeMarkers: EpisodeMarker[];
+  structuralAtoms: StructuralAtomMention[];
+  socialBonds: SocialBondMention[];
 }
 
 export type ExtractionKind = "message" | "document";

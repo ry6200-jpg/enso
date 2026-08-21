@@ -21,7 +21,7 @@ describe("CostTracker (EN-086)", () => {
     const result: ProviderCallResult = {
       provider: "openai",
       model: "gpt-5.6-terra",
-      taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [] },
+      taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [] },
       usage: { inputTokens: 500_000, outputTokens: 0 }
     };
     const entry = tracker.record(result);
@@ -33,13 +33,13 @@ describe("CostTracker (EN-086)", () => {
     tracker.record({
       provider: "openai",
       model: "gpt-5.6-luna",
-      taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [] },
+      taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [] },
       usage: { inputTokens: 1_000_000, outputTokens: 0 }
     });
     tracker.record({
       provider: "gemini",
       model: "gemini-3.7-flash",
-      taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [] },
+      taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [] },
       usage: { inputTokens: 0, outputTokens: 1_000_000 }
     });
 

@@ -42,9 +42,39 @@ export const TAXONOMY_JSON_SCHEMA = {
         required: ["kind", "text"],
         additionalProperties: false
       }
+    },
+    structuralAtoms: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          type: { type: "string", enum: ["parent_of", "spouse_of", "sibling_of"] },
+          fromName: { type: "string" },
+          toName: { type: "string" },
+          action: { type: "string", enum: ["assert", "close"] }
+        },
+        required: ["type", "fromName", "toName", "action"],
+        additionalProperties: false
+      }
+    },
+    socialBonds: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          type: { type: "string", enum: ["friend", "colleague", "mentor_of", "neighbor", "classmate", "romantic"] },
+          fromName: { type: "string" },
+          toName: { type: "string" },
+          qualifier: { type: ["string", "null"] },
+          basis: { type: "string", enum: ["inferred", "stated"] },
+          action: { type: "string", enum: ["open", "close"] }
+        },
+        required: ["type", "fromName", "toName", "qualifier", "basis", "action"],
+        additionalProperties: false
+      }
     }
   },
-  required: ["entities", "statedFeelings", "episodeMarkers"],
+  required: ["entities", "statedFeelings", "episodeMarkers", "structuralAtoms", "socialBonds"],
   additionalProperties: false
 } as const;
 
@@ -52,4 +82,6 @@ export const EXTRACTION_SYSTEM_PROMPT = `You extract structured facts from a per
 - entities: every person mentioned by name (not the author/narrator). type is always "person".
 - statedFeelings: only feelings the author explicitly states about themselves or others in their own words (e.g. "I was furious", "she seemed relieved"). Do not infer feelings that weren't stated.
 - episodeMarkers: short markers for incidents or narrative boundaries — "incident_reference" for a specific event described, "boundary_start"/"boundary_end" only when the text explicitly signals an incident beginning or concluding.
+- structuralAtoms: family relationships. Use the literal name "me" for the author/narrator. parent_of: fromName is the PARENT, toName is the CHILD ("my mom" -> {type:"parent_of", fromName:"mom's name or 'mom' if unnamed", toName:"me"}). spouse_of and sibling_of are symmetric (order doesn't matter). action is "assert" for every mention EXCEPT: emit "close" for spouse_of ONLY when the text explicitly states the marriage ended (divorce, death) — never for sibling_of or parent_of, and never merely because someone wasn't mentioned. Never write "child_of" — always express it as parent_of the other direction.
+- socialBonds: friend/colleague/mentor_of/neighbor/classmate/romantic bonds. basis is "inferred" when the bond is implied but not directly stated (e.g. "my coworker Priya" -> colleague, inferred), "stated" when the text directly asserts the bond (e.g. "we became friends"). action is "open" for every mention that isn't a closure, and "close" ONLY when the text explicitly states the bond ended (e.g. "we don't talk anymore", "we broke up") — never infer closure from a person simply not being mentioned. qualifier is short free-text context if present (e.g. "the bowling league"), else null. Never use "peer_of" — it is not a valid type.
 If none apply for a category, return an empty array for it. Never invent facts not present in the text.`;

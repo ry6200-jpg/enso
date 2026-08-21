@@ -8,7 +8,7 @@ function fakeResult(provider: "openai" | "gemini", overrides: Partial<ProviderCa
   return {
     provider,
     model: provider === "openai" ? "gpt-5.6-terra" : "gemini-3.7-flash",
-    taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [] },
+    taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [] },
     usage: { inputTokens: 10, outputTokens: 5 },
     ...overrides
   };
