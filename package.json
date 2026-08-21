@@ -8,6 +8,7 @@
     "test:live": "vitest run live.test.ts",
     "test:watch": "vitest --exclude '**/*.live.test.ts'",
     "demo": "tsx scripts/demo.ts",
+    "chat": "node --env-file=.env --import tsx scripts/chat.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

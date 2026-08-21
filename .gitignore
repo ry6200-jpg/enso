@@ -2,6 +2,7 @@ node_modules/
 dist/
 .tmp/
 data/
+dev-data/
 *.log
 .env
 .env.*
