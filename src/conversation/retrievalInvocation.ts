@@ -10,6 +10,8 @@ export interface RetrievalInvocation {
   entityId?: string;
   /** Set only when mode is "recency" — how many recent messages to return. */
   n?: number;
+  /** Set only when mode is "hybrid" — w_t(q), same override hybridSearch already accepts. Phase 6's router populates this; the Phase 4/5 local heuristic (computeTemporalWeightHeuristic) still runs inside hybridSearch itself when omitted. */
+  temporalWeight?: number;
 }
 
 export interface RetrievalInvocationOptions {

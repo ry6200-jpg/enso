@@ -53,7 +53,8 @@ export function assembleContext(
   candidateChunks: ContentChunkRow[],
   retrievalMeta: { mode: RetrievalMode; query: string },
   recentTurns: RecentTurnForPrompt[],
-  budgets: ContextBudgets = DEFAULT_CONTEXT_BUDGETS
+  budgets: ContextBudgets = DEFAULT_CONTEXT_BUDGETS,
+  gateDirective: string | null = null
 ): AssembledContext {
   const countCapped = candidateChunks.slice(0, budgets.maxRetrievedChunks);
   let runningChars = 0;
@@ -72,9 +73,13 @@ export function assembleContext(
     injectedChunks.map((c) => ({ id: c.id, text: c.text, occurredAt: c.occurred_at, recordedAt: c.recorded_at }))
   );
   const recentWindowBlock = buildRecentWindowBlock(injectedTurns);
+  const baseSystemPrompt = buildSystemPrompt(retrievedBlock, recentWindowBlock);
+  // EN-071 stage 3: a gate directive, when present, is injected at the END
+  // of the system prompt — highest-salience position, named action only.
+  const systemPrompt = gateDirective ? `${baseSystemPrompt}\n\n${gateDirective}` : baseSystemPrompt;
 
   return {
-    systemPrompt: buildSystemPrompt(retrievedBlock, recentWindowBlock),
+    systemPrompt,
     retrieval: {
       mode: retrievalMeta.mode,
       query: retrievalMeta.query,

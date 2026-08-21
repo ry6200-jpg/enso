@@ -11,6 +11,9 @@ import type { ContentChunkRow, RetrievalDb } from "../retrieval/retrievalDb.js";
 import { assembleContext, DEFAULT_CONTEXT_BUDGETS, type AssembledContext, type ContextBudgets } from "./contextAssembly.js";
 import { decideRetrievalInvocation, type RetrievalInvocation, type RetrievalMode } from "./retrievalInvocation.js";
 import type { RecentTurnForPrompt } from "../persona/systemPrompt.js";
+import { buildCircleBackDirective, findEligibleCircleBackCandidates, verifyCircleBackExecuted } from "./circleBack.js";
+import { recentAttributeClaims, resolveAttestation, type FactConfirmedPayload } from "./attestation.js";
+import type { IntentRouter, RouterResult } from "./router/intentRouter.js";
 
 export interface ReplySentPayload {
   text: string;
@@ -35,6 +38,26 @@ export interface ReplySentPayload {
     recentWindowInjectedTurns: number;
     recentWindowTruncated: boolean;
   };
+  /**
+   * Phase 6 round-trip survival: the router's own decision shaped this
+   * reply (retrieval mode above, plus whichever gates fired), so it's
+   * recorded here too — including when there was no router at all (Part-1
+   * heuristic-only path, or a test override), so a future reader never has
+   * to guess which regime produced a given turn.
+   */
+  router: {
+    used: boolean;
+    provider: "openai" | "gemini" | null;
+    model: string | null;
+    certified: boolean;
+    failureReason: string | null;
+  };
+  gateActions: {
+    /** Non-null only when the circle-back gate fired AND EN-073 verified the reply actually executed it — an attempt that was decided but not executed is recorded as null here (never silently burned, R7). */
+    circleBackFired: { entityId: string; name: string } | null;
+    /** The fact_confirmed event id this turn produced, if the attestation gate resolved a validated affirmation. */
+    attestationConfirmedEventId: string | null;
+  };
 }
 
 export interface SendMessageDeps {
@@ -43,6 +66,8 @@ export interface SendMessageDeps {
   projectionsDb: ProjectionsDb;
   embedder: Embedder;
   chatRouter: ChatRouter;
+  /** Optional (Phase 6): when absent, sendMessage falls back to Part 1's local-heuristic-only retrieval decision with no gates — preserves every pre-Phase-6 caller unchanged. */
+  intentRouter?: IntentRouter;
 }
 
 export interface SendMessageInput {
@@ -60,6 +85,8 @@ export interface SendMessageResult {
   replyEvent: EventRecord;
   replyText: string;
   debug: AssembledContext;
+  /** Set only when the attestation gate resolved a validated affirmation this turn (Phase 6). */
+  factConfirmedEvent?: EventRecord;
 }
 
 /**
@@ -76,7 +103,7 @@ async function runRetrieval(deps: SendMessageDeps, userId: string, invocation: R
   if (invocation.mode === "entity") {
     return entityMode(deps.projectionsDb, deps.retrievalDb, userId, invocation.entityId!);
   }
-  const results = await hybridSearch(deps.retrievalDb, userId, invocation.query, deps.embedder);
+  const results = await hybridSearch(deps.retrievalDb, userId, invocation.query, deps.embedder, invocation.temporalWeight !== undefined ? { temporalWeight: invocation.temporalWeight } : {});
   const chunks: ContentChunkRow[] = [];
   for (const r of results) {
     const chunk = deps.retrievalDb.getChunkById(r.chunkId);
@@ -103,12 +130,66 @@ async function runRetrieval(deps: SendMessageDeps, userId: string, invocation: R
 export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput): Promise<SendMessageResult> {
   const messageEvent = captureMessage(deps.eventLog, { userId: input.userId, text: input.text });
 
-  const invocation = input.retrievalOverride ?? decideRetrievalInvocation(input.text, deps.projectionsDb, input.userId);
+  let invocation: RetrievalInvocation;
+  let routerResult: RouterResult | null = null;
+  let claims: ReturnType<typeof recentAttributeClaims> = [];
+  let circleBackCandidates: ReturnType<typeof findEligibleCircleBackCandidates> = [];
+
+  if (input.retrievalOverride) {
+    // Test/override hook (Part 1): bypasses the router entirely, no gates.
+    invocation = input.retrievalOverride;
+  } else if (deps.intentRouter) {
+    circleBackCandidates = findEligibleCircleBackCandidates(deps.eventLog, deps.projectionsDb, input.userId, input.text);
+    const knownEntities = deps.projectionsDb.listEntities(input.userId).map((e) => ({ entityId: e.id, name: e.name }));
+    claims = recentAttributeClaims(deps.eventLog, deps.projectionsDb, input.userId);
+
+    routerResult = await deps.intentRouter.route({
+      message: input.text,
+      recentTurns: input.recentTurns,
+      knownEntities,
+      circleBackCandidates,
+      recentAttributeClaims: claims
+    });
+
+    const r = routerResult.decision.retrieval;
+    invocation =
+      r.mode === "entity"
+        ? { mode: "entity", query: input.text, entityId: r.entityId! }
+        : r.mode === "recency"
+          ? { mode: "recency", query: input.text, n: r.n ?? 10 }
+          : { mode: "hybrid", query: input.text, temporalWeight: r.temporalWeight };
+  } else {
+    // Pre-Phase-6 fallback: no router configured, use the Part 1 local heuristic, no gates.
+    invocation = decideRetrievalInvocation(input.text, deps.projectionsDb, input.userId);
+  }
+
   const candidateChunks = await runRetrieval(deps, input.userId, invocation);
 
-  const assembled = assembleContext(candidateChunks, { mode: invocation.mode, query: invocation.query }, input.recentTurns, input.budgets ?? DEFAULT_CONTEXT_BUDGETS);
+  const circleBackFireEntity =
+    routerResult?.decision.circleBack.fire && routerResult.decision.circleBack.entityId
+      ? (() => {
+          const candidate = circleBackCandidates.find((c) => c.entityId === routerResult!.decision.circleBack.entityId);
+          return candidate ? { entityId: candidate.entityId, name: candidate.name } : null;
+        })()
+      : null;
+  const gateDirective = circleBackFireEntity ? buildCircleBackDirective(circleBackFireEntity.name) : null;
+
+  const assembled = assembleContext(candidateChunks, { mode: invocation.mode, query: invocation.query }, input.recentTurns, input.budgets ?? DEFAULT_CONTEXT_BUDGETS, gateDirective);
 
   const callResult = await deps.chatRouter.reply({ system: assembled.systemPrompt, history: [], latestMessage: input.text });
+
+  // EN-073: only consume circle-back state (recorded below) if the reply actually executed the directive.
+  const circleBackFired = circleBackFireEntity && verifyCircleBackExecuted(callResult.text, circleBackFireEntity.name) ? circleBackFireEntity : null;
+
+  let factConfirmedEvent: EventRecord | undefined;
+  const attestation = routerResult?.decision.attestation;
+  if (attestation?.isAffirmation && attestation.entityName && attestation.attribute && attestation.value) {
+    const resolved = resolveAttestation(claims, attestation.entityName, attestation.attribute, attestation.value);
+    if (resolved) {
+      const factPayload: FactConfirmedPayload = resolved;
+      factConfirmedEvent = deps.eventLog.append({ type: "fact_confirmed", actor: "user", payload: factPayload, userId: input.userId });
+    }
+  }
 
   const payload: ReplySentPayload = {
     text: callResult.text,
@@ -124,9 +205,20 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       recentWindowAvailableTurns: assembled.recentWindow.availableTurns,
       recentWindowInjectedTurns: assembled.recentWindow.injectedTurns,
       recentWindowTruncated: assembled.recentWindow.truncated
+    },
+    router: {
+      used: routerResult !== null,
+      provider: routerResult?.provider ?? null,
+      model: routerResult?.model ?? null,
+      certified: routerResult?.certified ?? false,
+      failureReason: routerResult?.failureReason ?? null
+    },
+    gateActions: {
+      circleBackFired,
+      attestationConfirmedEventId: factConfirmedEvent?.id ?? null
     }
   };
   const replyEvent = deps.eventLog.append({ type: "reply_sent", actor: "enso", payload, userId: input.userId });
 
-  return { messageEvent, replyEvent, replyText: callResult.text, debug: assembled };
+  return { messageEvent, replyEvent, replyText: callResult.text, debug: assembled, factConfirmedEvent };
 }

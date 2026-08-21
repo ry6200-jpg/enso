@@ -41,6 +41,17 @@ interface FactCorrectedPayload {
 interface FactConfirmedPayload {
   targetEventId: string; // the extraction_completed event ULID being confirmed
   entityName: string;
+  /**
+   * Phase 6 (EN-066): which specific value the attestation gate resolved
+   * this confirmation to, when it came from that gate rather than a
+   * bare entity-identity confirmation. Optional and not yet consumed by
+   * rebuild's projection logic below (which only ever needed
+   * targetEventId + entityName to resolve entities.confirmed) — carried
+   * for round-trip completeness and for the eventual attribute-level
+   * deletion-provenance work (EN-065/066), not built this phase.
+   */
+  attribute?: "birthdate" | "location" | "occupation";
+  value?: string;
 }
 
 export interface RebuildResult {

@@ -2,8 +2,8 @@ import type { ChatCallResult } from "./chatTypes.js";
 import { estimateCostUsd } from "./pricing.js";
 import type { ProviderCallResult } from "./types.js";
 
-/** record() only ever reads provider/model/usage — this union lets one tracker serve both extraction calls (ProviderCallResult) and chat replies (ChatCallResult) without either result type depending on the other. */
-type CostableResult = ProviderCallResult | ChatCallResult;
+/** record() only ever reads provider/model/usage — a minimal structural shape lets one tracker serve extraction calls, chat replies, and router decisions alike without any of those result types depending on each other. */
+type CostableResult = ProviderCallResult | ChatCallResult | { provider: "openai" | "gemini"; model: string; usage: { inputTokens: number; outputTokens: number } };
 
 export interface CostRecord {
   provider: "openai" | "gemini";
