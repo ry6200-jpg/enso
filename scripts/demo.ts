@@ -5,9 +5,8 @@ import { EventLog } from "../src/events/eventLog.js";
 import { BlobStore } from "../src/blobs/blobStore.js";
 import { ProjectionsDb } from "../src/projections/db.js";
 import { rebuildProjections } from "../src/projections/rebuild.js";
-import { createCachedExtractor, ExtractionCache } from "../src/extraction/cache.js";
-import { STUB_EXTRACTOR_VERSION, STUB_MODEL_ID, stubExtract } from "../src/extraction/stubExtractor.js";
-import { compareStructural, snapshotFromEntityRows } from "../src/comparator/structuralEquivalence.js";
+import { STUB_EXTRACTOR_VERSION, STUB_MODEL_ID } from "../src/extraction/stubExtractor.js";
+import { compareExact, exactRowsFromEntityRows } from "../src/comparator/structuralEquivalence.js";
 import { EVENT_TYPES } from "../src/events/schema.js";
 
 const USER_ID = "01JDEMOUSER00000000000000";
@@ -23,7 +22,6 @@ function main(): void {
 
   const eventLog = new EventLog(path.join(root, "events.db"));
   const blobs = new BlobStore(path.join(root, "blobs"));
-  const cache = new ExtractionCache(path.join(root, "cache.db"));
 
   section("1. Emitting a scripted sequence covering all ten event types (EN-050)");
 
@@ -146,18 +144,12 @@ function main(): void {
     console.log(`DELETE attempt correctly rejected by trigger: ${(err as Error).message}`);
   }
 
-  section("3. Building projections via the rebuild command (EN-054/056)");
-
-  let rawExtractorCalls = 0;
-  const { extract } = createCachedExtractor(cache, STUB_EXTRACTOR_VERSION, STUB_MODEL_ID, (text) => {
-    rawExtractorCalls++;
-    return stubExtract(text);
-  });
+  section("3. Building projections via the rebuild command (EN-054 v1.5 — payload-reading, no extraction)");
 
   const projectionsA = new ProjectionsDb(path.join(root, "projections-run-a.db"));
-  const resultA = rebuildProjections(allEvents, projectionsA, USER_ID, extract);
+  const resultA = rebuildProjections(allEvents, projectionsA, USER_ID);
   console.log(`Rebuild run A: ${JSON.stringify(resultA)}`);
-  console.log(`Raw (uncached) extractor invocations so far: ${rawExtractorCalls}`);
+  console.log(`(no extractor function was passed — there is no code path here that could call a provider)`);
 
   console.log("\nEntities projection (run A):");
   for (const row of projectionsA.listEntities(USER_ID)) {
@@ -166,44 +158,37 @@ function main(): void {
     );
   }
 
-  section("4. Re-running rebuild from scratch — proving it is routine, not scary (EN-054/056)");
+  section("4. Re-running rebuild from scratch — proving it is routine, not scary (EN-054)");
   const projectionsB = new ProjectionsDb(path.join(root, "projections-run-b.db"));
-  const resultB = rebuildProjections(allEvents, projectionsB, USER_ID, extract);
+  const resultB = rebuildProjections(allEvents, projectionsB, USER_ID);
   console.log(`Rebuild run B: ${JSON.stringify(resultB)}`);
-  console.log(
-    `Raw (uncached) extractor invocations after second rebuild: ${rawExtractorCalls} ` +
-      `(unchanged from run A — the second full rebuild reused the extraction cache instead of re-running extraction)`
-  );
 
-  section("5. Structural-equivalence comparator: two independent rebuilds (EN-057)");
-  const snapshotA = snapshotFromEntityRows(projectionsA.listEntities(USER_ID));
-  const snapshotB = snapshotFromEntityRows(projectionsB.listEntities(USER_ID));
-  const comparisonAB = compareStructural(snapshotA, snapshotB);
-  console.log(`compareStructural(run A, run B) = ${JSON.stringify(comparisonAB)}`);
-  console.log(comparisonAB.equivalent ? "PASS: the two rebuilds are structurally equivalent." : "FAIL (unexpected).");
+  section("5. Strict-exact comparator: two independent rebuilds must match exactly (EN-057 v1.5)");
+  const rowsA = exactRowsFromEntityRows(projectionsA.listEntities(USER_ID));
+  const rowsB = exactRowsFromEntityRows(projectionsB.listEntities(USER_ID));
+  const comparisonAB = compareExact(rowsA, rowsB);
+  console.log(`compareExact(run A, run B) = ${JSON.stringify(comparisonAB)}`);
+  console.log(comparisonAB.equivalent ? "PASS: the two rebuilds are exactly equivalent." : "FAIL (unexpected).");
 
-  section("6. Planting one structural difference and showing the comparator catch it (EN-057)");
-  const mutatedSnapshot = {
-    ...snapshotA,
-    entities: snapshotA.entities.filter((e) => e.name.toLowerCase() !== "amelia")
-  };
-  const comparisonMutated = compareStructural(snapshotA, mutatedSnapshot);
-  console.log(`Planted difference: removed entity "Amelia" from a copy of run A's snapshot.`);
-  console.log(`compareStructural(run A, mutated) = ${JSON.stringify(comparisonMutated)}`);
+  section("6. Planting one difference and showing the strict comparator catch it (EN-057 v1.5)");
+  const mutatedRows = rowsA.filter((r) => r.name.toLowerCase() !== "amelia");
+  const comparisonMutated = compareExact(rowsA, mutatedRows);
+  console.log(`Planted difference: removed entity "Amelia" from a copy of run A's rows.`);
+  console.log(`compareExact(run A, mutated) = ${JSON.stringify(comparisonMutated)}`);
   console.log(
     comparisonMutated.equivalent
       ? "UNEXPECTED PASS (comparator failed to catch the planted difference)."
-      : "PASS: the comparator correctly reports the projections as NOT structurally equivalent."
+      : "PASS: the comparator correctly reports the rows as NOT exactly equivalent."
   );
 
   section("Summary");
   console.log(`- Ten event types: emitted and validated (EN-050).`);
   console.log(`- Blob store: file written under an id-based path (EN-051).`);
   console.log(`- Projections: physically separate SQLite file, entities carry provenance + extractor_version (EN-052/053).`);
-  console.log(`- Rebuild: drop + replay proven idempotent and deterministic across two independent runs (EN-054).`);
+  console.log(`- Rebuild: drop + replay proven idempotent and deterministic across two independent runs, reading recorded payloads only (EN-054 v1.5).`);
   console.log(`- Correction precedence: "Amy" was corrected to "Amelia" and stayed corrected after rebuild (EN-055).`);
-  console.log(`- Extraction cache: second rebuild made zero additional raw extractor calls (EN-056).`);
-  console.log(`- Structural-equivalence comparator: passed on equivalent projections, failed on a planted difference (EN-057).`);
+  console.log(`- Strict-exact comparator: passed on equivalent projections, failed on a planted difference (EN-057 v1.5).`);
+  console.log(`- (extraction cache and the tolerant structural comparator now serve reprocess, not built this phase — EN-056/057)`);
 
   eventLog.close();
   projectionsA.close();

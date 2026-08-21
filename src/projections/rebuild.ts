@@ -1,20 +1,12 @@
 import { newId } from "../ids.js";
 import type { EventRecord } from "../events/schema.js";
-import { STUB_EXTRACTOR_VERSION, stubExtract } from "../extraction/stubExtractor.js";
-import type { ExtractionStructure } from "../extraction/types.js";
 import { UpcasterRegistry } from "../upcasters/registry.js";
 import type { ProjectionsDb } from "./db.js";
 
-interface MessageSentPayload {
-  text: string;
-}
 interface ExtractionCompletedPayload {
   sourceEventId: string;
-  extractorVersion: string;
-  modelId: string;
-  entities: { name: string }[];
-  relationships: unknown[];
-  dates: string[];
+  extractorVersion?: string;
+  entities?: { name: string }[];
 }
 interface ExtractionFailedPayload {
   sourceEventId: string;
@@ -34,35 +26,47 @@ interface EntityAccumulator {
   name: string;
   confirmed: boolean;
   sourceEventIds: Set<string>;
+  extractorVersion: string;
 }
 
 export interface RebuildResult {
   entitiesWritten: number;
-  extractionsRun: number;
-  messagesSkippedAsFailed: number;
+  /** extraction_completed events actually read and folded into the projection. */
+  extractionsConsumed: number;
+  messagesCurrentlyFailed: number;
   correctionsApplied: number;
   confirmationsApplied: number;
 }
 
+const UNKNOWN_EXTRACTOR_VERSION = "unknown";
+
 /**
- * The rebuild command (EN-054): drop all projections, replay the log,
- * regenerate. This is the one real projection for Phase 1 — a minimal
- * `entities` fold — built purely to exercise the machinery: provenance
- * (EN-053), extractor_version, and correction precedence (EN-055).
+ * The rebuild command (EN-054 v1.5): drop all projections and replay the
+ * log, consuming recorded `extraction_completed` payloads. No extraction
+ * runs here and no provider is ever called — this reads what the log
+ * already recorded, which is what makes rebuild free, deterministic, and
+ * exactly verifiable (EN-057). Re-running extraction over content is
+ * reprocess's job (a distinct, deliberate, versioned, paid operation,
+ * not built this phase) — rebuild and reprocess must never be blurred.
  *
- * Deliberately NOT entity resolution (EN-012, a later phase): entities are
- * deduped globally per user by exact normalized name. Corrections and
- * confirmations bind to the extraction_completed event ULID they target,
- * never to a projection entity id — entity ids are regenerated every
- * rebuild and would break exactly the recovery path EN-055 exists to
- * protect.
+ * Prior to v1.5 this function re-ran a (stub, free) extractor during
+ * replay, which was reasonable only because that extractor cost nothing;
+ * it could never have generalized to real LLM extraction without either
+ * re-paying for every rebuild or reintroducing non-determinism into a
+ * recovery tool. Phase 2's real capture pipeline already writes the fuller
+ * payload shape this function now reads directly.
+ *
+ * Still deliberately NOT entity resolution (EN-012, Phase 3 Part 2):
+ * entities are deduped globally per user by exact normalized name.
+ * Corrections and confirmations bind to the extraction_completed event
+ * ULID they target, never to a projection entity id — entity ids are
+ * regenerated every rebuild and would break exactly the recovery path
+ * EN-055 exists to protect.
  */
 export function rebuildProjections(
   rawEvents: EventRecord[],
   projections: ProjectionsDb,
   userId: string,
-  extract: (text: string) => ExtractionStructure = stubExtract,
-  extractorVersion: string = STUB_EXTRACTOR_VERSION,
   upcasters: UpcasterRegistry = new UpcasterRegistry()
 ): RebuildResult {
   projections.clearProjections();
@@ -73,38 +77,41 @@ export function rebuildProjections(
   // genuinely wired in, not just available to call.
   const events = rawEvents.map((event) => upcasters.apply(event));
 
-  const messages = events.filter(
-    (e): e is EventRecord & { payload: MessageSentPayload } => e.type === "message_sent"
-  );
   const extractionCompletedBySourceId = new Map<string, EventRecord & { payload: ExtractionCompletedPayload }>();
-  const failedMessageIds = new Set<string>();
+  // Latest-event-wins per source: a message can fail then later succeed on
+  // retry (EN-059), so "currently failed" means the most recent
+  // extraction-related event for that source is extraction_failed, not
+  // merely that a failure was ever recorded.
+  const lastOutcomeBySourceId = new Map<string, "completed" | "failed">();
 
   for (const event of events) {
     if (event.type === "extraction_completed") {
       const payload = event.payload as ExtractionCompletedPayload;
       extractionCompletedBySourceId.set(payload.sourceEventId, event as EventRecord & { payload: ExtractionCompletedPayload });
+      lastOutcomeBySourceId.set(payload.sourceEventId, "completed");
     }
     if (event.type === "extraction_failed") {
-      failedMessageIds.add((event.payload as ExtractionFailedPayload).sourceEventId);
+      const payload = event.payload as ExtractionFailedPayload;
+      lastOutcomeBySourceId.set(payload.sourceEventId, "failed");
     }
   }
 
   const byNormalizedName = new Map<string, EntityAccumulator>();
-  let extractionsRun = 0;
 
   function normalize(name: string): string {
     return name.trim().toLowerCase();
   }
 
-  function upsert(name: string, sourceEventIds: string[], confirmed: boolean): void {
+  function upsert(name: string, sourceEventIds: string[], confirmed: boolean, extractorVersion: string): void {
     const key = normalize(name);
     let acc = byNormalizedName.get(key);
     if (!acc) {
-      acc = { name, confirmed: false, sourceEventIds: new Set() };
+      acc = { name, confirmed: false, sourceEventIds: new Set(), extractorVersion };
       byNormalizedName.set(key, acc);
     }
     for (const id of sourceEventIds) acc.sourceEventIds.add(id);
     if (confirmed) acc.confirmed = true;
+    acc.extractorVersion = extractorVersion;
   }
 
   // A single extraction_completed event can produce several entities (e.g.
@@ -119,17 +126,14 @@ export function rebuildProjections(
     return undefined;
   }
 
-  // Pass 1: run (or re-run) extraction over every message with a completed
-  // extraction. Re-running rather than trusting the stored payload is what
-  // makes the extraction cache (EN-056) meaningful during replay (EN-055:
-  // "applied after extraction during replay").
-  for (const message of messages) {
-    const extractionEvent = extractionCompletedBySourceId.get(message.id);
-    if (!extractionEvent) continue; // no completed extraction yet (failed or pending) — no entities from it
-    const structure = extract(message.payload.text);
-    extractionsRun++;
-    for (const entity of structure.entities) {
-      upsert(entity.name, [message.id, extractionEvent.id], false);
+  // Pass 1: read every recorded extraction_completed payload directly — no
+  // extraction runs (EN-054 v1.5).
+  let extractionsConsumed = 0;
+  for (const extractionEvent of extractionCompletedBySourceId.values()) {
+    extractionsConsumed++;
+    const extractorVersion = extractionEvent.payload.extractorVersion ?? UNKNOWN_EXTRACTOR_VERSION;
+    for (const entity of extractionEvent.payload.entities ?? []) {
+      upsert(entity.name, [extractionEvent.payload.sourceEventId, extractionEvent.id], false, extractorVersion);
     }
   }
 
@@ -143,7 +147,7 @@ export function rebuildProjections(
     const [oldKey, acc] = found;
     byNormalizedName.delete(oldKey);
     acc.sourceEventIds.add(event.id);
-    upsert(payload.correctedName, [...acc.sourceEventIds], acc.confirmed);
+    upsert(payload.correctedName, [...acc.sourceEventIds], acc.confirmed, acc.extractorVersion);
     correctionsApplied++;
   }
 
@@ -168,16 +172,21 @@ export function rebuildProjections(
       name: acc.name,
       confirmed: acc.confirmed ? 1 : 0,
       source_event_ids: JSON.stringify([...acc.sourceEventIds].sort()),
-      extractor_version: extractorVersion,
+      extractor_version: acc.extractorVersion,
       created_at: new Date().toISOString()
     });
     entitiesWritten++;
   }
 
+  let messagesCurrentlyFailed = 0;
+  for (const outcome of lastOutcomeBySourceId.values()) {
+    if (outcome === "failed") messagesCurrentlyFailed++;
+  }
+
   return {
     entitiesWritten,
-    extractionsRun,
-    messagesSkippedAsFailed: failedMessageIds.size,
+    extractionsConsumed,
+    messagesCurrentlyFailed,
     correctionsApplied,
     confirmationsApplied
   };

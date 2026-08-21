@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { EventLog } from "../src/events/eventLog.js";
 import { ProjectionsDb } from "../src/projections/db.js";
 import { rebuildProjections } from "../src/projections/rebuild.js";
-import { compareStructural, snapshotFromEntityRows } from "../src/comparator/structuralEquivalence.js";
+import { compareExact, exactRowsFromEntityRows } from "../src/comparator/structuralEquivalence.js";
 import { freshTestDbPath } from "../src/test/dbPath.js";
 import { PRIMARY_USER_ID } from "../src/test/seed.js";
 
@@ -21,16 +21,17 @@ function seedScenario() {
     payload: { text: "I had lunch with Sarah and my sister Amy today." },
     userId: PRIMARY_USER_ID
   });
+  // Real Phase 2 shape: extraction_completed payload already carries the
+  // final entities directly — nothing about rebuild re-derives this.
   const extraction1 = eventLog.append({
     type: "extraction_completed",
     actor: "system",
     payload: {
       sourceEventId: msg1.id,
-      extractorVersion: "stub-v1",
-      modelId: "stub-model",
-      entities: [{ name: "Sarah" }, { name: "Amy" }],
-      relationships: [],
-      dates: []
+      extractorVersion: "message-v1",
+      provider: "openai",
+      model: "gpt-5.6-terra",
+      entities: [{ name: "Sarah", type: "person" }, { name: "Amy", type: "person" }]
     },
     userId: PRIMARY_USER_ID
   });
@@ -61,7 +62,7 @@ function seedScenario() {
   return { msg1, extraction1, msg2 };
 }
 
-describe("rebuildProjections (EN-054)", () => {
+describe("rebuildProjections (EN-054 v1.5 — payload-reading, no extraction)", () => {
   it("drops existing projection rows before replaying (rebuild is not additive)", () => {
     projections.insertEntity({
       id: "01STRAY00000000000000000",
@@ -80,19 +81,37 @@ describe("rebuildProjections (EN-054)", () => {
     expect(names).not.toContain("StaleGhost");
   });
 
-  it("builds entities from extraction output with provenance and extractor_version", () => {
+  it("reads entities directly from the recorded extraction_completed payload — no extraction runs", () => {
     const { msg1, extraction1 } = seedScenario();
     const result = rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
 
-    expect(result.extractionsRun).toBe(1); // only msg1 has a completed extraction
-    expect(result.messagesSkippedAsFailed).toBe(1); // msg2's extraction_failed
+    // Note: rebuildProjections takes no extractor function at all anymore —
+    // there is no code path here that could call a provider. This count is
+    // "how many recorded extraction_completed events were consumed," not
+    // "how many extractions ran."
+    expect(result.extractionsConsumed).toBe(1); // only msg1 has one
+    expect(result.messagesCurrentlyFailed).toBe(1); // msg2's extraction_failed, still unresolved
 
     const sarah = projections.listEntities(PRIMARY_USER_ID).find((e) => e.name === "Sarah")!;
     expect(sarah).toBeDefined();
-    expect(sarah.extractor_version).toBe("stub-v1");
+    expect(sarah.extractor_version).toBe("message-v1");
     expect(JSON.parse(sarah.source_event_ids)).toEqual(
       expect.arrayContaining([msg1.id, extraction1.id])
     );
+  });
+
+  it("a message that failed then later succeeded is not counted as currently failed (latest-event-wins)", () => {
+    const msg = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "Eventually works." }, userId: PRIMARY_USER_ID });
+    eventLog.append({ type: "extraction_failed", actor: "user", payload: { sourceEventId: msg.id, reason: "timeout" }, userId: PRIMARY_USER_ID });
+    eventLog.append({
+      type: "extraction_completed",
+      actor: "system",
+      payload: { sourceEventId: msg.id, extractorVersion: "message-v1", entities: [] },
+      userId: PRIMARY_USER_ID
+    });
+
+    const result = rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+    expect(result.messagesCurrentlyFailed).toBe(0);
   });
 
   it("applies fact_corrected with precedence over extraction output, bound to the event ULID (EN-055)", () => {
@@ -117,7 +136,6 @@ describe("rebuildProjections (EN-054)", () => {
 
   it("a rebuild never resurrects a name the user already corrected away (EN-055 launch-blocking guarantee)", () => {
     seedScenario();
-    // Rebuild twice in a row, as if the recovery path were invoked repeatedly.
     rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
     rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
 
@@ -126,7 +144,7 @@ describe("rebuildProjections (EN-054)", () => {
     expect(names).toContain("Amelia");
   });
 
-  it("is deterministic: two independent rebuilds produce structurally equivalent projections", () => {
+  it("is deterministic: two independent rebuilds of the same log match EXACTLY, no tolerance (EN-057 v1.5)", () => {
     seedScenario();
     const events = eventLog.listForUser(PRIMARY_USER_ID);
 
@@ -135,25 +153,31 @@ describe("rebuildProjections (EN-054)", () => {
     rebuildProjections(events, projections, PRIMARY_USER_ID);
     rebuildProjections(events, projectionsB, PRIMARY_USER_ID);
 
-    const snapshotA = snapshotFromEntityRows(projections.listEntities(PRIMARY_USER_ID));
-    const snapshotB = snapshotFromEntityRows(projectionsB.listEntities(PRIMARY_USER_ID));
+    const rowsA = exactRowsFromEntityRows(projections.listEntities(PRIMARY_USER_ID));
+    const rowsB = exactRowsFromEntityRows(projectionsB.listEntities(PRIMARY_USER_ID));
 
-    expect(compareStructural(snapshotA, snapshotB)).toEqual({ equivalent: true, differences: [] });
+    expect(compareExact(rowsA, rowsB)).toEqual({ equivalent: true, differences: [] });
   });
 
-  it("the structural comparator catches a planted difference between two rebuilds", () => {
+  it("strict-exact comparison catches a planted difference that tolerant comparison would also catch", () => {
     seedScenario();
     const events = eventLog.listForUser(PRIMARY_USER_ID);
     rebuildProjections(events, projections, PRIMARY_USER_ID);
 
-    const snapshotA = snapshotFromEntityRows(projections.listEntities(PRIMARY_USER_ID));
-    const mutated = {
-      ...snapshotA,
-      entities: snapshotA.entities.filter((e) => e.name.toLowerCase() !== "amelia")
-    };
+    const rowsA = exactRowsFromEntityRows(projections.listEntities(PRIMARY_USER_ID));
+    const mutated = rowsA.filter((r) => r.name.toLowerCase() !== "amelia");
 
-    const comparison = compareStructural(snapshotA, mutated);
+    const comparison = compareExact(rowsA, mutated);
     expect(comparison.equivalent).toBe(false);
-    expect(comparison.differences.some((d) => d.includes("amelia"))).toBe(true);
+    expect(comparison.differences.some((d) => d.includes("Amelia"))).toBe(true);
+  });
+
+  it("strict-exact comparison catches a difference tolerant comparison would ignore (casing, provenance)", () => {
+    const rowsA = [{ name: "Sarah", confirmed: false, sourceEventIds: ["a", "b"], extractorVersion: "message-v1" }];
+    const rowsB = [{ name: "sarah", confirmed: false, sourceEventIds: ["a", "b"], extractorVersion: "message-v1" }]; // different case only
+
+    // compareStructural (tolerant) would call these equivalent; compareExact must not.
+    const comparison = compareExact(rowsA, rowsB);
+    expect(comparison.equivalent).toBe(false);
   });
 });

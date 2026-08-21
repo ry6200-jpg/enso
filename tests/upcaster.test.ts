@@ -64,7 +64,7 @@ describe("UpcasterRegistry (EN-058)", () => {
       return originalApply(event);
     }) as typeof registry.apply;
 
-    rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID, undefined, undefined, registry);
+    rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID, registry);
 
     expect(applyCalls).toBe(1); // one event was replayed, and it passed through the registry
   });

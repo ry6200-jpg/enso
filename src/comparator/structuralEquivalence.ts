@@ -79,3 +79,55 @@ export function snapshotFromExtraction(structure: ExtractionStructure): Structur
     dates: structure.dates
   };
 }
+
+// --- Strict-exact comparison (EN-057 v1.5) ---------------------------------
+//
+// Two strictness levels now exist, matching EN-054's rebuild/reprocess
+// split. compareStructural above is deliberately tolerant (normalized
+// names, ignores provenance/version) — the right mode for diffing a
+// reprocess against an older extractor version, where non-structural
+// variation is expected and even informative. Rebuild is different:
+// reading the same recorded payloads twice must produce byte-identical
+// projections. Any difference — including in casing, provenance, or
+// extractor_version — is a bug, not "acceptable variation," so rebuild
+// verification does not normalize anything away.
+
+export interface ExactEntityRow {
+  name: string;
+  confirmed: boolean;
+  sourceEventIds: string[];
+  extractorVersion: string;
+}
+
+export interface ExactComparisonResult {
+  equivalent: boolean;
+  differences: string[];
+}
+
+function exactKey(row: ExactEntityRow): string {
+  return JSON.stringify({
+    name: row.name,
+    confirmed: row.confirmed,
+    sourceEventIds: [...row.sourceEventIds].sort(),
+    extractorVersion: row.extractorVersion
+  });
+}
+
+/** Strict-exact comparison for rebuild verification (EN-057 v1.5): no normalization, no tolerance. */
+export function compareExact(a: ExactEntityRow[], b: ExactEntityRow[]): ExactComparisonResult {
+  const differences: string[] = [];
+  const setA = new Set(a.map(exactKey));
+  const setB = new Set(b.map(exactKey));
+  for (const only of setDiff(setA, setB)) differences.push(`row only in A: ${only}`);
+  for (const only of setDiff(setB, setA)) differences.push(`row only in B: ${only}`);
+  return { equivalent: differences.length === 0, differences };
+}
+
+export function exactRowsFromEntityRows(rows: EntityRow[]): ExactEntityRow[] {
+  return rows.map((r) => ({
+    name: r.name,
+    confirmed: r.confirmed === 1,
+    sourceEventIds: JSON.parse(r.source_event_ids) as string[],
+    extractorVersion: r.extractor_version
+  }));
+}

@@ -1,12 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { EventLog } from "../src/events/eventLog.js";
 import { createCachedExtractor, ExtractionCache } from "../src/extraction/cache.js";
 import { STUB_EXTRACTOR_VERSION, STUB_MODEL_ID, stubExtract } from "../src/extraction/stubExtractor.js";
-import { ProjectionsDb } from "../src/projections/db.js";
-import { rebuildProjections } from "../src/projections/rebuild.js";
-import { compareStructural, snapshotFromEntityRows } from "../src/comparator/structuralEquivalence.js";
 import { freshTestDbPath } from "../src/test/dbPath.js";
-import { PRIMARY_USER_ID } from "../src/test/seed.js";
 
 let cache: ExtractionCache;
 
@@ -42,40 +37,32 @@ describe("ExtractionCache (EN-056)", () => {
     expect(cache.size()).toBe(2);
   });
 
-  it("survives across independent rebuilds — the cache is not a projection", () => {
-    const eventLog = new EventLog(freshTestDbPath(import.meta.url, "events"));
-    const projections = new ProjectionsDb(freshTestDbPath(import.meta.url, "projections"));
-
-    const msg = eventLog.append({
-      type: "message_sent",
-      actor: "user",
-      payload: { text: "Lunch with Sarah." },
-      userId: PRIMARY_USER_ID
-    });
-    eventLog.append({
-      type: "extraction_completed",
-      actor: "system",
-      payload: { sourceEventId: msg.id, extractorVersion: STUB_EXTRACTOR_VERSION, modelId: STUB_MODEL_ID, entities: [], relationships: [], dates: [] },
-      userId: PRIMARY_USER_ID
-    });
-
+  it("persists across separate ExtractionCache instances pointed at the same file — durable, not in-memory", () => {
+    const dbPath = freshTestDbPath(import.meta.url, "durable-cache");
     let rawCalls = 0;
-    const { extract } = createCachedExtractor(cache, STUB_EXTRACTOR_VERSION, STUB_MODEL_ID, (text) => {
+    const firstHandle = new ExtractionCache(dbPath);
+    const { extract: extractFirst } = createCachedExtractor(firstHandle, STUB_EXTRACTOR_VERSION, STUB_MODEL_ID, (text) => {
       rawCalls++;
       return stubExtract(text);
     });
+    extractFirst("Lunch with Sarah.");
+    firstHandle.close();
 
-    const events = eventLog.listForUser(PRIMARY_USER_ID);
+    const secondHandle = new ExtractionCache(dbPath);
+    const { extract: extractSecond } = createCachedExtractor(secondHandle, STUB_EXTRACTOR_VERSION, STUB_MODEL_ID, (text) => {
+      rawCalls++;
+      return stubExtract(text);
+    });
+    extractSecond("Lunch with Sarah.");
 
-    rebuildProjections(events, projections, PRIMARY_USER_ID, extract);
-    expect(rawCalls).toBe(1); // first rebuild: cache miss, extractor actually ran
-
-    const projectionsRebuilt = new ProjectionsDb(freshTestDbPath(import.meta.url, "projections-2"));
-    rebuildProjections(events, projectionsRebuilt, PRIMARY_USER_ID, extract);
-    expect(rawCalls).toBe(1); // second rebuild reused the cache — the raw extractor did NOT run again
-
-    const before = snapshotFromEntityRows(projections.listEntities(PRIMARY_USER_ID));
-    const after = snapshotFromEntityRows(projectionsRebuilt.listEntities(PRIMARY_USER_ID));
-    expect(compareStructural(before, after)).toEqual({ equivalent: true, differences: [] });
+    expect(rawCalls).toBe(1); // the second handle saw the first handle's cached entry on disk
   });
 });
+
+// Note (EN-054/056 v1.5): rebuild no longer accepts an extractor function at
+// all — it only reads recorded extraction_completed payloads, and calls no
+// provider. The cache's role moving forward is bounding REPROCESS cost (a
+// deliberate, versioned re-extraction operation), which is not built this
+// phase. A prior test here proved the cache prevented re-extraction across
+// two rebuild calls; that scenario no longer exists now that rebuild has no
+// extraction step to cache in the first place.
