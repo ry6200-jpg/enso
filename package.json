@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@google/genai": "^2.18.0",
     "better-sqlite3": "12.4.1",
+    "openai": "^7.5.0",
     "ulid": "^3.0.2"
   },
   "devDependencies": {
