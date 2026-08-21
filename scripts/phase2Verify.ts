@@ -320,6 +320,7 @@ async function main() {
         confirmed: 0,
         source_event_ids: JSON.stringify([...acc.sourceEventIds].sort()),
         extractor_version: "message-v1/attachment-v1",
+        pending_disambiguation: null,
         created_at: new Date().toISOString()
       });
     }

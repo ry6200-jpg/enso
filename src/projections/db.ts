@@ -9,6 +9,26 @@ export interface EntityRow {
   confirmed: 0 | 1;
   source_event_ids: string; // JSON array of event ULIDs
   extractor_version: string;
+  /**
+   * Ported from old Enso's entity resolution cascade (EN-012): set when a
+   * name resolves via the lowest-confidence path (a fuzzy/phonetic match,
+   * or a same-counterparty kinship conflict that still shares a name with
+   * an existing entity) — a candidate that MIGHT be the same person as
+   * `pending_disambiguation.existingEntityId`, recorded for a future
+   * clarifying question. Surfacing that question is chat/persona work
+   * (not built this phase); this column exists so the data survives until
+   * that surface exists.
+   */
+  pending_disambiguation: string | null; // JSON PendingDisambiguation, or null
+  created_at: string;
+}
+
+export interface EntityAliasRow {
+  id: string;
+  user_id: string;
+  entity_id: string;
+  alias: string;
+  source_event_ids: string; // JSON array of event ULIDs
   created_at: string;
 }
 
@@ -105,9 +125,24 @@ export class ProjectionsDb {
         confirmed INTEGER NOT NULL DEFAULT 0,
         source_event_ids TEXT NOT NULL,
         extractor_version TEXT NOT NULL,
+        pending_disambiguation TEXT,
         created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_entities_user_id ON entities(user_id);
+
+      -- Entity resolution cascade (EN-012, ported from old Enso):
+      -- every raw name/spelling that resolves to a canonical entity.
+      CREATE TABLE IF NOT EXISTS entity_aliases (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        alias TEXT NOT NULL,
+        source_event_ids TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_aliases_user_id ON entity_aliases(user_id);
+      CREATE INDEX IF NOT EXISTS idx_aliases_entity_id ON entity_aliases(entity_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_aliases_unique ON entity_aliases(user_id, alias COLLATE NOCASE);
 
       -- Class A structural atoms (EN-013): parent_of (directed) and
       -- spouse_of/sibling_of (symmetric — stored as one canonically-ordered
@@ -193,17 +228,66 @@ export class ProjectionsDb {
    */
   clearProjections(): void {
     this.db.exec(
-      `DELETE FROM entities; DELETE FROM structural_atoms; DELETE FROM social_bonds; DELETE FROM entity_attributes; DELETE FROM perception_logs;`
+      `DELETE FROM entities; DELETE FROM structural_atoms; DELETE FROM social_bonds; DELETE FROM entity_attributes; DELETE FROM perception_logs; DELETE FROM entity_aliases;`
     );
   }
 
   insertEntity(row: EntityRow): void {
     this.db
       .prepare(
-        `INSERT INTO entities (id, user_id, name, confirmed, source_event_ids, extractor_version, created_at)
-         VALUES (@id, @user_id, @name, @confirmed, @source_event_ids, @extractor_version, @created_at)`
+        `INSERT INTO entities (id, user_id, name, confirmed, source_event_ids, extractor_version, pending_disambiguation, created_at)
+         VALUES (@id, @user_id, @name, @confirmed, @source_event_ids, @extractor_version, @pending_disambiguation, @created_at)`
       )
       .run(row);
+  }
+
+  insertEntityAlias(row: EntityAliasRow): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO entity_aliases (id, user_id, entity_id, alias, source_event_ids, created_at)
+         VALUES (@id, @user_id, @entity_id, @alias, @source_event_ids, @created_at)`
+      )
+      .run(row);
+  }
+
+  findEntityIdByExactAlias(userId: string, alias: string): string | undefined {
+    const row = this.db
+      .prepare(`SELECT entity_id FROM entity_aliases WHERE user_id = ? AND alias = ? COLLATE NOCASE`)
+      .get(userId, alias) as { entity_id: string } | undefined;
+    return row?.entity_id;
+  }
+
+  listEntityAliases(userId: string, entityId?: string): EntityAliasRow[] {
+    if (entityId) {
+      return this.db.prepare(`SELECT * FROM entity_aliases WHERE user_id = ? AND entity_id = ?`).all(userId, entityId) as EntityAliasRow[];
+    }
+    return this.db.prepare(`SELECT * FROM entity_aliases WHERE user_id = ?`).all(userId) as EntityAliasRow[];
+  }
+
+  updateEntityName(id: string, name: string): void {
+    this.db.prepare(`UPDATE entities SET name = ? WHERE id = ?`).run(name, id);
+  }
+
+  setEntityConfirmed(id: string): void {
+    this.db.prepare(`UPDATE entities SET confirmed = 1 WHERE id = ?`).run(id);
+  }
+
+  setPendingDisambiguation(id: string, pendingJson: string | null): void {
+    this.db.prepare(`UPDATE entities SET pending_disambiguation = ? WHERE id = ?`).run(pendingJson, id);
+  }
+
+  /** Unions new source event ids into an entity's provenance and updates its extractor_version, without touching name/confirmed. */
+  touchEntity(id: string, newSourceEventIds: string[], extractorVersion: string): void {
+    const row = this.getEntityById(id);
+    if (!row) throw new Error(`No entity with id ${id}`);
+    const merged = [...new Set([...(JSON.parse(row.source_event_ids) as string[]), ...newSourceEventIds])].sort();
+    this.db
+      .prepare(`UPDATE entities SET source_event_ids = ?, extractor_version = ? WHERE id = ?`)
+      .run(JSON.stringify(merged), extractorVersion, id);
+  }
+
+  getEntityById(id: string): EntityRow | undefined {
+    return this.db.prepare(`SELECT * FROM entities WHERE id = ?`).get(id) as EntityRow | undefined;
   }
 
   listEntities(userId: string): EntityRow[] {

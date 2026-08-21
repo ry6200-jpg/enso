@@ -18,6 +18,7 @@ describe("ProjectionsDb (EN-052/053)", () => {
       confirmed: 0,
       source_event_ids: JSON.stringify(["01MSG0000000000000000000"]),
       extractor_version: "stub-v1",
+      pending_disambiguation: null,
       created_at: new Date().toISOString()
     });
 
@@ -37,6 +38,7 @@ describe("ProjectionsDb (EN-052/053)", () => {
       confirmed: 0,
       source_event_ids: "[]",
       extractor_version: "stub-v1",
+      pending_disambiguation: null,
       created_at: new Date().toISOString()
     });
     expect(projections.listEntities(PRIMARY_USER_ID)).toHaveLength(1);
@@ -53,6 +55,7 @@ describe("ProjectionsDb (EN-052/053)", () => {
       confirmed: 0,
       source_event_ids: "[]",
       extractor_version: "stub-v1",
+      pending_disambiguation: null,
       created_at: new Date().toISOString()
     });
     projections.insertEntity({
@@ -62,6 +65,7 @@ describe("ProjectionsDb (EN-052/053)", () => {
       confirmed: 0,
       source_event_ids: "[]",
       extractor_version: "stub-v1",
+      pending_disambiguation: null,
       created_at: new Date().toISOString()
     });
     expect(projections.listEntities(PRIMARY_USER_ID)).toHaveLength(1);

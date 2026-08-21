@@ -51,9 +51,10 @@ export const TAXONOMY_JSON_SCHEMA = {
           type: { type: "string", enum: ["parent_of", "spouse_of", "sibling_of"] },
           fromName: { type: "string" },
           toName: { type: "string" },
-          action: { type: "string", enum: ["assert", "close"] }
+          action: { type: "string", enum: ["assert", "close"] },
+          explicitlyNewPerson: { type: "boolean" }
         },
-        required: ["type", "fromName", "toName", "action"],
+        required: ["type", "fromName", "toName", "action", "explicitlyNewPerson"],
         additionalProperties: false
       }
     },
@@ -67,9 +68,10 @@ export const TAXONOMY_JSON_SCHEMA = {
           toName: { type: "string" },
           qualifier: { type: ["string", "null"] },
           basis: { type: "string", enum: ["inferred", "stated"] },
-          action: { type: "string", enum: ["open", "close"] }
+          action: { type: "string", enum: ["open", "close"] },
+          explicitlyNewPerson: { type: "boolean" }
         },
-        required: ["type", "fromName", "toName", "qualifier", "basis", "action"],
+        required: ["type", "fromName", "toName", "qualifier", "basis", "action", "explicitlyNewPerson"],
         additionalProperties: false
       }
     },
@@ -105,6 +107,7 @@ export function buildExtractionSystemPrompt(referenceDate: string): string {
 - episodeMarkers: short markers for incidents or narrative boundaries — "incident_reference" for a specific event described, "boundary_start"/"boundary_end" only when the text explicitly signals an incident beginning or concluding.
 - structuralAtoms: family relationships. Use the literal name "me" for the author/narrator. parent_of: fromName is the PARENT, toName is the CHILD ("my mom" -> {type:"parent_of", fromName:"mom's name or 'mom' if unnamed", toName:"me"}). spouse_of and sibling_of are symmetric (order doesn't matter). action is "assert" for every mention EXCEPT: emit "close" for spouse_of ONLY when the text explicitly states the marriage ended (divorce, death) — never for sibling_of or parent_of, and never merely because someone wasn't mentioned. Never write "child_of" — always express it as parent_of the other direction.
 - socialBonds: friend/colleague/mentor_of/neighbor/classmate/romantic bonds. basis is "inferred" when the bond is implied but not directly stated (e.g. "my coworker Priya" -> colleague, inferred), "stated" when the text directly asserts the bond (e.g. "we became friends"). action is "open" for every mention that isn't a closure, and "close" when the text explicitly states a relationship with that person ended — never infer closure from a person simply not being mentioned. A general statement that a relationship ended ("we had a falling out and don't talk anymore", "we're not close anymore", "we broke up", "we don't really talk anymore") is closure evidence even if it doesn't name a specific bond type by word: emit a "close" entry with type "friend" for it (the most general non-family bond) UNLESS the text names a more specific type ("we're not coworkers anymore" -> close colleague; "we broke up" about a partner -> close romantic). When in doubt about which type a general falling-out closes, still emit at least one close entry rather than emitting nothing — a closure mention that produces no entries silently fails EN-013's close-on-stated-evidence guarantee. qualifier is short free-text context if present (e.g. "the bowling league"), else null. Never use "peer_of" — it is not a valid type.
+- explicitlyNewPerson (on both structuralAtoms and socialBonds entries): flag ONLY an explicit signal that a name refers to a DIFFERENT person sharing a name with someone already known. By default, a later mention of an already-known name is the SAME person, even when how their relationship is described changes (e.g. a coworker later described as a friend — relationships naturally deepen over time; that alone is never a sign of a different person). Set this to true ONLY when the text gives an ACTUAL, explicit signal that this mention is about a DIFFERENT person who happens to share a name with someone already on record — e.g. "a different Sarah," "another Amy I know from the gym," "my other friend named Marcus," or a clearly conflicting distinguishing detail attached to the mention (a different workplace, last name, or city than what's already known about the existing person with that name). This is rare — leave it false on nearly every message.
 - attributes: facts stated about a NAMED person's birthdate, location, or occupation — including the author using entityName "me". value is the fact as literally stated. eventDate is an ISO 8601 date (YYYY-MM-DD) ONLY if the text lets you determine when the fact became true or was dated, resolved relative to today's date above (e.g. "she moved to Seattle last year" said today -> eventDate is one year before today) — otherwise null. Never guess eventDate when the text doesn't support one; a birthdate itself is not an eventDate.
 If none apply for a category, return an empty array for it. Never invent facts not present in the text.`;
 }

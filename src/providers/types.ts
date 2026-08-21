@@ -37,6 +37,8 @@ export interface StructuralAtomMention {
   fromName: string;
   toName: string;
   action: "assert" | "close";
+  /** EN-012, ported from old Enso: true ONLY on an explicit signal this name refers to a different person than one already known — rare, default false. */
+  explicitlyNewPerson: boolean;
 }
 
 /**
@@ -53,6 +55,8 @@ export interface SocialBondMention {
   qualifier: string | null;
   basis: "inferred" | "stated";
   action: "open" | "close";
+  /** EN-012, ported from old Enso: true ONLY on an explicit signal this name refers to a different person than one already known — rare, default false. */
+  explicitlyNewPerson: boolean;
 }
 
 /**

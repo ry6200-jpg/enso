@@ -71,6 +71,7 @@ describe("rebuildProjections (EN-054 v1.5 — payload-reading, no extraction)", 
       confirmed: 0,
       source_event_ids: "[]",
       extractor_version: "old-version",
+      pending_disambiguation: null,
       created_at: new Date().toISOString()
     });
 

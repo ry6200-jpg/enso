@@ -41,8 +41,8 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
           entities: [{ name: "Sarah", type: "person" }],
           statedFeelings: [],
           episodeMarkers: [],
-          structuralAtoms: [{ type: "sibling_of", fromName: "me", toName: "Sarah", action: "assert" }],
-          socialBonds: [{ type: "friend", fromName: "me", toName: "Sarah", qualifier: null, basis: "stated", action: "open" }],
+          structuralAtoms: [{ type: "sibling_of", fromName: "me", toName: "Sarah", action: "assert", explicitlyNewPerson: false }],
+          socialBonds: [{ type: "friend", fromName: "me", toName: "Sarah", qualifier: null, basis: "stated", action: "open", explicitlyNewPerson: false }],
           attributes: [{ entityName: "Sarah", attribute: "location", value: "Boston", eventDate: null }]
         },
         usage: { inputTokens: 10, outputTokens: 5 }
@@ -61,8 +61,8 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
     // the provider's taxonomy and the recorded event payload in an earlier
     // version — caught by live verification, not by this suite, which is
     // exactly why this assertion exists now.
-    expect(payload.structuralAtoms).toEqual([{ type: "sibling_of", fromName: "me", toName: "Sarah", action: "assert" }]);
-    expect(payload.socialBonds).toEqual([{ type: "friend", fromName: "me", toName: "Sarah", qualifier: null, basis: "stated", action: "open" }]);
+    expect(payload.structuralAtoms).toEqual([{ type: "sibling_of", fromName: "me", toName: "Sarah", action: "assert", explicitlyNewPerson: false }]);
+    expect(payload.socialBonds).toEqual([{ type: "friend", fromName: "me", toName: "Sarah", qualifier: null, basis: "stated", action: "open", explicitlyNewPerson: false }]);
     expect(payload.attributes).toEqual([{ entityName: "Sarah", attribute: "location", value: "Boston", eventDate: null }]);
   });
 
