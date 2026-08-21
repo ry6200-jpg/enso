@@ -21,7 +21,9 @@ describe("ProjectionsDb (EN-052/053)", () => {
       created_at: new Date().toISOString()
     });
 
-    const [row] = projections.listEntities(PRIMARY_USER_ID);
+    const rows = projections.listEntities(PRIMARY_USER_ID);
+    const row = rows[0]!;
+    expect(rows).toHaveLength(1);
     expect(row.name).toBe("Sarah");
     expect(JSON.parse(row.source_event_ids)).toEqual(["01MSG0000000000000000000"]);
     expect(row.extractor_version).toBe("stub-v1");

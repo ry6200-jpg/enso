@@ -2,6 +2,7 @@ import { newId } from "../ids.js";
 import type { EventRecord } from "../events/schema.js";
 import { STUB_EXTRACTOR_VERSION, stubExtract } from "../extraction/stubExtractor.js";
 import type { ExtractionStructure } from "../extraction/types.js";
+import { UpcasterRegistry } from "../upcasters/registry.js";
 import type { ProjectionsDb } from "./db.js";
 
 interface MessageSentPayload {
@@ -57,13 +58,20 @@ export interface RebuildResult {
  * protect.
  */
 export function rebuildProjections(
-  events: EventRecord[],
+  rawEvents: EventRecord[],
   projections: ProjectionsDb,
   userId: string,
   extract: (text: string) => ExtractionStructure = stubExtract,
-  extractorVersion: string = STUB_EXTRACTOR_VERSION
+  extractorVersion: string = STUB_EXTRACTOR_VERSION,
+  upcasters: UpcasterRegistry = new UpcasterRegistry()
 ): RebuildResult {
   projections.clearProjections();
+
+  // Every event passes through the upcaster chain before replay sees it
+  // (EN-058). Today every real event type is at schema_version 1 with no
+  // migrations registered, so this is a no-op passthrough — but it's
+  // genuinely wired in, not just available to call.
+  const events = rawEvents.map((event) => upcasters.apply(event));
 
   const messages = events.filter(
     (e): e is EventRecord & { payload: MessageSentPayload } => e.type === "message_sent"
