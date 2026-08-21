@@ -19,6 +19,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^20.14.0",
+    "pdf-lib": "^1.17.1",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^4.1.11"

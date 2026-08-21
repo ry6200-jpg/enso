@@ -1,5 +1,5 @@
 import type { CostTracker } from "./costTracker.js";
-import { BothTiersFailedError, ClientRequestError } from "./errors.js";
+import { runWithFallback } from "./fallback.js";
 import { createGeminiAdapter } from "./geminiAdapter.js";
 import { createOpenAiAdapter } from "./openaiAdapter.js";
 import type { ExtractionKind, ExtractionRequest, ProviderAdapter, ProviderCallResult } from "./types.js";
@@ -33,25 +33,9 @@ export function createExtractionRouter(
 ): ExtractionRouter {
   async function extract(request: ExtractionRequest): Promise<ProviderCallResult> {
     const tiers = config[request.kind];
-
-    try {
-      const result = await tiers.primary(request);
-      costTracker?.record(result);
-      return result;
-    } catch (primaryErr) {
-      if (primaryErr instanceof ClientRequestError) {
-        throw primaryErr;
-      }
-      try {
-        const result = await tiers.fallback(request);
-        costTracker?.record(result);
-        return result;
-      } catch (fallbackErr) {
-        const primary = primaryErr instanceof Error ? primaryErr : new Error(String(primaryErr));
-        const fallback = fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
-        throw new BothTiersFailedError(primary, fallback);
-      }
-    }
+    const result = await runWithFallback(tiers.primary, tiers.fallback, request);
+    costTracker?.record(result);
+    return result;
   }
 
   return { extract };
