@@ -50,8 +50,8 @@ function establishAsFamily(entityId: string) {
   });
 }
 
-function recordCircleBackFired(inReplyToEventId: string, entityId: string, name: string) {
-  const payload: Partial<ReplySentPayload> = { gateActions: { circleBackFired: { entityId, name }, attestationConfirmedEventId: null }, inReplyToEventId } as ReplySentPayload;
+function recordCircleBackFired(inReplyToEventId: string, entityId: string, name: string, stableKey: string) {
+  const payload: Partial<ReplySentPayload> = { gateActions: { circleBackFired: { entityId, name, stableKey }, attestationConfirmedEventId: null }, inReplyToEventId } as ReplySentPayload;
   return eventLog.append({ type: "reply_sent", actor: "enso", payload, userId: PRIMARY_USER_ID });
 }
 
@@ -89,7 +89,7 @@ describe("findEligibleCircleBackCandidates (EN-030/070-073)", () => {
     const marcusId = insertEntity("Marcus", [msg.id]);
     for (let i = 0; i < MAX_CIRCLE_BACK_ATTEMPTS; i++) {
       const turn = userTurn(`filler turn ${i}`);
-      recordCircleBackFired(turn.id, marcusId, "Marcus");
+      recordCircleBackFired(turn.id, marcusId, "Marcus", msg.id);
       // Advance past cooldown between attempts so the loop itself doesn't
       // trip the cooldown check before reaching the attempt cap.
       for (let j = 0; j < 6; j++) userTurn(`cooldown filler ${i}-${j}`);
@@ -104,7 +104,7 @@ describe("findEligibleCircleBackCandidates (EN-030/070-073)", () => {
     const msg = userTurn("My coworker Marcus helped me move a couch.");
     const marcusId = insertEntity("Marcus", [msg.id]);
     const fireTurn = userTurn("some later turn");
-    recordCircleBackFired(fireTurn.id, marcusId, "Marcus");
+    recordCircleBackFired(fireTurn.id, marcusId, "Marcus", msg.id);
 
     const candidates = findEligibleCircleBackCandidates(eventLog, projections, PRIMARY_USER_ID, "just a regular update");
 
@@ -128,7 +128,7 @@ describe("Option B (Phase 7 Part 0): retries waive recency, hard cap holds, fres
     const msg = userTurn("Marcus helped me carry some boxes.");
     const marcusId = insertEntity("Marcus", [msg.id]);
     const firstFireTurn = userTurn("turn 2 — first attempt fires here");
-    recordCircleBackFired(firstFireTurn.id, marcusId, "Marcus");
+    recordCircleBackFired(firstFireTurn.id, marcusId, "Marcus", msg.id);
 
     // Advance exactly enough turns to clear the 5-turn cooldown AND push
     // well past the 5-turn recency window relative to Marcus's introduction
@@ -139,17 +139,38 @@ describe("Option B (Phase 7 Part 0): retries waive recency, hard cap holds, fres
 
     const candidates = findEligibleCircleBackCandidates(eventLog, projections, PRIMARY_USER_ID, "just a regular update");
 
-    expect(candidates).toEqual([{ entityId: marcusId, name: "Marcus", attemptNumber: 2, mentionAgeLabel: expect.any(String) }]);
+    expect(candidates).toEqual([{ entityId: marcusId, name: "Marcus", attemptNumber: 2, mentionAgeLabel: expect.any(String), stableKey: msg.id }]);
+  });
+
+  it("survives entity id churn across a rebuild — the real bug found live: attempt tracking must key on the entity's stable provenance, never the ephemeral projection id", () => {
+    const msg = userTurn("Marcus helped me carry some boxes.");
+    const marcusIdBeforeRebuild = insertEntity("Marcus", [msg.id]);
+    const firstFireTurn = userTurn("first attempt fires here");
+    recordCircleBackFired(firstFireTurn.id, marcusIdBeforeRebuild, "Marcus", msg.id);
+    for (let i = 0; i < 6; i++) userTurn(`filler ${i}`);
+
+    // Simulate what rebuildProjections actually does after every turn in
+    // production (scripts/chat.ts / turnMemoryRefresh.ts): drop projections
+    // and recreate the entity fresh, which assigns it a BRAND NEW id, while
+    // its real provenance (source_event_ids, starting from the same msg)
+    // is unchanged.
+    projections.clearProjections();
+    const marcusIdAfterRebuild = insertEntity("Marcus", [msg.id]);
+    expect(marcusIdAfterRebuild).not.toBe(marcusIdBeforeRebuild);
+
+    const candidates = findEligibleCircleBackCandidates(eventLog, projections, PRIMARY_USER_ID, "just a regular update");
+
+    expect(candidates).toEqual([{ entityId: marcusIdAfterRebuild, name: "Marcus", attemptNumber: 2, mentionAgeLabel: expect.any(String), stableKey: msg.id }]);
   });
 
   it("hard cap: a third attempt is never offered, even after another full cooldown period", () => {
     const msg = userTurn("Marcus helped me carry some boxes.");
     const marcusId = insertEntity("Marcus", [msg.id]);
     const firstFireTurn = userTurn("first attempt fires here");
-    recordCircleBackFired(firstFireTurn.id, marcusId, "Marcus");
+    recordCircleBackFired(firstFireTurn.id, marcusId, "Marcus", msg.id);
     for (let i = 0; i < 6; i++) userTurn(`filler ${i}`);
     const secondFireTurn = userTurn("second attempt fires here");
-    recordCircleBackFired(secondFireTurn.id, marcusId, "Marcus");
+    recordCircleBackFired(secondFireTurn.id, marcusId, "Marcus", msg.id);
     for (let i = 0; i < 6; i++) userTurn(`more filler ${i}`);
 
     const candidates = findEligibleCircleBackCandidates(eventLog, projections, PRIMARY_USER_ID, "just a regular update");
@@ -161,7 +182,7 @@ describe("Option B (Phase 7 Part 0): retries waive recency, hard cap holds, fres
     const marcusMsg = userTurn("Marcus helped me carry some boxes.");
     const marcusId = insertEntity("Marcus", [marcusMsg.id]);
     const firstFireTurn = userTurn("first attempt on Marcus fires here");
-    recordCircleBackFired(firstFireTurn.id, marcusId, "Marcus");
+    recordCircleBackFired(firstFireTurn.id, marcusId, "Marcus", marcusMsg.id);
     for (let i = 0; i < 5; i++) userTurn(`filler ${i}`); // clears cooldown, Marcus now retry-eligible
 
     // A brand new person, freshly mentioned, also becomes a candidate this turn.
@@ -170,7 +191,7 @@ describe("Option B (Phase 7 Part 0): retries waive recency, hard cap holds, fres
 
     const candidates = findEligibleCircleBackCandidates(eventLog, projections, PRIMARY_USER_ID, "just a regular update");
 
-    expect(candidates).toEqual([{ entityId: priyaId, name: "Priya", attemptNumber: 1, mentionAgeLabel: expect.any(String) }]);
+    expect(candidates).toEqual([{ entityId: priyaId, name: "Priya", attemptNumber: 1, mentionAgeLabel: expect.any(String), stableKey: priyaMsg.id }]);
   });
 });
 

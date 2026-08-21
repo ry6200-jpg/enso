@@ -53,8 +53,8 @@ export interface ReplySentPayload {
     failureReason: string | null;
   };
   gateActions: {
-    /** Non-null only when the circle-back gate fired AND EN-073 verified the reply actually executed it — an attempt that was decided but not executed is recorded as null here (never silently burned, R7). */
-    circleBackFired: { entityId: string; name: string } | null;
+    /** Non-null only when the circle-back gate fired AND EN-073 verified the reply actually executed it — an attempt that was decided but not executed is recorded as null here (never silently burned, R7). stableKey (the entity's earliest provenance event ULID, NOT the ephemeral projection entityId — EN-054) is what future turns match attempt history against; entityId/name are carried for display/debug only. */
+    circleBackFired: { entityId: string; name: string; stableKey: string } | null;
     /** The fact_confirmed event id this turn produced, if the attestation gate resolved a validated affirmation. */
     attestationConfirmedEventId: string | null;
   };

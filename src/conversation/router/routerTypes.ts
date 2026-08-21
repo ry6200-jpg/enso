@@ -9,12 +9,15 @@
  */
 
 export interface CircleBackCandidate {
+  /** The entity's CURRENT projection id — valid for this turn's router selection only. Never persisted for cross-turn matching (see stableKey): entity ids are reassigned on every rebuild (EN-054), a real bug found live in Phase 7 when attempt-tracking briefly keyed off this instead. */
   entityId: string;
   name: string;
   /** Which attempt this would be if it fires (1 or 2 — EN-030's hard cap). */
   attemptNumber: 1 | 2;
   /** Human-readable bucketed gap since the entity's earliest mention, for retry phrasing to bridge ("The other day you mentioned..."). Present on every candidate for uniformity; only meaningfully used by the persona on a retry (attemptNumber 2). */
   mentionAgeLabel: string;
+  /** The entity's earliest provenance event ULID — stable across rebuilds (unlike entityId), so this is what cross-turn attempt-history matching actually keys on. */
+  stableKey: string;
 }
 
 /** A specific attribute claim recently surfaced (in the retrieved-memory block or the prior reply) that this turn might be explicitly affirming or correcting (EN-066). */

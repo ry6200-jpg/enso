@@ -9,7 +9,7 @@ const BASE_REQUEST: RouterRequest = {
   message: "hello",
   recentTurns: [],
   knownEntities: [{ entityId: "e1", name: "Elena" }],
-  circleBackCandidates: [{ entityId: "c1", name: "Marcus", attemptNumber: 1, mentionAgeLabel: "earlier today" }],
+  circleBackCandidates: [{ entityId: "c1", name: "Marcus", attemptNumber: 1, mentionAgeLabel: "earlier today", stableKey: "stable-c1" }],
   recentAttributeClaims: [{ entityName: "Elena", attribute: "location", value: "Seattle", extractionEventId: "ext1" }]
 };
 

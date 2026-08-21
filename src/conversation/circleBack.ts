@@ -58,7 +58,8 @@ function isEstablished(projections: ProjectionsDb, userId: string, entityId: str
 }
 
 interface FiredAttempt {
-  entityId: string;
+  /** The entity's earliest-provenance-event ULID at the time it fired — NOT the projection entityId, which is reassigned on every rebuild (EN-054) and so cannot be matched across turns. A real bug found live: with entityId as the key, a fired attempt stopped being recognized as soon as the next rebuild ran, and the "already attempted" entity fell back through to being treated as a brand-new fresh candidate. */
+  stableKey: string;
   /** Index into the user-turn sequence (0-based) that this attempt happened on — the same "turn count" cooldown unit the old repo used, derived from `inReplyToEventId` rather than a live message counter. */
   turnIndex: number;
 }
@@ -72,7 +73,7 @@ function firedAttemptHistory(eventLog: EventLog, userId: string, userTurns: Even
     const fired = payload.gateActions?.circleBackFired;
     if (!fired) continue;
     const turnIndex = turnIndexByMessageId.get(payload.inReplyToEventId) ?? userTurns.length - 1;
-    history.push({ entityId: fired.entityId, turnIndex });
+    history.push({ stableKey: fired.stableKey, turnIndex });
   }
   return history;
 }
@@ -116,21 +117,24 @@ export function findEligibleCircleBackCandidates(eventLog: EventLog, projections
   const threshold = userTurns.length >= RECENCY_WINDOW_TURNS ? userTurns[userTurns.length - RECENCY_WINDOW_TURNS]!.id : null;
 
   const attemptCounts = new Map<string, number>();
-  for (const h of history) attemptCounts.set(h.entityId, (attemptCounts.get(h.entityId) ?? 0) + 1);
+  for (const h of history) attemptCounts.set(h.stableKey, (attemptCounts.get(h.stableKey) ?? 0) + 1);
 
   const fresh: CircleBackCandidate[] = [];
   const retries: CircleBackCandidate[] = [];
 
   for (const entity of projections.listEntities(userId)) {
     if (isEstablished(projections, userId, entity.id)) continue;
-    const attemptsSoFar = attemptCounts.get(entity.id) ?? 0;
-    if (attemptsSoFar >= MAX_CIRCLE_BACK_ATTEMPTS) continue; // hard cap, permanent silence after 2
 
     const sourceIds = (JSON.parse(entity.source_event_ids) as string[]).slice().sort();
     const earliestId = sourceIds[0];
-    const earliestEvent = earliestId ? eventLog.getById(earliestId) : undefined;
+    if (earliestId === undefined) continue; // no provenance at all — nothing to key attempts on
+
+    const attemptsSoFar = attemptCounts.get(earliestId) ?? 0;
+    if (attemptsSoFar >= MAX_CIRCLE_BACK_ATTEMPTS) continue; // hard cap, permanent silence after 2
+
+    const earliestEvent = eventLog.getById(earliestId);
     const ageLabel = earliestEvent ? mentionAgeLabel(earliestEvent.recordedAt) : "a while back";
-    const candidate: CircleBackCandidate = { entityId: entity.id, name: entity.name, attemptNumber: (attemptsSoFar + 1) as 1 | 2, mentionAgeLabel: ageLabel };
+    const candidate: CircleBackCandidate = { entityId: entity.id, name: entity.name, attemptNumber: (attemptsSoFar + 1) as 1 | 2, mentionAgeLabel: ageLabel, stableKey: earliestId };
 
     if (attemptsSoFar === 0) {
       // First attempt: still subject to the recency window.
