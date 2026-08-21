@@ -249,6 +249,7 @@ Each entry below is a bug found in live use whose fix must survive the rebuild. 
 | R20 | Test cleanup with broad DELETEs one env-var from the real DB | EN-091 |
 | R21 | Chinese and Western zodiac advice near-identical | EN-031 |
 | R22 | Circle-back phrasing repeats near-verbatim | EN-030 |
+| R23 | Extractor treated a proposition embedded in a question, hypothetical, or reported belief as a user-asserted fact (a real "location: Portland" attribute and a real parent_of structural atom, both from questions, not statements) | EN-013, EN-066 |
 
 ---
 

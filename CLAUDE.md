@@ -37,6 +37,7 @@ Do not re-litigate settled decisions. Section 12 questions marked RESOLVED are c
 - Commit each part separately so a red batch can be bisected.
 - Never report a feature as done without observed-behavior evidence. Reports without evidence are unverified by definition.
 - Persona properties are judged by reading actual replies from live conversations, never by inspecting prompt text.
+- Reply-level testing cannot verify storage-level properties — any claim about what was stored requires reading the projection or the event payload.
 
 ## Reporting
 
