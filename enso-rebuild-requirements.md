@@ -1,7 +1,7 @@
 # Enso — Ground-Up Rebuild: Requirements & Architecture
 
-**Version 1.4 — August 2026**
-**Status: Draft for review — v1.4 closes Section 12: two-class relationship model (structural atoms + social bond intervals with the open-inferred/close-stated asymmetry) joins the resolved event vocabulary**
+**Version 1.5 — August 2026**
+**Status: Draft for review — v1.5 splits EN-054 into rebuild (free, deterministic, no extraction) vs reprocess (deliberate, versioned, paid), with EN-056/057 realigned to the split**
 
 This document captures everything Enso must do (carried forward from Mirror and from the current Enso build), the recommended architecture for the rebuild, and the provider strategy. Requirements are numbered (EN-xxx) so build prompts and verification reports can reference them precisely.
 
@@ -128,13 +128,15 @@ These are requirements, not stylistic suggestions. Each one exists because its v
 
 ### 6.2 Replay
 
-**EN-054. Rebuild command.** A first-class operation: drop all projections, replay the log, regenerate. This must be routine, not scary — it is the recovery path for every extraction bug.
+**EN-054. Rebuild vs reprocess — two distinct operations, never blurred.**
+- **Rebuild** (routine, free, deterministic): drop all projections and replay the log, consuming recorded `extraction_completed` payloads — **no extraction runs, no provider is called**. Same input produces the same output every time, so rebuilds are verifiable exactly. This is the everyday recovery path and must stay boring: a recovery tool with a stochastic model inside cannot even confirm its own success.
+- **Reprocess** (deliberate, versioned, paid): re-run extraction with a new `extractor_version` over selected events, through the cache (EN-056), emitting new supersedable `extraction_completed` events into the log. A subsequent rebuild incorporates them by normal precedence (newer extractor version outranks older; user authority outranks both). Reprocessing is always an explicit user decision — the system never reinterprets history as a side effect of repairing it. Each interpretation remains a stamped, diffable artifact: the system keeps a memory of its own understanding.
 
 **EN-055. Correction precedence.** User corrections and confirmations are events with *higher precedence* than extraction output, applied after extraction during replay. A rebuild must never resurrect an error the user already corrected. **Binding rule:** corrections reference the event ULID they correct (immutable provenance), never projection entity IDs — entity IDs are ephemeral and wiped on every replay, so a correction bound to one would break the rebuild it exists to survive. This is the single most dangerous thing to get wrong; treat it as a launch-blocking requirement with its own tests.
 
-**EN-056. Extraction cache.** Extraction output is cached keyed on (content hash, extractor_version, model id). Replay re-runs extraction only for cache misses. Without this, full rebuilds cost real money and hours at LLM rates and will be avoided — and an avoided rebuild is no rebuild at all.
+**EN-056. Extraction cache.** Extraction output is cached keyed on (content hash, extractor_version, model id). The cache's role is bounding **reprocessing** cost (EN-054) — unchanged content under an unchanged extractor version is never re-extracted, so a reprocess pays only for what actually changed. Rebuilds never touch providers and need no cache.
 
-**EN-057. Structural-equivalence verification.** LLM extraction is non-deterministic; replay verification compares *structure* (same entities, same relationships, same dates) not byte-identical output. Build the comparison tooling as part of Phase 3, not after.
+**EN-057. Structural-equivalence verification.** Two strictness levels, matching EN-054's split: **rebuilds are deterministic, so rebuild verification is strict** — two rebuilds of the same log must match exactly, and any difference is a bug. **Reprocessing is stochastic**, so comparing across extractor versions uses structural comparison (same entities, same relationships, same dates) with tolerance for non-structural variation — that comparison is also the diff that shows what a newer extractor found. Build both modes of the comparator as part of the foundation, not after.
 
 **EN-058. Event schema evolution.** Events are permanent, so old event versions must remain replayable forever. Plan for upcasters (per-type version-migration functions) from the first schema. Keep event payloads minimal to reduce this burden.
 
