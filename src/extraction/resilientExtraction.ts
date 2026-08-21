@@ -5,7 +5,7 @@ import type { EventLog } from "../events/eventLog.js";
 import type { EventRecord } from "../events/schema.js";
 import type { DocumentContentAdapter, ImageContentAdapter } from "../providers/attachmentTypes.js";
 import type { ExtractionRouter } from "../providers/router.js";
-import type { ExtractedEntity, EpisodeMarker, StatedFeeling } from "../providers/types.js";
+import type { AttributeMention, ExtractedEntity, EpisodeMarker, SocialBondMention, StatedFeeling, StructuralAtomMention } from "../providers/types.js";
 import { classifyPersonalVsDocument, type ClassifierDecision } from "./personalDocumentClassifier.js";
 import { DEFAULT_RETRY_CONFIG, retryWithBackoff, type RetryConfig } from "./retry.js";
 
@@ -21,6 +21,9 @@ export interface MessageExtractionCompletedPayload {
   entities: ExtractedEntity[];
   statedFeelings: StatedFeeling[];
   episodeMarkers: EpisodeMarker[];
+  structuralAtoms: StructuralAtomMention[];
+  socialBonds: SocialBondMention[];
+  attributes: AttributeMention[];
   classifierDecision: ClassifierDecision;
 }
 
@@ -73,13 +76,17 @@ export async function extractMessageWithResilience(
       entities: [],
       statedFeelings: [],
       episodeMarkers: [],
+      structuralAtoms: [],
+      socialBonds: [],
+      attributes: [],
       classifierDecision
     };
     return eventLog.append({ type: "extraction_completed", actor: "system", payload, userId: messageEvent.userId });
   }
 
   try {
-    const result = await retryWithBackoff(() => router.extract({ kind: "message", text }), retryConfig);
+    const referenceDate = messageEvent.recordedAt.slice(0, 10);
+    const result = await retryWithBackoff(() => router.extract({ kind: "message", text, referenceDate }), retryConfig);
     const payload: MessageExtractionCompletedPayload = {
       sourceEventId: messageEvent.id,
       extractorVersion: MESSAGE_EXTRACTOR_VERSION,
@@ -89,6 +96,9 @@ export async function extractMessageWithResilience(
       entities: result.taxonomy.entities,
       statedFeelings: result.taxonomy.statedFeelings,
       episodeMarkers: result.taxonomy.episodeMarkers,
+      structuralAtoms: result.taxonomy.structuralAtoms,
+      socialBonds: result.taxonomy.socialBonds,
+      attributes: result.taxonomy.attributes,
       classifierDecision
     };
     return eventLog.append({ type: "extraction_completed", actor: "system", payload, userId: messageEvent.userId });

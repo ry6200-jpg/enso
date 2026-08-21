@@ -31,13 +31,20 @@ function captureTestMessage(text: string) {
 }
 
 describe("extractMessageWithResilience (EN-059/060)", () => {
-  it("on success, appends extraction_completed with taxonomy and classifier decision", async () => {
+  it("on success, appends extraction_completed with the FULL taxonomy (entities, atoms, bonds, attributes) and classifier decision", async () => {
     const message = captureTestMessage("I had lunch with Sarah today.");
     const router: ExtractionRouter = {
       extract: async () => ({
         provider: "openai",
         model: "gpt-5.6-terra",
-        taxonomy: { entities: [{ name: "Sarah", type: "person" }], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
+        taxonomy: {
+          entities: [{ name: "Sarah", type: "person" }],
+          statedFeelings: [],
+          episodeMarkers: [],
+          structuralAtoms: [{ type: "sibling_of", fromName: "me", toName: "Sarah", action: "assert" }],
+          socialBonds: [{ type: "friend", fromName: "me", toName: "Sarah", qualifier: null, basis: "stated", action: "open" }],
+          attributes: [{ entityName: "Sarah", attribute: "location", value: "Boston", eventDate: null }]
+        },
         usage: { inputTokens: 10, outputTokens: 5 }
       })
     };
@@ -49,6 +56,33 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
     expect(payload.entities).toEqual([{ name: "Sarah", type: "person" }]);
     expect(payload.classifierDecision.isPersonal).toBe(true);
     expect(getExtractionStatus(eventLog, message.id)).toBe("completed");
+
+    // Regression check: these three fields were silently dropped between
+    // the provider's taxonomy and the recorded event payload in an earlier
+    // version — caught by live verification, not by this suite, which is
+    // exactly why this assertion exists now.
+    expect(payload.structuralAtoms).toEqual([{ type: "sibling_of", fromName: "me", toName: "Sarah", action: "assert" }]);
+    expect(payload.socialBonds).toEqual([{ type: "friend", fromName: "me", toName: "Sarah", qualifier: null, basis: "stated", action: "open" }]);
+    expect(payload.attributes).toEqual([{ entityName: "Sarah", attribute: "location", value: "Boston", eventDate: null }]);
+  });
+
+  it("passes the message's own told-time as referenceDate, not whenever extraction happens to run (EN-016)", async () => {
+    const message = captureTestMessage("She moved last year.");
+    let receivedReferenceDate: string | undefined;
+    const router: ExtractionRouter = {
+      extract: async (request) => {
+        receivedReferenceDate = request.referenceDate;
+        return {
+          provider: "openai",
+          model: "gpt-5.6-terra",
+          taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
+          usage: { inputTokens: 1, outputTokens: 1 }
+        };
+      }
+    };
+
+    await extractMessageWithResilience(eventLog, router, message);
+    expect(receivedReferenceDate).toBe(message.recordedAt.slice(0, 10));
   });
 
   it("skips the LLM call entirely for non-personal content — no provider/model recorded", async () => {
