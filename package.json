@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "vitest run --exclude '**/*.live.test.ts'",
-    "test:live": "vitest run --include '**/*.live.test.ts'",
+    "test:live": "vitest run live.test.ts",
     "test:watch": "vitest --exclude '**/*.live.test.ts'",
     "demo": "tsx scripts/demo.ts",
     "typecheck": "tsc --noEmit"
