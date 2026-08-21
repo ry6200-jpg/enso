@@ -1,0 +1,276 @@
+# Enso — Ground-Up Rebuild: Requirements & Architecture
+
+**Version 1.4 — August 2026**
+**Status: Draft for review — v1.4 closes Section 12: two-class relationship model (structural atoms + social bond intervals with the open-inferred/close-stated asymmetry) joins the resolved event vocabulary**
+
+This document captures everything Enso must do (carried forward from Mirror and from the current Enso build), the recommended architecture for the rebuild, and the provider strategy. Requirements are numbered (EN-xxx) so build prompts and verification reports can reference them precisely.
+
+A principle runs through the whole document, learned the hard way: **raw capture is the system of record; everything derived is a rebuildable cache.** Every architectural choice below serves that principle.
+
+---
+
+## 1. Vision and Product Identity
+
+**EN-001.** Enso is a private relationship journal with an AI companion. Its purpose is to help the user remember and understand the people in their life and the history of those connections — including as the user's own memory fades. Reminiscence is the feature everything else ultimately serves.
+
+**EN-002.** Brand: "Enso Intelligence" is the product/company name used in the logo, page titles, and branding contexts. The AI persona refers to itself simply as "Enso" in conversation — never with the "Intelligence" suffix.
+
+**EN-003.** Visual identity: the approved logo (red brush-textured ensō circle, "ENSO" wordmark, "INTELLIGENCE" subtitle) appears in the upper left. The approved 24-icon zodiac set (12 Chinese animals + 12 Western signs, consistent red line-art style) is used wherever zodiac signs appear; icons must visually match the approved set, not redrawn approximations.
+
+**EN-004.** Long-term direction (out of scope for the rebuild, but the architecture must not preclude it): a future opt-in cross-user layer ("En") for relationship guidance and eventually matchmaking for meaningful connections of any kind, gated behind "vetted" (verified identity) and "vested" (verified genuine readiness) requirements. The gate for ever starting that work: the personal tier must first be demonstrably trustworthy.
+
+**EN-005.** Scale assumption: single user now, possibly a small group of testers later. Architecture choices may exploit this (single-process SQLite, synchronous projection updates) but should not hard-code single-tenancy in the data model — key user-owned tables by a user/account id from day one.
+
+---
+
+## 2. Scope of the Rebuild
+
+**In scope:** the chat journal experience, entity/relationship memory, attachment persistence, retrieval, onboarding, the zodiac sidebar, the Horoscope tab, location grounding, the reflection loop, episode clustering (EN-037), the dual-track emotion layer (EN-038), and the event-sourced data layer beneath all of it. Episodes and emotion are **in scope, built late**: their extraction taxonomy and LIVE validation bank entries are designed from day one (Phases 1 and 3), while their algorithmic clustering and extraction loops build in Phase 8.5 — intelligence on top of a proven foundation, never before it.
+
+**Ported as assets, not regenerated:** the tuned persona prompt, all behavioral guardrails, and every empirically discovered fix listed in Section 11. These were validated by live use and are the most expensive artifacts the project owns.
+
+---
+
+## 3. Functional Requirements — Chat Journal Core
+
+**EN-010. Journaling chat.** The primary interface is a chat where the user journals thoughts in natural language. Every user message is saved unconditionally *before* any AI call is attempted; a failed AI call must never lose what the user typed.
+
+**EN-011. Entity memory.** When the user mentions any person, an entity is created or resolved against existing entities. There is no tier of "important" people and no formal circles/membership concept — every mentioned person is treated the same way.
+
+**EN-012. Entity resolution and disambiguation.** Port the hardened resolution cascade: alias matching, counterparty-scoped kinship comparison, kinship-compatibility clusters, protection against same-message double-resolution. These rules encode many fixed bugs; carry them as specifications, not as an invitation to redesign.
+
+**EN-013. Relationship model — two classes.** This was deferred in Mirror because retrofitting was painful; in a ground-up build it costs nothing extra and is the single most valuable structural upgrade.
+- **Class A — structural atoms (the traversal graph).** Objective, binary primitives; the only edges derivation rules operate on. Atoms: `parent_of` (directed) and `spouse_of` (symmetric — the only bond that generates in-law derivations). `child_of` is banned from storage: it is `parent_of` read backward; double-writing invites contradiction. `sibling_of` is a hybrid: assertable by the user standing alone, and derivable/verifiable by parent intersection once parents are known — which yields half- and step-distinctions automatically. All derived relations (grandparent, cousin, in-law) are computed by traversal, never stored as opaque labels. Structural atoms carry temporal intervals: `spouse_of` closes on stated evidence (divorce, passing); traversal defaults to active intervals but may evaluate historical ones (ex-in-law paths).
+- **Class B — social bonds (typed intervals, not graph edges).** Shape: `bond(type, from_entity, to_entity, qualifier, interval)`. Controlled type vocabulary: `friend`, `colleague`, `mentor_of` (directed), `neighbor`, `classmate`, `romantic`. The free-text qualifier carries context ("the bowling league") without inflating the type list. **Accretion, not transition:** multiple bonds run concurrently on one pair — a colleague who becomes a friend keeps an open colleague interval and gains a parallel friend interval. Bonds never participate in derivation (a friend's friend is not a relationship). `peer_of` is explicitly rejected as too vague to traverse or type. `romantic` never graduates to structural — only an explicit `spouse_of` generates in-laws.
+- **Interval asymmetry (from the authoritative-vs-supersedable principle):** bonds may **open on inferred evidence** ("my coworker Priya" opens a colleague interval — additive, supersedable, harmless if wrong) but may **close on stated evidence only** ("we don't talk anymore"). Closure is authoritative erasure; the pipeline never infers it. **Silence never closes an interval** — in a system protecting fading memory, an unmentioned friend is dormant, not dead, and may be the one most worth resurfacing. All interval endpoints carry dual time (EN-016); "relationship as of date X" (EN-017) is an interval query.
+
+**EN-014. Graph traversal.** Connected-subgraph retrieval and generation counting, with the capped sibling-hop rule carried over as-is.
+
+**EN-015. Third-party attribute persistence.** Attributes stated about *other people* (birthdates, locations, occupations) must persist to that person's entity — the systemic gap that lost five family birthdates in Mirror. Acceptance test: state a birthdate for a non-primary person mid-conversation; it must be retrievable in a later session.
+
+**EN-016. Perception logs with dual time.** Every extracted fact records both told-time (when the user said it) and event-time (when it happened, if determinable). "She moved last year" said in 2023 must not read as 2025 later.
+
+**EN-017. Versioned relationship history.** Relationship changes are archived, never overwritten. In the event-sourced design (Section 6) this falls out of the log for free; the projection must still expose "relationship as of date X."
+
+**EN-018. Aggregate-count guardrail.** Enso never estimates counts. Any stated number ("you have four sisters") must come from an actual computed block injected into context, or Enso says it doesn't have a count.
+
+**EN-019. Confabulation guardrails.** Enso must not invent explanations for its own uncertainty ("you asked me not to say the city") or embellish facts beyond what was said ("four doors in a row" from "two households two doors apart"). When challenged on an error, it owns the error plainly rather than reframing it as intentional looseness.
+
+**EN-020. No unverified success claims.** Enso's reply must never claim "I've updated/saved/recorded X" unless the write verifiably succeeded. If extraction is pending or failed, the reply reflects that honestly.
+
+**EN-021. Onboarding.** A conversational (not form-like) onboarding that collects the user's core profile, including birthdate (which drives the zodiac features) and location. Address handling: a postal code is sufficient to resolve city via the Geocoding API (fill-forward, never overwriting a stated value). No blanket "no maps access" prohibitions in any prompt — that class of line has now silently disabled two working capabilities.
+
+---
+
+## 4. Functional Requirements — Features Beyond the Chat
+
+**EN-030. Entity establishment (circle-back).** When a new person is mentioned, Enso tactfully works toward a small set of key facts through natural conversation — digression-tolerant, never a blocking gate, never framed as setup. Implemented as a **deterministic gate**, not a passive prompt instruction (see EN-072). Rules, all settled: one entity per circle-back; never two consecutive turns; minimum ~5-turn gap between attempts; hard cap of 2 attempts per entity, then dormant; minimum 2–3 turn delay after first mention (no same-turn interrogation); only recently-mentioned entities are proactively raised — older pending entities are opportunistic only, with the reflection loop as the recovery path. An attempt is recorded only after verifying the ask actually appeared in the reply. Phrasing must vary; near-verbatim repetition across turns is a defect.
+
+**EN-031. Zodiac sidebar.** Chinese zodiac section on top, Western below, both derived from the user's stored birthdate, using the approved icon set. Daily relationship-flavored wisdom per sign, generated by Enso (not scraped), with the two sections giving genuinely distinct content — near-identical Dog/Taurus advice is a known defect to avoid.
+
+**EN-032. Horoscope tab.** The single exception to the no-tabs UI: a Horoscope tab with (1) a Synastry Chart comparing the user with a chosen entity — Enso tactfully collects that entity's sign or birthday through the EN-030 mechanism — and (2) Daily Zodiac Compatibility ("today's astrological relationship weather"), generated by Enso, at most one reference link.
+
+**EN-033. Location grounding.** Three levels, all carried over: (a) background/silent — casual place mentions are understood for context without announcing lookups; (b) on request — direct location questions get real answers via Geocoding/Places (never "I don't have maps access"); (c) advice grounding — real travel-time data (Routes API) can inform advice when relevant ("that's a long drive in current traffic"). Tool-use decisions go through a gate per EN-072; the venue-name-without-city fallback (resolve via Places address) is a ported fix.
+
+**EN-034. Reflection loop.** A periodic background process (idle trigger + daily backstop) that re-reads raw history and repairs missing or inconsistent derived data through the same conflict-aware write path used everywhere else (fill nulls safely; queue real contradictions for user review, never silently overwrite). In the new architecture this becomes a *selective replay* consumer (Section 6) rather than bespoke machinery.
+
+**EN-035. Recall / history retrieval.** Three retrieval modes, all returning raw text (not summaries):
+- **Hybrid search** — SQLite FTS for exact keyword/name/date matching, plus local vector embeddings (e.g., sqlite-vec with a locally-run embedding model) for semantic associative recall — "vacation" must find "a week at the cabin in Tahoe." The embedding model runs locally: no network egress for embeddings, per EN-094. Embeddings are a projection, rebuilt from the log like everything else.
+  **Rank fusion:** results merge via Reciprocal Rank Fusion over three rank lists — FTS, vector, and recency (ordered by `occurred_at` falling back to `recorded_at`): `RRF(d,q) = 1/(k + r_fts(d)) + 1/(k + r_vec(d)) + w_t(q)/(k + r_time(d))`. The recency weight is **query-conditional**: `w_t(q) = 0` by default (pure semantic + keyword retrieval), set positive by the intent router or a local heuristic when the query implies temporal proximity ("recently," "latest"), and negative (or the time rank inverted) for "first/earliest" queries. `k` is a tunable initialized low (~10–20, not the web-scale 60) and validated against the real corpus. **Implementation trap:** FTS5's `bm25()` returns negative values where more negative is better — the FTS rank list sorts *ascending* on `bm25()` before extracting 1-indexed ranks, or the best keyword matches land at the bottom.
+- **Recency** — last N messages verbatim, serving "read my messages" / "what have we talked about," which contain no searchable keyword.
+- **Entity** — every message linked to a person via provenance, serving "what did I tell you about my mother" even when her name isn't the literal text.
+Search queries must be derived from the *subject being recalled*, never from the user's literal phrasing (the "searched for the word 'messages'" defect). Enso must never deny having access to history — the capability exists; denying it is a defect class of its own.
+
+**EN-036. UI shell.** Pinned chat input (viewport-height flex container with `h-dvh`, `overflow-hidden`, `min-h-0` on the scroll list, `shrink-0` input, safe-area padding — the exact fix that finally worked); autoscroll to latest; no tabs except Horoscope; sidebar per EN-031. Duplicate-message-send must be tested for explicitly (never confirmed fixed in Mirror).
+
+**EN-037. Episode clustering (built Phase 8.5; taxonomy from day one).** A projection that clusters related messages into coherent incidents — the argument that unfolded across four conversations exists as one named episode, not scattered fragments. Each episode carries: a generated title, a dual-time span (told-time and event-time boundaries), participant entity links, and a provenance set of its source message events. Adds a **fourth retrieval mode — by episode**: an episode match returns the bounded sequence of raw source messages, not a summary. Episodes are rebuildable projections; the initial build backfills them over the full history via replay.
+
+**EN-038. Dual-track emotion layer (built Phase 8.5; taxonomy from day one).** Two strictly partitioned tracks in separate schemas:
+- **Track A — stated feelings.** Explicit user statements ("I was furious") are facts with full provenance, extracted through the standard pipeline, deletable and attestable like any fact.
+- **Track B — inferred tone.** Model-inferred emotional metadata, stored separately, always marked as inference, and **never asserted back to the user as historical fact** — Enso may ask ("it sounded like that call was hard — was it?") but never tell ("you were angry that day"). Violation of this rule is the confabulation defect class (R14).
+Per-relationship emotional trajectory over time derives from Track A primarily, Track B only as clearly-labeled texture. Both tracks are projections, rebuildable and backfillable over the full history.
+
+---
+
+## 5. Behavioral Contract (Persona)
+
+These are requirements, not stylistic suggestions. Each one exists because its violation was observed live.
+
+**EN-040. Voice.** Short, unhurried, zen-restrained; imagery over instruction; never names the philosophy or cites sources. Brevity carries the emotional weight — longer "inspiring" responses tested worse.
+
+**EN-041. Anti-robot rule.** No restating the user's words back, no clinical/therapeutic vocabulary, no intake-questionnaire register. One question per reply maximum.
+
+**EN-042. Anti-sycophancy.** No reflexive praise or agreement.
+
+**EN-043. Repetition handling.** If the user repeats a question, that means *Enso failed*, not that the user is difficult. Respond by trying a different approach — never by restating the same refusal more firmly, never by counting repetitions back ("as I said," "asking a third time"). No burnout/disengagement detector may flatten the voice or override a directive; any such signal can inform *content*, never *tone*.
+
+**EN-044. Limitations land as regret, not defense.** When Enso can't find or do something, the reply stays on the user's side of the problem.
+
+**EN-045. Honest partial knowledge.** If Enso saw only part of a document or has an unverified value, it says so (ties to EN-019/EN-020 and EN-062).
+
+**EN-046. Figurative language** is understood as figurative; adaptive tone per the ported guardrail set.
+
+**Verification requirement for all of Section 5:** persona properties are verified by reading actual replies from live test conversations (including a repeated-question stress test), never by inspecting prompt text.
+
+---
+
+## 6. Data Architecture — Event-Sourced Core
+
+### 6.1 The two layers
+
+**EN-050. Event log (system of record).** A single append-only `events` table: `id`, `recorded_at`, `occurred_at` (nullable), `type`, `actor` (user / enso / system), `payload` (JSON), `schema_version`, `user_id`. Events are never edited or deleted. **Ids are ULIDs** (Universally Unique Lexicographically Sortable Identifiers) for the events table and all projection tables; auto-incrementing integer primary keys are prohibited. ULIDs cost nothing now, sort natively by time, and eliminate primary-key collision risk if this data is ever migrated, merged across users (EN-004), or restored piecewise from backup. Everything that happens becomes an event: message sent, reply sent, file uploaded, extraction completed, extraction failed, correction made, fact confirmed, entities merged, external lookup performed, upload deleted (as a tombstone event — see EN-065).
+
+**EN-051. Blob store.** Uploaded files live on disk under a content-addressed or id-based path; the path is recorded in the upload event. Never store file bytes as SQLite blobs.
+
+**EN-052. Projections (derived, disposable).** Entities, aliases, relationships, perception logs, FTS indexes, embeddings, zodiac profile — all rebuilt from the log. Keep them physically separated (a `projections` schema or a second SQLite file) so the authority boundary stays visible. Atomicity, precisely scoped: the chat UI, the `message_sent` event append, and all LLM network I/O happen **outside** any projection transaction — the UI is never blocked on extraction. The same-transaction rule applies strictly to background extraction completion: the `extraction_completed` event and its resulting projection updates commit atomically, so a crash can never leave the projection drifted from the log. No eventual-consistency machinery beyond that is needed at this scale.
+
+**EN-053. Provenance.** Every projection row records the event id(s) it derives from and the `extractor_version` that produced it. This enables selective reprocessing and answers "why does Enso believe this?"
+
+### 6.2 Replay
+
+**EN-054. Rebuild command.** A first-class operation: drop all projections, replay the log, regenerate. This must be routine, not scary — it is the recovery path for every extraction bug.
+
+**EN-055. Correction precedence.** User corrections and confirmations are events with *higher precedence* than extraction output, applied after extraction during replay. A rebuild must never resurrect an error the user already corrected. **Binding rule:** corrections reference the event ULID they correct (immutable provenance), never projection entity IDs — entity IDs are ephemeral and wiped on every replay, so a correction bound to one would break the rebuild it exists to survive. This is the single most dangerous thing to get wrong; treat it as a launch-blocking requirement with its own tests.
+
+**EN-056. Extraction cache.** Extraction output is cached keyed on (content hash, extractor_version, model id). Replay re-runs extraction only for cache misses. Without this, full rebuilds cost real money and hours at LLM rates and will be avoided — and an avoided rebuild is no rebuild at all.
+
+**EN-057. Structural-equivalence verification.** LLM extraction is non-deterministic; replay verification compares *structure* (same entities, same relationships, same dates) not byte-identical output. Build the comparison tooling as part of Phase 3, not after.
+
+**EN-058. Event schema evolution.** Events are permanent, so old event versions must remain replayable forever. Plan for upcasters (per-type version-migration functions) from the first schema. Keep event payloads minimal to reduce this burden.
+
+### 6.3 Extraction pipeline
+
+**EN-059. Resilient extraction.** Per-message extraction has retry with backoff and *persistent* failure tracking (an `extraction_failed` event) — a dense message that times out is never silently lost. Failed extractions are visible/queryable and retried by the reflection loop. Extraction status is per-message and auditable.
+
+**EN-060. Classifier scope.** The personal-vs-document classifier governs entity extraction only. It never determines whether content is stored, indexed, or acknowledged. It fails open (toward extracting) and records its decision and reason as part of the extraction event.
+
+---
+
+## 7. Attachment Subsystem
+
+All decisions below are settled; implement as specified.
+
+**EN-061. Store every upload, always.** No content inspection for keep/discard, no tiering by type, no size-based discarding. Original file to the blob store (EN-051); upload event with filename, type, size, date. Hard ceiling ~100MB with a clear human-readable failure — never a silent failure.
+
+**EN-062. Full text + descriptions.** Extract and store the complete text of every document (full text, not a summary — summaries are lossy interpretations; full text is reprocessable). Generate and store descriptions of images (standalone and embedded). Both are FTS-indexed alongside messages. A description is an *index pointing at* the file, never a replacement for it.
+
+**EN-063. Bounded model exposure, honest truncation.** On the upload turn, the model receives an overview plus a bounded opening portion; afterward, FTS retrieves relevant chunks at query time. If Enso saw only part of a document, it knows and says so (EN-045). Silent truncation is a defect.
+
+**EN-064. Attachment permanence in conversation.** Enso must always know an upload happened, forever — "I have no record of that PDF" about a real upload is the defect class this whole section exists to eliminate. Attachment-only messages carry placeholder text (never empty content — empty user messages crash provider APIs; this was a real production bug).
+
+**EN-065. Deletion path — informed one-click.** The user can delete an upload: file bytes removed, extracted text, descriptions, FTS entries, and embeddings removed, and a tombstone event recorded so replay honors the deletion. At deletion time the system computes the facts whose *only* provenance is that upload and shows a single transparent confirmation ("This will also remove 2 facts learned only from this file"). One click confirms; sole-provenance facts are removed, corroborated facts survive (the dialog may note preserved facts: "3 associated facts will be preserved via your conversation history"). No silent cascade (silent data loss is the defect class this document exists to eliminate) and no multi-option decision tree.
+
+**EN-066. Provenance rules governing deletion.** Facts point to an immutable provenance set of event ULIDs. Deletion impact: a fact whose entire provenance set falls within the deleted upload's events is destroyed; a fact with any provenance outside that set survives. Two explicit rules:
+- **Attestation.** When the user explicitly affirms a specific value Enso surfaced ("Yes, May 12 is right"), that turn generates a `fact_confirmed` event which counts as independent provenance — deleting the original file no longer deletes a fact the user personally attested. **Strict bar:** conversational continuers ("ok," "sure," "yeah," "sounds right") in reply to a message that merely contained the fact do NOT generate `fact_confirmed`; the affirmation must address the specific entity or value. This explicit-vs-continuer judgment is itself an LLM classification and is validated in the LIVE bank under the same arithmetic and thresholds as the router flags (EN-075).
+- **Derivation cascade.** A fact computed from other facts (age from birthdate) records a `parent_provenance` pointer to its root(s). If a root is wiped to zero remaining provenance, a recursive sweep drops all downstream derived facts. For a fact derived from two or more root facts where one root is destroyed: **invalidate and re-derive** — the derived fact is dropped from the projection, and the reflection loop (EN-034) independently re-derives it if the surviving provenance still supports it.
+
+---
+
+## 8. Decision Gates (the tool-use pattern)
+
+**EN-070. The lesson.** Passive instructions inside a large system prompt decay as the prompt grows — this killed circle-back adherence and nearly killed Maps tool-use. Any behavior that must happen *reliably* gets an explicit gate, not a prompt paragraph.
+
+**EN-071. Gate structure.** (1) A cheap local heuristic that exits early on obviously irrelevant turns; (2) where judgment is genuinely required, a small dedicated model call with a narrow question; (3) if triggered, a short high-salience directive injected at the *end* of the system prompt naming the one specific action.
+
+**EN-072. Gated behaviors.** Circle-back (EN-030), location tool-use (EN-033), history-search invocation (EN-035). Others may be added, but the default for new behaviors is prompt-first; promote to a gate only when live testing shows adherence failure.
+
+**EN-073. Directive-execution verification.** A gate recording "I decided to do X" must verify X actually appeared in the reply before consuming state (attempt counters, cooldowns). Decided-but-not-executed is a known live failure mode.
+
+**EN-074. Model tier for gates.** Judgment gates run on a mid-tier model minimum. Empirical finding: the cheapest tier invoked a required tool only 50–65% of the time on the key scenario; the mid tier was 5/5. Re-validate this per provider — it is a model-specific empirical property, not a portable fact.
+
+**EN-075. Intent router — baseline implementation.** The gates in EN-072 are implemented as a **single structured-JSON router call** per turn (after the local heuristics), returning flags such as `{"requires_maps": ..., "trigger_circle_back": ..., "search_history": ...}` — one call instead of three, for latency and token cost. **Live-validation requirement (stochastic):** the LIVE bank contains positive AND negative scenario cases per flag; every case runs **N=20 times**, passing at **≥19/20 (95%)** — LLM decisions are non-deterministic, and a single lucky 100% pass certifies nothing (see R5). Results are scored as a per-flag confusion matrix, never a single accuracy number: a router that never fires scores perfectly on negatives. **Thresholds are asymmetric per flag by cost:** a false negative (missed maps lookup) is a minor degradation; a false positive on a high-latency action (spurious history search on a casual message) is penalized more heavily. A flaky miss forces prompt tuning or model escalation, not an immediate architecture pivot; only a decision that persistently fails threshold reverts to its own dedicated gate call. The attestation classifier (EN-066) is validated in this same bank under the same arithmetic. EN-073's post-reply verification applies regardless of router shape.
+
+---
+
+## 9. Provider Strategy — OpenAI + Gemini Primary
+
+**EN-080. Provider-agnostic core.** One internal interface for chat, extraction, tool-use, and document input; providers are adapters behind it. No provider-specific types or prompt assumptions outside the adapter layer. Mirror's extraction was already provider-agnostic — preserve that property everywhere.
+
+**EN-081. Primary chain: OpenAI ⇄ Gemini.** Recommended arrangement:
+- **OpenAI as Tier 1** for chat and judgment gates, **Gemini as Tier 2** fallback. Rationale from your own project history: Gemini exhibited genuine paid-tier reliability failures (sustained 503s) severe enough that you migrated off it once already. Reliability history should outweigh marginal capability differences for a journaling app where availability is the felt quality.
+- **Gemini for large-document extraction** where its long context is an advantage, with OpenAI as extraction fallback.
+- Assign models per task, not one model for everything: a stronger model for chat and gates, a cheaper same-provider model for bulk extraction — subject to EN-074's re-validation requirement.
+
+**EN-082. Verify current provider capabilities at build time — do not build on remembered facts.** Specifically verify, per provider, before writing adapters: native PDF/document input (Mirror-era notes say OpenAI lacked PDF support; that may well be stale), image input, streaming, tool/function-calling shape, prompt-caching availability and pricing, and current rate limits. Provider capabilities change quarter to quarter; a requirements doc should pin the *questions*, not the answers.
+
+**EN-083. Fallback semantics.** On Tier-1 failure, retry the identical request on Tier 2 unconditionally; a user-visible error only after both fail. Distinguish malformed-request errors (4xx — do *not* burn the fallback; fix the request) from availability errors (5xx/timeouts — fall back). This distinction was the real lesson of the "who is Sarah?" incident: both tiers correctly rejected the same malformed request, and no fallback could have saved it. **Gate fail-safe:** gate certification (EN-075) is per-model; when chat is running on a failover tier whose gate decisions were never certified, all stochastic judgment gates bypass to their default no-action state — conversation degrades gracefully, but no uncertified model executes tool-routing decisions. The bypass is logged per EN-085.
+
+**EN-084. Recommended backup (Tier 3): an open-weight model via a hosted inference provider** (e.g., the strongest current open-weight coding/chat model on a router or dedicated host), with the same adapter interface — and, because it's open-weight, the option to self-host later for full independence. Rationale: your first two tiers are the two largest commercial providers; the failure mode that gets past both is more likely a *policy/account/billing* event than a technical outage, and an open-weight tier is the only kind that can't disappear by a vendor's decision. It also future-proofs the privacy story for a deeply personal dataset. (Claude remains a technically viable Tier-3 alternative — the integration knowledge exists and its document handling is strong — but given you're deliberately reducing that dependency, the open-weight route better serves the independence goal.)
+
+**EN-085. Degradation honesty.** When running on a fallback tier, log it. If quality-sensitive behavior (gates, persona) is running on a weaker tier, that's visible in diagnostics — never silently absorbed.
+
+**EN-086. Cost guardrails.** Per-session and per-day spend tracking from day one; the extraction cache (EN-056) is the main cost control for replay. Budget alerting before hard cutoffs.
+
+---
+
+## 10. Non-Functional Requirements
+
+**EN-090. Testing structure.** Two suites from day one: **FAST** (pure logic, no network, seconds, default `npm test`) and **LIVE** (real API calls, separate command, run on demand). Live tests live in separate `*.live.test.ts` files — visible and greppable, never `.skipIf` env-var wrappers (silent-skip drift from 16 to 37 skipped tests is the failure mode this prevents).
+
+**EN-091. Test isolation.** Per-file test databases; parallelism on. A shared seed helper for the primary user; no hand-rolled seeds per file. The suite must fail loudly — never fall back to a real database path — if the test DB path is unset or misresolved. Destructive SQL in test files is prohibited; resets go through the harness.
+
+**EN-092. Verification policy** (standing): FAST after each part; live verification that the *specific built thing works* after each part, judged by observed behavior; full suite once per batch; separate commits per part so a red batch bisects. Reports are plain terminal text, never files.
+
+**EN-093. Never trust "done."** Any feature report without observed-behavior evidence is unverified. The project's two most expensive incidents were work reported complete that wasn't, and work reported absent that existed.
+
+**EN-094. Privacy.** All data local by default. The deeply personal nature of the dataset is a first-class constraint: no analytics, no third-party storage in this phase; provider API calls are the only data egress and should be documented as such.
+
+**EN-095. Backups.** The event log + blob store *are* the backup surface (projections are rebuildable). A simple scheduled copy of those two, tested by an actual restore-and-replay, is sufficient at this scale — but it must actually exist; a memory system with no backup contradicts EN-001.
+
+---
+
+## 11. Regression Ledger — Ported Fixes as Requirements
+
+Each entry below is a bug found in live use whose fix must survive the rebuild. Treat this table as acceptance criteria; a rebuild that reintroduces any of these has failed.
+
+| # | Lesson | Requirement it lives in |
+|---|--------|------------------------|
+| R1 | Empty-content (attachment-only) user messages crash provider APIs when present in history | EN-064 |
+| R2 | Third-party attributes (birthdates, locations) silently not persisted | EN-015 |
+| R3 | Blanket prohibition lines in prompts ("no maps access") silently kill working capabilities | EN-021, EN-033 |
+| R4 | Passive prompt instructions decay as the prompt grows | EN-070 |
+| R5 | Cheapest model tier unreliable for judgment/tool decisions (50–65%) | EN-074 |
+| R6 | Venue name without city fails geocoding; resolve via Places address | EN-033 |
+| R7 | Gate decides "yes" but reply omits the action; attempt burned | EN-073 |
+| R8 | Same-turn circle-back defeats the tact design | EN-030 |
+| R9 | Literal user phrasing used as search query ("messages") | EN-035 |
+| R10 | Model denies a capability it just used | EN-035 |
+| R11 | Repetition flips tone to curt/defensive; counts repetitions back | EN-043 |
+| R12 | Attachment content lives one turn, then vanishes without record | EN-061–064 |
+| R13 | Classifier silently decides whether an upload "exists" | EN-060 |
+| R14 | Confabulated explanations for uncertainty; embellished facts | EN-019, EN-038 |
+| R15 | "I've updated..." claimed without verified write | EN-020 |
+| R16 | Extraction timeout loses a message forever, silently | EN-059 |
+| R17 | Aggregate counts estimated rather than computed | EN-018 |
+| R18 | Pin-the-input CSS: missing `min-h-0` on flex scroll child | EN-036 |
+| R19 | Kinship vocabulary gap / double-resolution / uncapped sibling hop | EN-012, EN-014 |
+| R20 | Test cleanup with broad DELETEs one env-var from the real DB | EN-091 |
+| R21 | Chinese and Western zodiac advice near-identical | EN-031 |
+| R22 | Circle-back phrasing repeats near-verbatim | EN-030 |
+
+---
+
+## 12. Open Design Questions (settle before coding)
+
+1. **Event vocabulary — RESOLVED.** Ten types. Authoritative (user acts): `message_sent`, `file_uploaded`, `upload_deleted`, `fact_corrected`, `fact_confirmed`, `user_annotation` (out-of-band UI actions that bypass the extraction pipeline; targets described by provenance ULIDs or time spans, never projection IDs). Authoritative (Enso acts): `reply_sent`. Supersedable (pipeline outputs): `extraction_completed` (full structured output in payload — the fact taxonomy, including stated feelings and episode-relevant markers, lives here, versioned by `extractor_version`), `extraction_failed`, `external_lookup_performed`. **Governing principle for all future vocabulary growth:** the log may record derived output as versioned, supersedable observation; authority belongs exclusively to direct user actions. There is deliberately no `entities_merged`, no episode event, no `session_started` (derived from timestamp gaps), and no ops events. Merges route by origin: pipeline-deduced merges live inside `extraction_completed`'s supersedable payload; a merge commanded in chat is a `message_sent` flowing through extraction; a merge via UI action is a `user_annotation` targeting the two provenance ULIDs.
+2. **Primitive relationship set — RESOLVED.** See EN-013: two classes — structural atoms (`parent_of`, `spouse_of`, hybrid `sibling_of`; `child_of` banned; traversal-only derivation; intervals on atoms) and social bonds (typed coexisting intervals with controlled vocabulary and free-text qualifier; no derivation; open-inferred/close-stated asymmetry; silence never closes).
+3. **Deletion default** (EN-065): confirm the recommended default for derived facts of deleted uploads.
+4. **Chunking strategy** for FTS over long documents (chunk size, overlap, ranking weight vs. ordinary messages).
+5. **Data migration — RESOLVED: start clean.** The current system holds only test data; nothing is imported. The importer is cancelled and the prior data-integrity questions are moot — real journaling begins fresh through the new capture pipeline.
+
+---
+
+## 13. Recommended Build Order
+
+1. **Foundation:** event log + blob store + projection scaffolding + rebuild command with structural-equivalence checks (EN-050–058), with the event vocabulary accommodating episode and emotion event types (EN-037/038) from the start. Prove replay on synthetic data before any feature work.
+2. **Capture:** messages, uploads (full Section 7), resilient extraction with cache (EN-059–060). At this point nothing is ever lost, even though features are minimal.
+3. **Memory:** entities on the primitive model, resolution cascade, perception logs, provenance (EN-011–017). The extraction fact taxonomy and LIVE validation bank include stated-feeling and episode-boundary categories from day one, even though their loops build later.
+4. **Retrieval:** all retrieval modes + FTS over documents/descriptions (EN-035).
+5. **Conversation:** persona (Section 5), guardrails, provider chain (Section 9).
+6. **Gates:** circle-back, location, history-search (Section 8).
+7. **Surfaces:** UI shell, sidebar, Horoscope tab, onboarding (EN-021, EN-031–032, EN-036).
+8. **Background:** reflection loop as replay consumer (EN-034).
+8.5. **Deep memory:** episode clustering and dual-track emotion extraction (EN-037–038), built on the proven foundation and backfilled over the full history via replay.
+9. **Cutover:** no data migration — the rebuild starts clean (Section 12). The old system is archived as a code reference; daily journaling moves to the new system once Phases 1–7 are live-verified.
+
+The ordering principle: capture before intelligence, intelligence before surface. Once step 2 is done, every later bug is recoverable — which is the entire point of the rebuild.
