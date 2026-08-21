@@ -83,9 +83,21 @@ export function closeBond(projections: ProjectionsDb, bondId: string, closedAtDa
 }
 
 export function isBondOpen(bond: SocialBondRow, asOfDate?: string): boolean {
-  if (bond.interval_end === null) return true;
-  if (!asOfDate) return false;
-  return bond.interval_end > asOfDate;
+  if (!asOfDate) return bond.interval_end === null;
+  if (bond.interval_start !== null && bond.interval_start > asOfDate) return false; // hadn't started yet
+  if (bond.interval_end !== null && bond.interval_end <= asOfDate) return false; // already ended by then
+  return true;
+}
+
+/** "Relationship as of date X" (EN-017) for bonds: which bonds between this pair were open on the given date. */
+export function findBondsBetweenAsOf(
+  projections: ProjectionsDb,
+  userId: string,
+  entityIdA: string,
+  entityIdB: string,
+  asOfDate: string
+): SocialBondRow[] {
+  return findBondsBetween(projections, userId, entityIdA, entityIdB).filter((b) => isBondOpen(b, asOfDate));
 }
 
 export function findBondsBetween(projections: ProjectionsDb, userId: string, entityIdA: string, entityIdB: string): SocialBondRow[] {

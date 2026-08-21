@@ -1,6 +1,6 @@
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { classifyProviderError } from "./errors.js";
-import { EXTRACTION_SYSTEM_PROMPT, TAXONOMY_JSON_SCHEMA } from "./taxonomySchema.js";
+import { buildExtractionSystemPrompt, TAXONOMY_JSON_SCHEMA } from "./taxonomySchema.js";
 import type { ExtractionRequest, ExtractionTaxonomy, ProviderAdapter, ProviderCallResult } from "./types.js";
 
 export const GEMINI_EXTRACTION_MODEL = "gemini-3.7-flash";
@@ -31,7 +31,7 @@ export function createGeminiAdapter(apiKey: string): ProviderAdapter {
         model: GEMINI_EXTRACTION_MODEL,
         contents: request.text,
         config: {
-          systemInstruction: EXTRACTION_SYSTEM_PROMPT,
+          systemInstruction: buildExtractionSystemPrompt(request.referenceDate ?? new Date().toISOString().slice(0, 10)),
           responseMimeType: "application/json",
           responseSchema: TAXONOMY_JSON_SCHEMA,
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }

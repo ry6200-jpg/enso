@@ -1,12 +1,25 @@
 import { newId } from "../ids.js";
 import type { EventRecord } from "../events/schema.js";
 import { UpcasterRegistry } from "../upcasters/registry.js";
+import { assertAttribute } from "../perception/attributes.js";
+import { assertParentOf, assertSiblingOf, assertSpouseOf, closeSpouseOf, deriveSiblingsFromParents } from "../relationships/structuralAtoms.js";
+import { closeBond, openBond } from "../relationships/socialBonds.js";
 import type { ProjectionsDb } from "./db.js";
 
 interface ExtractionCompletedPayload {
   sourceEventId: string;
   extractorVersion?: string;
   entities?: { name: string }[];
+  structuralAtoms?: { type: "parent_of" | "spouse_of" | "sibling_of"; fromName: string; toName: string; action: "assert" | "close" }[];
+  socialBonds?: {
+    type: "friend" | "colleague" | "mentor_of" | "neighbor" | "classmate" | "romantic";
+    fromName: string;
+    toName: string;
+    qualifier: string | null;
+    basis: "inferred" | "stated";
+    action: "open" | "close";
+  }[];
+  attributes?: { entityName: string; attribute: "birthdate" | "location" | "occupation"; value: string; eventDate: string | null }[];
 }
 interface ExtractionFailedPayload {
   sourceEventId: string;
@@ -36,9 +49,21 @@ export interface RebuildResult {
   messagesCurrentlyFailed: number;
   correctionsApplied: number;
   confirmationsApplied: number;
+  structuralAtomsApplied: number;
+  socialBondsApplied: number;
+  attributesApplied: number;
 }
 
 const UNKNOWN_EXTRACTOR_VERSION = "unknown";
+
+function normalize(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+/** The primary user's own entity id — stable per user, not written as an `entities` row (that table is for *other* mentioned people). */
+export function primaryEntityId(userId: string): string {
+  return `primary:${userId}`;
+}
 
 /**
  * The rebuild command (EN-054 v1.5): drop all projections and replay the
@@ -46,22 +71,27 @@ const UNKNOWN_EXTRACTOR_VERSION = "unknown";
  * runs here and no provider is ever called — this reads what the log
  * already recorded, which is what makes rebuild free, deterministic, and
  * exactly verifiable (EN-057). Re-running extraction over content is
- * reprocess's job (a distinct, deliberate, versioned, paid operation,
- * not built this phase) — rebuild and reprocess must never be blurred.
+ * reprocess's job (a distinct, deliberate, versioned, paid operation, not
+ * built this phase) — rebuild and reprocess must never be blurred.
  *
- * Prior to v1.5 this function re-ran a (stub, free) extractor during
- * replay, which was reasonable only because that extractor cost nothing;
- * it could never have generalized to real LLM extraction without either
- * re-paying for every rebuild or reintroducing non-determinism into a
- * recovery tool. Phase 2's real capture pipeline already writes the fuller
- * payload shape this function now reads directly.
+ * Entities, structural atoms, social bonds, and attributes are all built
+ * in this ONE pass sharing ONE name-to-entity-id map: entity ids are
+ * ephemeral and regenerated every rebuild (EN-055), so an atom or bond
+ * referencing an entity id could only stay consistent with the entities
+ * table if both are assigned ids from the same map in the same run. A
+ * separate rebuild pass for relationships, resolving names independently,
+ * would silently produce dangling or duplicate entity ids the moment the
+ * two passes' id choices diverged.
  *
  * Still deliberately NOT entity resolution (EN-012, Phase 3 Part 2):
- * entities are deduped globally per user by exact normalized name.
- * Corrections and confirmations bind to the extraction_completed event
- * ULID they target, never to a projection entity id — entity ids are
- * regenerated every rebuild and would break exactly the recovery path
- * EN-055 exists to protect.
+ * names are deduped globally per user by exact normalized text. "me" is
+ * the reserved name for the primary user's own (unwritten, stable) entity
+ * id — see primaryEntityId. Corrections and confirmations still bind to
+ * the extraction_completed event ULID they target, never to a projection
+ * entity id, and — a known scope boundary this phase — only affect the
+ * `entities` projection; a correction to an entity's name does not
+ * retroactively repoint structural atoms/bonds/attributes that named it
+ * before the correction.
  */
 export function rebuildProjections(
   rawEvents: EventRecord[],
@@ -98,10 +128,6 @@ export function rebuildProjections(
 
   const byNormalizedName = new Map<string, EntityAccumulator>();
 
-  function normalize(name: string): string {
-    return name.trim().toLowerCase();
-  }
-
   function upsert(name: string, sourceEventIds: string[], confirmed: boolean, extractorVersion: string): void {
     const key = normalize(name);
     let acc = byNormalizedName.get(key);
@@ -127,13 +153,29 @@ export function rebuildProjections(
   }
 
   // Pass 1: read every recorded extraction_completed payload directly — no
-  // extraction runs (EN-054 v1.5).
+  // extraction runs (EN-054 v1.5). Registers every name mentioned anywhere
+  // (entities array, or only as a party to a relationship/attribute) so
+  // every name that needs an entity id gets exactly one, consistently.
   let extractionsConsumed = 0;
   for (const extractionEvent of extractionCompletedBySourceId.values()) {
     extractionsConsumed++;
-    const extractorVersion = extractionEvent.payload.extractorVersion ?? UNKNOWN_EXTRACTOR_VERSION;
-    for (const entity of extractionEvent.payload.entities ?? []) {
-      upsert(entity.name, [extractionEvent.payload.sourceEventId, extractionEvent.id], false, extractorVersion);
+    const payload = extractionEvent.payload;
+    const extractorVersion = payload.extractorVersion ?? UNKNOWN_EXTRACTOR_VERSION;
+    const provenance = [payload.sourceEventId, extractionEvent.id];
+
+    for (const entity of payload.entities ?? []) {
+      upsert(entity.name, provenance, false, extractorVersion);
+    }
+    for (const atom of payload.structuralAtoms ?? []) {
+      if (normalize(atom.fromName) !== "me") upsert(atom.fromName, provenance, false, extractorVersion);
+      if (normalize(atom.toName) !== "me") upsert(atom.toName, provenance, false, extractorVersion);
+    }
+    for (const bond of payload.socialBonds ?? []) {
+      if (normalize(bond.fromName) !== "me") upsert(bond.fromName, provenance, false, extractorVersion);
+      if (normalize(bond.toName) !== "me") upsert(bond.toName, provenance, false, extractorVersion);
+    }
+    for (const attr of payload.attributes ?? []) {
+      if (normalize(attr.entityName) !== "me") upsert(attr.entityName, provenance, false, extractorVersion);
     }
   }
 
@@ -164,10 +206,16 @@ export function rebuildProjections(
     confirmationsApplied++;
   }
 
+  // Assign final entity ids and write the entities table. This is the ONE
+  // point where names become ids — everything after this resolves through
+  // entityIdByName, so atoms/bonds/attributes stay consistent with it.
+  const entityIdByName = new Map<string, string>();
   let entitiesWritten = 0;
-  for (const acc of byNormalizedName.values()) {
+  for (const [key, acc] of byNormalizedName) {
+    const id = newId();
+    entityIdByName.set(key, id);
     projections.insertEntity({
-      id: newId(),
+      id,
       user_id: userId,
       name: acc.name,
       confirmed: acc.confirmed ? 1 : 0,
@@ -176,6 +224,94 @@ export function rebuildProjections(
       created_at: new Date().toISOString()
     });
     entitiesWritten++;
+  }
+
+  function resolveEntityId(name: string): string {
+    const key = normalize(name);
+    if (key === "me") return primaryEntityId(userId);
+    return entityIdByName.get(key)!; // registered in pass 1 for every name mentioned anywhere
+  }
+
+  // Pass 4: structural atoms (EN-013 Class A) and social bonds (Class B),
+  // resolved through the same name map. Atom ids created here are tracked
+  // so a later "close" mention (matching the same normalized pair) can
+  // find and close the atom/bond opened by an earlier mention.
+  let structuralAtomsApplied = 0;
+  let socialBondsApplied = 0;
+  for (const extractionEvent of extractionCompletedBySourceId.values()) {
+    const payload = extractionEvent.payload;
+    const provenance = [payload.sourceEventId, extractionEvent.id];
+
+    for (const atom of payload.structuralAtoms ?? []) {
+      const fromId = resolveEntityId(atom.fromName);
+      const toId = resolveEntityId(atom.toName);
+      if (atom.type === "parent_of") {
+        assertParentOf(projections, userId, fromId, toId, provenance);
+      } else if (atom.type === "spouse_of") {
+        if (atom.action === "assert") {
+          assertSpouseOf(projections, userId, fromId, toId, provenance);
+        } else {
+          const existing = projections
+            .listStructuralAtoms(userId, "spouse_of")
+            .find((a) => (a.from_entity_id === fromId && a.to_entity_id === toId) || (a.from_entity_id === toId && a.to_entity_id === fromId));
+          if (existing) closeSpouseOf(projections, existing.id, extractionEvent.recordedAt, extractionEvent.id);
+        }
+      } else {
+        assertSiblingOf(projections, userId, fromId, toId, provenance);
+      }
+      structuralAtomsApplied++;
+    }
+
+    for (const bond of payload.socialBonds ?? []) {
+      const fromId = resolveEntityId(bond.fromName);
+      const toId = resolveEntityId(bond.toName);
+      if (bond.action === "open") {
+        openBond(projections, userId, {
+          type: bond.type,
+          fromEntityId: fromId,
+          toEntityId: toId,
+          qualifier: bond.qualifier,
+          openedBasis: bond.basis,
+          sourceEventIds: provenance
+        });
+      } else {
+        const existing = projections
+          .listSocialBonds(userId)
+          .find(
+            (b) =>
+              b.type === bond.type &&
+              b.interval_end === null &&
+              ((b.from_entity_id === fromId && b.to_entity_id === toId) || (b.from_entity_id === toId && b.to_entity_id === fromId))
+          );
+        if (existing) closeBond(projections, existing.id, extractionEvent.recordedAt, extractionEvent.id);
+      }
+      socialBondsApplied++;
+    }
+  }
+  deriveSiblingsFromParents(projections, userId);
+
+  // Pass 5: third-party attribute persistence (EN-015) with dual-time
+  // perception logs (EN-016). told_at is the message's own recorded_at —
+  // when the user actually said it — never whenever rebuild happens to run.
+  let attributesApplied = 0;
+  for (const extractionEvent of extractionCompletedBySourceId.values()) {
+    const payload = extractionEvent.payload;
+    for (const attr of payload.attributes ?? []) {
+      const entityId = resolveEntityId(attr.entityName);
+      const row = assertAttribute(projections, userId, entityId, attr.attribute, attr.value, [payload.sourceEventId, extractionEvent.id]);
+      projections.insertPerceptionLog({
+        id: newId(),
+        user_id: userId,
+        fact_type: "entity_attribute",
+        fact_ref: row.id,
+        told_at: extractionEvent.recordedAt,
+        event_at: attr.eventDate,
+        source_event_ids: row.source_event_ids,
+        raw_value: attr.value,
+        created_at: new Date().toISOString()
+      });
+      attributesApplied++;
+    }
   }
 
   let messagesCurrentlyFailed = 0;
@@ -188,6 +324,9 @@ export function rebuildProjections(
     extractionsConsumed,
     messagesCurrentlyFailed,
     correctionsApplied,
-    confirmationsApplied
+    confirmationsApplied,
+    structuralAtomsApplied,
+    socialBondsApplied,
+    attributesApplied
   };
 }

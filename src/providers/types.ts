@@ -55,12 +55,29 @@ export interface SocialBondMention {
   action: "open" | "close";
 }
 
+/**
+ * Third-party attribute mentions (EN-015): attributes stated about *other
+ * people*, which must persist to that person's entity — R2 is the
+ * regression this exists to prevent forever. "me" is the reserved name for
+ * the author. `eventDate` is dual-time (EN-016): an ISO date if the text
+ * lets you determine when the fact became true/dated relative to the
+ * message's own told-time ("she moved last year"), else null — never
+ * guessed.
+ */
+export interface AttributeMention {
+  entityName: string;
+  attribute: "birthdate" | "location" | "occupation";
+  value: string;
+  eventDate: string | null;
+}
+
 export interface ExtractionTaxonomy {
   entities: ExtractedEntity[];
   statedFeelings: StatedFeeling[];
   episodeMarkers: EpisodeMarker[];
   structuralAtoms: StructuralAtomMention[];
   socialBonds: SocialBondMention[];
+  attributes: AttributeMention[];
 }
 
 export type ExtractionKind = "message" | "document";
@@ -69,6 +86,8 @@ export interface ExtractionRequest {
   kind: ExtractionKind;
   /** The bounded text actually sent to the model (EN-063 for documents). */
   text: string;
+  /** The message's own told-time (ISO date), so relative dates ("last year") resolve against when it was actually said, not whenever extraction happens to run (EN-016). Defaults to today if omitted. */
+  referenceDate?: string;
 }
 
 export interface TokenUsage {

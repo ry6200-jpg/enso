@@ -37,7 +37,7 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
       extract: async () => ({
         provider: "openai",
         model: "gpt-5.6-terra",
-        taxonomy: { entities: [{ name: "Sarah", type: "person" }], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [] },
+        taxonomy: { entities: [{ name: "Sarah", type: "person" }], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
         usage: { inputTokens: 10, outputTokens: 5 }
       })
     };
@@ -58,7 +58,7 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
     const router: ExtractionRouter = {
       extract: async () => {
         called = true;
-        return { provider: "openai", model: "gpt-5.6-terra", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [] }, usage: { inputTokens: 0, outputTokens: 0 } };
+        return { provider: "openai", model: "gpt-5.6-terra", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] }, usage: { inputTokens: 0, outputTokens: 0 } };
       }
     };
 
@@ -76,7 +76,7 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
       extract: async () => {
         attempts++;
         if (attempts < 2) throw new ProviderAvailabilityError("503", 503);
-        return { provider: "gemini", model: "gemini-3.7-flash", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [] }, usage: { inputTokens: 1, outputTokens: 1 } };
+        return { provider: "gemini", model: "gemini-3.7-flash", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] }, usage: { inputTokens: 1, outputTokens: 1 } };
       }
     };
 
@@ -122,7 +122,7 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
     const router: ExtractionRouter = {
       extract: async () => {
         if (shouldFail) throw new ProviderAvailabilityError("down for now", 503);
-        return { provider: "openai", model: "gpt-5.6-terra", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [] }, usage: { inputTokens: 1, outputTokens: 1 } };
+        return { provider: "openai", model: "gpt-5.6-terra", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] }, usage: { inputTokens: 1, outputTokens: 1 } };
       }
     };
 

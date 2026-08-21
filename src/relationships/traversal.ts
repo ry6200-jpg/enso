@@ -20,9 +20,10 @@ import { siblingDegree } from "./structuralAtoms.js";
  */
 
 function isActive(atom: StructuralAtomRow, asOfDate?: string): boolean {
-  if (atom.interval_end === null) return true;
-  if (!asOfDate) return false;
-  return atom.interval_end > asOfDate;
+  if (!asOfDate) return atom.interval_end === null;
+  if (atom.interval_start !== null && atom.interval_start > asOfDate) return false; // hadn't started yet
+  if (atom.interval_end !== null && atom.interval_end <= asOfDate) return false; // already ended by then
+  return true;
 }
 
 export function getParents(projections: ProjectionsDb, userId: string, entityId: string): string[] {

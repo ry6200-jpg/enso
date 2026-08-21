@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import { classifyProviderError } from "./errors.js";
-import { EXTRACTION_SYSTEM_PROMPT, TAXONOMY_JSON_SCHEMA } from "./taxonomySchema.js";
+import { buildExtractionSystemPrompt, TAXONOMY_JSON_SCHEMA } from "./taxonomySchema.js";
 import type { ExtractionRequest, ExtractionTaxonomy, ProviderAdapter, ProviderCallResult } from "./types.js";
 
 export const OPENAI_EXTRACTION_MODEL = "gpt-5.6-terra";
@@ -22,7 +22,7 @@ export function createOpenAiAdapter(apiKey: string): ProviderAdapter {
       response = await client.responses.create({
         model: OPENAI_EXTRACTION_MODEL,
         reasoning: { effort: "low" },
-        instructions: EXTRACTION_SYSTEM_PROMPT,
+        instructions: buildExtractionSystemPrompt(request.referenceDate ?? new Date().toISOString().slice(0, 10)),
         input: request.text,
         text: {
           format: {

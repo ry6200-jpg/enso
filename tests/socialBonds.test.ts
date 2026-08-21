@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { ProjectionsDb } from "../src/projections/db.js";
-import { closeBond, findBondsBetween, isBondOpen, openBond } from "../src/relationships/socialBonds.js";
+import { closeBond, findBondsBetween, findBondsBetweenAsOf, isBondOpen, openBond } from "../src/relationships/socialBonds.js";
 import { freshTestDbPath } from "../src/test/dbPath.js";
 import { PRIMARY_USER_ID } from "../src/test/seed.js";
 
@@ -112,5 +112,19 @@ describe("social bonds (EN-013 Class B)", () => {
   it("romantic never graduates to structural — closing/opening a romantic bond never touches structural_atoms", () => {
     openBond(projections, PRIMARY_USER_ID, { type: "romantic", fromEntityId: "me", toEntityId: "sam", openedBasis: "stated", sourceEventIds: ["e1"] });
     expect(projections.listStructuralAtoms(PRIMARY_USER_ID)).toHaveLength(0);
+  });
+
+  it("findBondsBetweenAsOf (EN-017 'relationship as of date X'): excludes a bond not yet opened as of that date", () => {
+    const bond = openBond(projections, PRIMARY_USER_ID, {
+      type: "friend",
+      fromEntityId: "me",
+      toEntityId: "diego",
+      openedBasis: "stated",
+      intervalStart: "2024-01-01",
+      sourceEventIds: ["e1"]
+    });
+
+    expect(findBondsBetweenAsOf(projections, PRIMARY_USER_ID, "me", "diego", "2023-01-01")).toEqual([]); // before it started
+    expect(findBondsBetweenAsOf(projections, PRIMARY_USER_ID, "me", "diego", "2025-01-01").map((b) => b.id)).toEqual([bond.id]);
   });
 });

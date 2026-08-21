@@ -40,6 +40,40 @@ export interface SocialBondRow {
 }
 
 /**
+ * Third-party attribute persistence (EN-015). Never overwritten in place —
+ * a new assertion is a new row, so history is versioned for free
+ * (EN-017's philosophy extended to attributes generally); "current value"
+ * queries pick the latest row for that (entity, attribute) pair.
+ */
+export interface EntityAttributeRow {
+  id: string;
+  user_id: string;
+  entity_id: string;
+  attribute: "birthdate" | "location" | "occupation";
+  value: string;
+  source_event_ids: string; // JSON array of event ULIDs
+  created_at: string;
+}
+
+/**
+ * Perception logs (EN-016): dual time on every extracted fact this table
+ * covers. told_at is when the user said it (the source message's own
+ * recorded_at); event_at is when it happened, if determinable, so "she
+ * moved last year" said in 2026 doesn't get misread as 2028 two years on.
+ */
+export interface PerceptionLogRow {
+  id: string;
+  user_id: string;
+  fact_type: "entity_attribute";
+  fact_ref: string; // id of the row in entity_attributes this log entry is about
+  told_at: string;
+  event_at: string | null;
+  source_event_ids: string; // JSON array of event ULIDs
+  raw_value: string;
+  created_at: string;
+}
+
+/**
  * Storage for derived, disposable projection data (EN-052). This is a
  * physically separate SQLite file from the event log, deliberately — the
  * authority boundary between "system of record" and "rebuildable cache"
@@ -118,6 +152,37 @@ export class ProjectionsDb {
       CREATE INDEX IF NOT EXISTS idx_bonds_user_id ON social_bonds(user_id);
       CREATE INDEX IF NOT EXISTS idx_bonds_from ON social_bonds(from_entity_id);
       CREATE INDEX IF NOT EXISTS idx_bonds_to ON social_bonds(to_entity_id);
+
+      -- Third-party attribute persistence (EN-015). Never updated in
+      -- place — a new assertion is a new row, so history is versioned for
+      -- free; "current" queries pick the latest row per (entity, attribute).
+      CREATE TABLE IF NOT EXISTS entity_attributes (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        attribute TEXT NOT NULL CHECK (attribute IN ('birthdate', 'location', 'occupation')),
+        value TEXT NOT NULL,
+        source_event_ids TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_attributes_user_id ON entity_attributes(user_id);
+      CREATE INDEX IF NOT EXISTS idx_attributes_entity_id ON entity_attributes(entity_id);
+
+      -- Perception logs (EN-016): dual time (told_at, event_at) on every
+      -- fact this table covers.
+      CREATE TABLE IF NOT EXISTS perception_logs (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        fact_type TEXT NOT NULL CHECK (fact_type IN ('entity_attribute')),
+        fact_ref TEXT NOT NULL,
+        told_at TEXT NOT NULL,
+        event_at TEXT,
+        source_event_ids TEXT NOT NULL,
+        raw_value TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_perception_user_id ON perception_logs(user_id);
+      CREATE INDEX IF NOT EXISTS idx_perception_fact_ref ON perception_logs(fact_ref);
     `);
   }
 
@@ -127,7 +192,9 @@ export class ProjectionsDb {
    * must survive rebuilds or EN-056's cost savings are pointless.
    */
   clearProjections(): void {
-    this.db.exec(`DELETE FROM entities; DELETE FROM structural_atoms; DELETE FROM social_bonds;`);
+    this.db.exec(
+      `DELETE FROM entities; DELETE FROM structural_atoms; DELETE FROM social_bonds; DELETE FROM entity_attributes; DELETE FROM perception_logs;`
+    );
   }
 
   insertEntity(row: EntityRow): void {
@@ -200,6 +267,41 @@ export class ProjectionsDb {
 
   getSocialBondById(id: string): SocialBondRow | undefined {
     return this.db.prepare(`SELECT * FROM social_bonds WHERE id = ?`).get(id) as SocialBondRow | undefined;
+  }
+
+  insertEntityAttribute(row: EntityAttributeRow): void {
+    this.db
+      .prepare(
+        `INSERT INTO entity_attributes (id, user_id, entity_id, attribute, value, source_event_ids, created_at)
+         VALUES (@id, @user_id, @entity_id, @attribute, @value, @source_event_ids, @created_at)`
+      )
+      .run(row);
+  }
+
+  /** All versions, oldest first (created_at ascending — ULID ids sort the same way). */
+  listEntityAttributeHistory(userId: string, entityId: string, attribute: EntityAttributeRow["attribute"]): EntityAttributeRow[] {
+    return this.db
+      .prepare(`SELECT * FROM entity_attributes WHERE user_id = ? AND entity_id = ? AND attribute = ? ORDER BY id ASC`)
+      .all(userId, entityId, attribute) as EntityAttributeRow[];
+  }
+
+  listEntityAttributes(userId: string, entityId: string): EntityAttributeRow[] {
+    return this.db
+      .prepare(`SELECT * FROM entity_attributes WHERE user_id = ? AND entity_id = ? ORDER BY id ASC`)
+      .all(userId, entityId) as EntityAttributeRow[];
+  }
+
+  insertPerceptionLog(row: PerceptionLogRow): void {
+    this.db
+      .prepare(
+        `INSERT INTO perception_logs (id, user_id, fact_type, fact_ref, told_at, event_at, source_event_ids, raw_value, created_at)
+         VALUES (@id, @user_id, @fact_type, @fact_ref, @told_at, @event_at, @source_event_ids, @raw_value, @created_at)`
+      )
+      .run(row);
+  }
+
+  getPerceptionLogForFact(factRef: string): PerceptionLogRow | undefined {
+    return this.db.prepare(`SELECT * FROM perception_logs WHERE fact_ref = ?`).get(factRef) as PerceptionLogRow | undefined;
   }
 
   close(): void {

@@ -110,4 +110,14 @@ describe("traversal (EN-014): derived relations are computed, never stored", () 
     const inLaws = getInLaws(projections, PRIMARY_USER_ID, "me");
     expect(inLaws).toEqual([]);
   });
+
+  it("getSpouses(asOfDate) correctly excludes a marriage that hadn't started yet as of that date (EN-017)", () => {
+    // Regression check: an earlier version of isActive() only checked
+    // interval_end, so a marriage with interval_end === null (still
+    // ongoing) was reported as active for ANY asOfDate, including dates
+    // before the marriage started.
+    assertSpouseOf(projections, PRIMARY_USER_ID, "me", "spouse", ["e1"], "2020-06-01");
+    expect(getSpouses(projections, PRIMARY_USER_ID, "me", "2015-01-01")).toEqual([]); // before the wedding
+    expect(getSpouses(projections, PRIMARY_USER_ID, "me", "2021-01-01")).toEqual(["spouse"]); // after
+  });
 });
