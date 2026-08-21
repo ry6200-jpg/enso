@@ -109,6 +109,15 @@ export class RetrievalDb {
     return this.db.prepare(`SELECT * FROM content_chunks WHERE source_event_id = ? ORDER BY chunk_index ASC`).all(sourceEventId) as ContentChunkRow[];
   }
 
+  /** Reads back the embedding vector for a chunk — used by strict-exact rebuild verification, which checks embeddings are byte-identical across independent rebuilds (EN-057 v1.5). */
+  getEmbeddingForChunk(chunkId: string): Float32Array | undefined {
+    const chunk = this.db.prepare(`SELECT vec_rowid FROM content_chunks WHERE id = ?`).get(chunkId) as { vec_rowid: number } | undefined;
+    if (!chunk) return undefined;
+    const row = this.db.prepare(`SELECT embedding FROM content_vec WHERE rowid = ?`).get(chunk.vec_rowid) as { embedding: Buffer } | undefined;
+    if (!row) return undefined;
+    return new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4);
+  }
+
   close(): void {
     this.db.close();
   }
