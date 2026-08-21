@@ -70,7 +70,7 @@ describe("forced provider failure -> fallback fires (EN-083, live)", () => {
 
     expect(result.provider).toBe("gemini");
     expect(result.taxonomy.entities.some((e) => e.name === "Diego")).toBe(true);
-  }, 20_000);
+  }, 40_000);
 });
 
 describe("extraction cache prevents re-extraction on identical content (EN-056, live)", () => {
