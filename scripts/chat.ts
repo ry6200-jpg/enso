@@ -28,7 +28,8 @@ import { CostTracker } from "../src/providers/costTracker.js";
 import { createDefaultChatRouter } from "../src/providers/chatRouter.js";
 import { createDefaultRouter, type ExtractionRouter } from "../src/providers/router.js";
 import { extractMessageWithResilience } from "../src/extraction/resilientExtraction.js";
-import { sendMessage, type SendMessageDeps } from "../src/conversation/chatPipeline.js";
+import { sendMessage, type ReplySentPayload, type SendMessageDeps } from "../src/conversation/chatPipeline.js";
+import { createDefaultIntentRouter } from "../src/conversation/router/intentRouter.js";
 import type { RecentTurnForPrompt } from "../src/persona/systemPrompt.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -118,11 +119,12 @@ async function main(): Promise<void> {
   const costTracker = new CostTracker();
   const chatRouter = createDefaultChatRouter({ openai: openaiKey, gemini: geminiKey }, costTracker);
   const extractionRouter: ExtractionRouter = createDefaultRouter({ openai: openaiKey, gemini: geminiKey }, costTracker);
+  const intentRouter = createDefaultIntentRouter({ openai: openaiKey, gemini: geminiKey }, costTracker);
 
   let recentTurns: RecentTurnForPrompt[] = [];
   let debugOn = false;
 
-  console.log("Enso — dev chat (Phase 5 Part 3)");
+  console.log("Enso — dev chat (Phase 5 Part 3 / Phase 6 gates)");
   console.log(`Storage: ${DEV_DATA_DIR} (${wasFresh ? "fresh" : "existing"})`);
   console.log("Commands: /new (reset conversation window, same stores) · /wipe (destroy dev-data) · /debug (toggle context display)");
   console.log("Ctrl+D to exit.\n");
@@ -197,7 +199,7 @@ async function main(): Promise<void> {
       continue;
     }
 
-    const deps: SendMessageDeps = { eventLog: stores.eventLog, retrievalDb: stores.retrievalDb, projectionsDb: stores.projectionsDb, embedder, chatRouter };
+    const deps: SendMessageDeps = { eventLog: stores.eventLog, retrievalDb: stores.retrievalDb, projectionsDb: stores.projectionsDb, embedder, chatRouter, intentRouter };
 
     let result;
     try {
@@ -214,9 +216,16 @@ async function main(): Promise<void> {
     if (debugOn) {
       const r = result.debug.retrieval;
       const w = result.debug.recentWindow;
+      const payload = result.replyEvent.payload as ReplySentPayload;
       console.log("--- debug: context injected this turn ---");
       console.log(`retrieval: mode=${r.mode} query=${JSON.stringify(r.query)} candidates=${r.candidateCount} injected=${r.injectedChunkIds.length} truncated=${r.truncated}`);
       console.log(`recent window: available=${w.availableTurns} injected=${w.injectedTurns} truncated=${w.truncated}`);
+      console.log(
+        `router: used=${payload.router.used} provider=${payload.router.provider ?? "-"} certified=${payload.router.certified}${payload.router.failureReason ? ` failureReason=${JSON.stringify(payload.router.failureReason)}` : ""}`
+      );
+      console.log(
+        `gates: circleBackFired=${payload.gateActions.circleBackFired ? JSON.stringify(payload.gateActions.circleBackFired) : "null"} attestationConfirmedEventId=${payload.gateActions.attestationConfirmedEventId ?? "null"}`
+      );
       console.log(extractBlock(result.debug.systemPrompt, "RETRIEVED MEMORY"));
       console.log(extractBlock(result.debug.systemPrompt, "RECENT CONVERSATION"));
       console.log("--- end debug ---\n");

@@ -81,7 +81,7 @@ ${recentWindowBlock}
 People already on record (for entity-mode retrieval ONLY — entityId must come from here or be null):
 ${knownEntitiesBlock}
 
-2. CIRCLE-BACK — should the assistant gently ask who one of the people below is, in this reply? Only ever fire on an id from this exact list (never invent one, never fire on someone not listed), and only when the CURRENT message is a natural, non-abrupt moment for it (not itself a direct question needing a direct answer, not an emotionally loaded moment that circle-back would interrupt). fire=false and entityId=null otherwise — that's the correct default on the large majority of turns.
+2. CIRCLE-BACK — should this reply also gently ask who one of the people below is? Only ever fire on an id from the exact candidate list (never invent one, never fire on someone not listed). DEFAULT TO FIRING whenever the list below is non-empty and the current message is an ordinary, low-stakes moment — a routine update, a plan, small talk, anything without real emotional weight: that is exactly the right kind of turn to slip in a brief, natural "by the way, who's [name]?", and it is the common, EXPECTED outcome when a candidate is eligible, not a rare exception to reach for cautiously. Only decline (fire=false) when firing would genuinely be bad timing: the CURRENT message is itself a direct question that needs a real answer, or the user is sharing something emotionally weighty that a circle-back would interrupt or trivialize. If the candidate list below is empty, fire is always false — there's nothing to ask about.
 
 Circle-back-eligible candidates this turn (already filtered by cooldown/attempt limits — you only ever pick ONE of these, or none):
 ${circleBackBlock}
