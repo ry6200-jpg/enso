@@ -25,6 +25,14 @@ export interface MessageExtractionCompletedPayload {
   socialBonds: SocialBondMention[];
   attributes: AttributeMention[];
   classifierDecision: ClassifierDecision;
+  /**
+   * Round-trip survival (CLAUDE.md): the known-people list injected into
+   * this extraction call (EN-012's known-people context) directly shaped
+   * its output ("mom" resolving to "Elena" or not) — recorded here so this
+   * observation is self-describing for a future reprocess diff, instead of
+   * depending on reconstructing what the projection looked like at call time.
+   */
+  knownPeopleNames: string[];
 }
 
 export interface ExtractionFailedPayload {
@@ -80,7 +88,8 @@ export async function extractMessageWithResilience(
       structuralAtoms: [],
       socialBonds: [],
       attributes: [],
-      classifierDecision
+      classifierDecision,
+      knownPeopleNames
     };
     return eventLog.append({ type: "extraction_completed", actor: "system", payload, userId: messageEvent.userId });
   }
@@ -100,7 +109,8 @@ export async function extractMessageWithResilience(
       structuralAtoms: result.taxonomy.structuralAtoms,
       socialBonds: result.taxonomy.socialBonds,
       attributes: result.taxonomy.attributes,
-      classifierDecision
+      classifierDecision,
+      knownPeopleNames
     };
     return eventLog.append({ type: "extraction_completed", actor: "system", payload, userId: messageEvent.userId });
   } catch (err) {

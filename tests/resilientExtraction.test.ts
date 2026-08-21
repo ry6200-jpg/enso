@@ -104,6 +104,52 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
     expect(received).toEqual(["Elena", "Marcus"]);
   });
 
+  it("round-trip survival (CLAUDE.md): the knownPeopleNames that shaped this extraction are recorded in its own payload", async () => {
+    const message = captureTestMessage("My mom called.");
+    const router: ExtractionRouter = {
+      extract: async () => ({
+        provider: "openai",
+        model: "gpt-5.6-terra",
+        taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
+        usage: { inputTokens: 1, outputTokens: 1 }
+      })
+    };
+
+    const result = await extractMessageWithResilience(eventLog, router, message, undefined, ["Elena", "Marcus"]);
+    const payload = result.payload as MessageExtractionCompletedPayload;
+    expect(payload.knownPeopleNames).toEqual(["Elena", "Marcus"]);
+  });
+
+  it("round-trip survival: recorded as an empty array, not omitted, when no known people were injected", async () => {
+    const message = captureTestMessage("Someone new said hi.");
+    const router: ExtractionRouter = {
+      extract: async () => ({
+        provider: "openai",
+        model: "gpt-5.6-terra",
+        taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
+        usage: { inputTokens: 1, outputTokens: 1 }
+      })
+    };
+
+    const result = await extractMessageWithResilience(eventLog, router, message);
+    const payload = result.payload as MessageExtractionCompletedPayload;
+    expect(payload.knownPeopleNames).toEqual([]);
+  });
+
+  it("round-trip survival holds even on the non-personal (LLM-skipped) path", async () => {
+    const referenceText = `Table of Contents\n1.1 Introduction\n1.2 Background\n- a\n- b\n- c\n${"filler word ".repeat(80)}`;
+    const message = captureTestMessage(referenceText);
+    const router: ExtractionRouter = {
+      extract: async () => {
+        throw new Error("should never be called for non-personal content");
+      }
+    };
+
+    const result = await extractMessageWithResilience(eventLog, router, message, undefined, ["Elena"]);
+    const payload = result.payload as MessageExtractionCompletedPayload;
+    expect(payload.knownPeopleNames).toEqual(["Elena"]);
+  });
+
   it("skips the LLM call entirely for non-personal content — no provider/model recorded", async () => {
     const referenceText = `Table of Contents\n1.1 Introduction\n1.2 Background\n- a\n- b\n- c\n${"filler word ".repeat(80)}`;
     const message = captureTestMessage(referenceText);

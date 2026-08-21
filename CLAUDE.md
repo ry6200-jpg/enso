@@ -19,6 +19,7 @@ Do not re-litigate settled decisions. Section 12 questions marked RESOLVED are c
 - The classifier governs entity extraction only — never whether content is stored (EN-060).
 - Silence never closes a relationship interval (EN-013).
 - File bytes never go into SQLite as blobs (EN-051).
+- Round-trip survival: any input that influences a supersedable observation's output (e.g. `knownPeopleNames` injected into extraction) must be recorded in that observation's own payload — the record must be self-describing for future reprocess diffs, never dependent on reconstructing ambient state that only existed at call time.
 
 ## Testing policy
 
