@@ -7,3 +7,5 @@ dev-data/
 .env
 .env.*
 .cache/
+.next/
+next-env.d.ts

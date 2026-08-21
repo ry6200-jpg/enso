@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+:root {
+  --enso-red: #b23a2e;
+  --enso-ink: #1c1917;
+  --enso-paper: #faf7f2;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--enso-paper);
+  color: var(--enso-ink);
+}

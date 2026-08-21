@@ -20,16 +20,14 @@ import { fileURLToPath } from "node:url";
 import { newId } from "../src/ids.js";
 import { EventLog } from "../src/events/eventLog.js";
 import { ProjectionsDb } from "../src/projections/db.js";
-import { rebuildProjections } from "../src/projections/rebuild.js";
 import { RetrievalDb } from "../src/retrieval/retrievalDb.js";
-import { rebuildRetrievalIndex } from "../src/retrieval/rebuildRetrievalIndex.js";
 import { configureLocalOnlyEmbeddings, createEmbedder, type Embedder } from "../src/embeddings/embedder.js";
 import { CostTracker } from "../src/providers/costTracker.js";
 import { createDefaultChatRouter } from "../src/providers/chatRouter.js";
 import { createDefaultRouter, type ExtractionRouter } from "../src/providers/router.js";
-import { extractMessageWithResilience } from "../src/extraction/resilientExtraction.js";
 import { sendMessage, type ReplySentPayload, type SendMessageDeps } from "../src/conversation/chatPipeline.js";
 import { createDefaultIntentRouter } from "../src/conversation/router/intentRouter.js";
+import { refreshMemoryAfterTurn } from "../src/conversation/turnMemoryRefresh.js";
 import type { RecentTurnForPrompt } from "../src/persona/systemPrompt.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -131,16 +129,6 @@ async function main(): Promise<void> {
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-  async function refreshMemoryAfterTurn(deps: SendMessageDeps, messageEventId: string): Promise<void> {
-    const messageEvent = deps.eventLog.getById(messageEventId)!;
-    const knownPeopleNames = deps.projectionsDb.listEntities(userId).map((e) => e.name);
-    await extractMessageWithResilience(deps.eventLog, extractionRouter, messageEvent, undefined, knownPeopleNames);
-
-    const allEvents = deps.eventLog.listForUser(userId);
-    rebuildProjections(allEvents, deps.projectionsDb, userId);
-    await rebuildRetrievalIndex(allEvents, deps.retrievalDb, userId, embedder);
-  }
-
   async function performWipe(): Promise<void> {
     closeStores(stores);
     fs.rmSync(DEV_DATA_DIR, { recursive: true, force: true });
@@ -232,7 +220,7 @@ async function main(): Promise<void> {
     }
 
     try {
-      await refreshMemoryAfterTurn(deps, result.messageEvent.id);
+      await refreshMemoryAfterTurn({ eventLog: deps.eventLog, projectionsDb: deps.projectionsDb, retrievalDb: deps.retrievalDb, embedder, extractionRouter }, userId, result.messageEvent.id);
     } catch (err) {
       console.log(`(memory update after this turn failed — the message and reply are still saved: ${err instanceof Error ? err.message : String(err)})\n`);
     }
