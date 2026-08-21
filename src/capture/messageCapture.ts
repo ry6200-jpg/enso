@@ -13,6 +13,8 @@ export interface CaptureMessageInput {
   text?: string;
   /** How many files were attached to this same turn, if any. */
   attachmentCount?: number;
+  /** When this actually happened, if different from now (EN-016 dual time) — e.g. backdating an imported note. Defaults to unset (occurred_at null; told-time is recorded_at). */
+  occurredAt?: string;
 }
 
 export interface MessageSentPayload {
@@ -50,6 +52,7 @@ export function captureMessage(eventLog: EventLog, input: CaptureMessageInput): 
     type: "message_sent",
     actor: "user",
     payload,
+    occurredAt: input.occurredAt,
     userId: input.userId
   });
 }

@@ -66,4 +66,12 @@ describe("captureMessage (EN-010/064)", () => {
     const event = captureMessage(eventLog, { userId: PRIMARY_USER_ID, text: "   ", attachmentCount: 1 });
     expect((event.payload as MessageSentPayload).text).toBe(ATTACHMENT_ONLY_PLACEHOLDER);
   });
+
+  it("accepts an explicit occurredAt for backdating (EN-016 dual time), defaulting to null when omitted", () => {
+    const backdated = captureMessage(eventLog, { userId: PRIMARY_USER_ID, text: "An old note.", occurredAt: "2020-01-01T00:00:00.000Z" });
+    expect(backdated.occurredAt).toBe("2020-01-01T00:00:00.000Z");
+
+    const ordinary = captureMessage(eventLog, { userId: PRIMARY_USER_ID, text: "A normal message." });
+    expect(ordinary.occurredAt).toBeNull();
+  });
 });
