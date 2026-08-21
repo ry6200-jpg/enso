@@ -138,7 +138,7 @@ describe("Validation bank — router flags (EN-075)", () => {
       message: "Just got back from grabbing coffee, nothing major today.",
       recentTurns: [],
       knownEntities: [],
-      circleBackCandidates: [{ entityId: "c-marcus", name: "Marcus" }],
+      circleBackCandidates: [{ entityId: "c-marcus", name: "Marcus", attemptNumber: 1, mentionAgeLabel: "earlier today" }],
       recentAttributeClaims: []
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
@@ -155,7 +155,7 @@ describe("Validation bank — router flags (EN-075)", () => {
       message: "I'm honestly feeling pretty overwhelmed right now and just need to vent for a second.",
       recentTurns: [],
       knownEntities: [],
-      circleBackCandidates: [{ entityId: "c-marcus", name: "Marcus" }],
+      circleBackCandidates: [{ entityId: "c-marcus", name: "Marcus", attemptNumber: 1, mentionAgeLabel: "earlier today" }],
       recentAttributeClaims: []
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {

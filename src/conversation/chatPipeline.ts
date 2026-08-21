@@ -167,12 +167,9 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
 
   const circleBackFireEntity =
     routerResult?.decision.circleBack.fire && routerResult.decision.circleBack.entityId
-      ? (() => {
-          const candidate = circleBackCandidates.find((c) => c.entityId === routerResult!.decision.circleBack.entityId);
-          return candidate ? { entityId: candidate.entityId, name: candidate.name } : null;
-        })()
+      ? (circleBackCandidates.find((c) => c.entityId === routerResult!.decision.circleBack.entityId) ?? null)
       : null;
-  const gateDirective = circleBackFireEntity ? buildCircleBackDirective(circleBackFireEntity.name) : null;
+  const gateDirective = circleBackFireEntity ? buildCircleBackDirective(circleBackFireEntity.name, circleBackFireEntity.attemptNumber, circleBackFireEntity.mentionAgeLabel) : null;
 
   const assembled = assembleContext(candidateChunks, { mode: invocation.mode, query: invocation.query }, input.recentTurns, input.budgets ?? DEFAULT_CONTEXT_BUDGETS, gateDirective);
 

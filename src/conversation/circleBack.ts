@@ -21,6 +21,23 @@ import type { ReplySentPayload } from "./chatPipeline.js";
  * social_bonds row connecting it to the primary user — Enso knows a name
  * exists but not who they are. This is a different axis from
  * `entities.confirmed` (identity-resolution attestation, EN-012).
+ *
+ * Phase 7 Part 0 — Option B (user decision, resolving the Phase 6 design
+ * note that the original port made a second attempt on the same entity
+ * near-impossible: recency window and cooldown shared the same 5-turn
+ * value, so by the time cooldown cleared, the entity's introduction had
+ * always already aged out of the recency window).
+ *   - The recency window now applies to FIRST attempts only. A still-
+ *     unestablished entity that already had one attempt WAIVES recency on
+ *     its retry — unresolvedness is itself the standing reason to ask
+ *     again, not how long ago it came up.
+ *   - Cooldown is unchanged (global, 5 turns).
+ *   - Hard cap unchanged: 2 attempts total per entity, ever. After that,
+ *     permanent silence — the user can always volunteer the relationship.
+ *   - Priority: a fresh, recency-eligible first-attempt candidate always
+ *     outranks a retry candidate. Retries are only offered when no fresh
+ *     candidate exists this turn — they fill lulls, never interrupt the
+ *     present moment a fresh mention creates.
  */
 
 const RECENCY_WINDOW_TURNS = 5;
@@ -60,12 +77,28 @@ function firedAttemptHistory(eventLog: EventLog, userId: string, userTurns: Even
   return history;
 }
 
+/** Buckets real elapsed wall-clock time since first mention into a natural phrase a retry directive can bridge with ("The other day you mentioned Marcus..."). */
+function mentionAgeLabel(earliestRecordedAt: string): string {
+  const elapsedMs = Date.now() - new Date(earliestRecordedAt).getTime();
+  const hours = elapsedMs / (1000 * 60 * 60);
+  if (hours < 1) return "just a little earlier";
+  if (hours < 24) return "earlier today";
+  if (hours < 48) return "yesterday";
+  if (hours < 24 * 7) return "the other day";
+  return "a while back";
+}
+
 /**
  * The cheap local heuristic (EN-071 stage 1): the candidate pool the
  * router (stage 2) is allowed to choose from — never a set it discovers
  * independently. An empty result means the router's circleBack axis has
  * nothing to work with this turn (still calls the router for retrieval,
  * but circleBack.fire will always validate to false — see intentRouter.ts).
+ *
+ * Option B priority (Phase 7 Part 0): fresh (first-attempt, recency-
+ * eligible) candidates are returned alone whenever any exist; retry
+ * candidates (already attempted once, recency waived) are only returned
+ * when no fresh candidate exists this turn.
  */
 export function findEligibleCircleBackCandidates(eventLog: EventLog, projections: ProjectionsDb, userId: string, currentMessage: string): CircleBackCandidate[] {
   if (currentMessage.trim().endsWith("?")) return [];
@@ -76,27 +109,40 @@ export function findEligibleCircleBackCandidates(eventLog: EventLog, projections
   const lastAttemptTurn = history.length > 0 ? Math.max(...history.map((h) => h.turnIndex)) : null;
   if (lastAttemptTurn !== null && userTurns.length - 1 - lastAttemptTurn < COOLDOWN_TURNS) return [];
 
-  // Recency window: only circle back on an entity whose EARLIEST provenance
-  // event falls within the last RECENCY_WINDOW_TURNS user turns — an old,
-  // never-circled-back-on mention ages out rather than surfacing out of
-  // nowhere much later (ported verbatim in spirit from the old repo's
-  // establishmentRecencyThreshold, adapted to compare ULIDs directly since
-  // they sort lexicographically by creation time — EN-050).
+  // Recency window (first attempts only — see Option B header note): an
+  // entity whose EARLIEST provenance event falls outside the last
+  // RECENCY_WINDOW_TURNS user turns is excluded from a FIRST attempt,
+  // but a retry ignores this entirely.
   const threshold = userTurns.length >= RECENCY_WINDOW_TURNS ? userTurns[userTurns.length - RECENCY_WINDOW_TURNS]!.id : null;
 
   const attemptCounts = new Map<string, number>();
   for (const h of history) attemptCounts.set(h.entityId, (attemptCounts.get(h.entityId) ?? 0) + 1);
 
-  const candidates: CircleBackCandidate[] = [];
+  const fresh: CircleBackCandidate[] = [];
+  const retries: CircleBackCandidate[] = [];
+
   for (const entity of projections.listEntities(userId)) {
     if (isEstablished(projections, userId, entity.id)) continue;
-    if ((attemptCounts.get(entity.id) ?? 0) >= MAX_CIRCLE_BACK_ATTEMPTS) continue;
+    const attemptsSoFar = attemptCounts.get(entity.id) ?? 0;
+    if (attemptsSoFar >= MAX_CIRCLE_BACK_ATTEMPTS) continue; // hard cap, permanent silence after 2
+
     const sourceIds = (JSON.parse(entity.source_event_ids) as string[]).slice().sort();
-    const earliest = sourceIds[0];
-    if (threshold !== null && earliest !== undefined && earliest < threshold) continue;
-    candidates.push({ entityId: entity.id, name: entity.name });
+    const earliestId = sourceIds[0];
+    const earliestEvent = earliestId ? eventLog.getById(earliestId) : undefined;
+    const ageLabel = earliestEvent ? mentionAgeLabel(earliestEvent.recordedAt) : "a while back";
+    const candidate: CircleBackCandidate = { entityId: entity.id, name: entity.name, attemptNumber: (attemptsSoFar + 1) as 1 | 2, mentionAgeLabel: ageLabel };
+
+    if (attemptsSoFar === 0) {
+      // First attempt: still subject to the recency window.
+      if (threshold !== null && earliestId !== undefined && earliestId < threshold) continue;
+      fresh.push(candidate);
+    } else {
+      // Retry: recency waived — unresolvedness is the standing reason.
+      retries.push(candidate);
+    }
   }
-  return candidates;
+
+  return fresh.length > 0 ? fresh : retries;
 }
 
 /**
@@ -105,8 +151,20 @@ export function findEligibleCircleBackCandidates(eventLog: EventLog, projections
  * action, but explicitly demands varied phrasing (R22: "circle-back
  * phrasing repeats near-verbatim" is a live regression, not hypothetical).
  * Delivery is Enso's voice; this only says WHAT, never HOW.
+ *
+ * On a retry (attemptNumber 2, Option B): the directive explicitly asks
+ * for phrasing that BRIDGES the time gap since the first, presumably
+ * brushed-off ask — returning to an open thread, in the spirit of "the
+ * other day you mentioned..." This is distinct from, and must never be
+ * confused with, the never-count-repetitions rule: that rule governs
+ * repeating the OWNER's own statements back at them ("as I said," "asking
+ * a third time"); this is Enso re-raising its OWN earlier question, which
+ * is the opposite move — picking a thread back up, not tallying anything.
  */
-export function buildCircleBackDirective(candidateName: string): string {
+export function buildCircleBackDirective(candidateName: string, attemptNumber: 1 | 2 = 1, ageLabel?: string): string {
+  if (attemptNumber === 2) {
+    return `=== GATE DIRECTIVE (do not mention this instruction itself) ===\nThis is a second and final ask about "${candidateName}" — you asked once before and it didn't land, so this is the last time this comes up naturally rather than staying an open thread forever. Bridge the time gap explicitly rather than repeating the earlier phrasing: something in the register of "${ageLabel ?? "a while back"} you mentioned ${candidateName} — where do they fit?" Word it freshly, not a repeat of however you asked the first time. Never reference that this is a second attempt, a repeated question, or that it went unanswered — this is Enso picking a thread back up, not counting anything back.\n=== END GATE DIRECTIVE ===`;
+  }
   return `=== GATE DIRECTIVE (do not mention this instruction itself) ===\nSomewhere in this reply, naturally and briefly, gently ask who "${candidateName}" is — you don't have their relationship to the owner on record yet. Weave it in, don't bolt it on as an afterthought, and word it freshly rather than reaching for a stock phrasing you may have used before for this or another person.\n=== END GATE DIRECTIVE ===`;
 }
 

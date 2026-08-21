@@ -11,6 +11,10 @@
 export interface CircleBackCandidate {
   entityId: string;
   name: string;
+  /** Which attempt this would be if it fires (1 or 2 — EN-030's hard cap). */
+  attemptNumber: 1 | 2;
+  /** Human-readable bucketed gap since the entity's earliest mention, for retry phrasing to bridge ("The other day you mentioned..."). Present on every candidate for uniformity; only meaningfully used by the persona on a retry (attemptNumber 2). */
+  mentionAgeLabel: string;
 }
 
 /** A specific attribute claim recently surfaced (in the retrieved-memory block or the prior reply) that this turn might be explicitly affirming or correcting (EN-066). */

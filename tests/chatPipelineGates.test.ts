@@ -120,7 +120,7 @@ describe("sendMessage — circle-back directive injection and EN-073 verificatio
     deps.intentRouter = fakeIntentRouter({ decision: decisionWith({ circleBack: { fire: true, entityId: marcusId } }) });
     const followedThrough = await sendMessage(deps, { userId: PRIMARY_USER_ID, text: "another update", recentTurns: [] });
     const followedPayload = followedThrough.replyEvent.payload as ReplySentPayload;
-    expect(followedPayload.gateActions.circleBackFired).toEqual({ entityId: marcusId, name: "Marcus" });
+    expect(followedPayload.gateActions.circleBackFired).toMatchObject({ entityId: marcusId, name: "Marcus" });
 
     // Case 2: fresh store, router fires again, but the reply omits the ask (R7) -> not recorded.
     const eventLog2 = new EventLog(":memory:");

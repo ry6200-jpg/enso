@@ -54,7 +54,9 @@ export function buildRouterSystemPrompt(request: RouterRequest): string {
       : "(none on record yet)";
   const circleBackBlock =
     request.circleBackCandidates.length > 0
-      ? request.circleBackCandidates.map((c) => `- ${c.name} (id: ${c.entityId})`).join("\n")
+      ? request.circleBackCandidates
+          .map((c) => `- ${c.name} (id: ${c.entityId}) — attempt ${c.attemptNumber}${c.attemptNumber === 2 ? `, first asked ${c.mentionAgeLabel} and unanswered; this would be the final attempt` : ""}`)
+          .join("\n")
       : "(no eligible candidates this turn)";
   const claimsBlock =
     request.recentAttributeClaims.length > 0

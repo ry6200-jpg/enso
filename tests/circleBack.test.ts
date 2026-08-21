@@ -123,6 +123,57 @@ describe("findEligibleCircleBackCandidates (EN-030/070-073)", () => {
   });
 });
 
+describe("Option B (Phase 7 Part 0): retries waive recency, hard cap holds, fresh outranks retry", () => {
+  it("the old deadlock case: a second attempt is now reachable after cooldown, even though the entity's introduction has aged out of the recency window", () => {
+    const msg = userTurn("Marcus helped me carry some boxes.");
+    const marcusId = insertEntity("Marcus", [msg.id]);
+    const firstFireTurn = userTurn("turn 2 — first attempt fires here");
+    recordCircleBackFired(firstFireTurn.id, marcusId, "Marcus");
+
+    // Advance exactly enough turns to clear the 5-turn cooldown AND push
+    // well past the 5-turn recency window relative to Marcus's introduction
+    // — under the pre-Option-B design this combination was structurally
+    // unreachable (verified live during Phase 6: 0 firings ever reached a
+    // second attempt with these exact window/cooldown values).
+    for (let i = 0; i < 6; i++) userTurn(`filler turn ${i}`);
+
+    const candidates = findEligibleCircleBackCandidates(eventLog, projections, PRIMARY_USER_ID, "just a regular update");
+
+    expect(candidates).toEqual([{ entityId: marcusId, name: "Marcus", attemptNumber: 2, mentionAgeLabel: expect.any(String) }]);
+  });
+
+  it("hard cap: a third attempt is never offered, even after another full cooldown period", () => {
+    const msg = userTurn("Marcus helped me carry some boxes.");
+    const marcusId = insertEntity("Marcus", [msg.id]);
+    const firstFireTurn = userTurn("first attempt fires here");
+    recordCircleBackFired(firstFireTurn.id, marcusId, "Marcus");
+    for (let i = 0; i < 6; i++) userTurn(`filler ${i}`);
+    const secondFireTurn = userTurn("second attempt fires here");
+    recordCircleBackFired(secondFireTurn.id, marcusId, "Marcus");
+    for (let i = 0; i < 6; i++) userTurn(`more filler ${i}`);
+
+    const candidates = findEligibleCircleBackCandidates(eventLog, projections, PRIMARY_USER_ID, "just a regular update");
+
+    expect(candidates.map((c) => c.name)).not.toContain("Marcus");
+  });
+
+  it("priority: a fresh, recency-eligible candidate is offered alone, even when a cooldown-cleared retry candidate also exists", () => {
+    const marcusMsg = userTurn("Marcus helped me carry some boxes.");
+    const marcusId = insertEntity("Marcus", [marcusMsg.id]);
+    const firstFireTurn = userTurn("first attempt on Marcus fires here");
+    recordCircleBackFired(firstFireTurn.id, marcusId, "Marcus");
+    for (let i = 0; i < 5; i++) userTurn(`filler ${i}`); // clears cooldown, Marcus now retry-eligible
+
+    // A brand new person, freshly mentioned, also becomes a candidate this turn.
+    const priyaMsg = userTurn("Ran into Priya at the store today.");
+    const priyaId = insertEntity("Priya", [priyaMsg.id]);
+
+    const candidates = findEligibleCircleBackCandidates(eventLog, projections, PRIMARY_USER_ID, "just a regular update");
+
+    expect(candidates).toEqual([{ entityId: priyaId, name: "Priya", attemptNumber: 1, mentionAgeLabel: expect.any(String) }]);
+  });
+});
+
 describe("verifyCircleBackExecuted (EN-073 — directive-execution verification)", () => {
   it("returns true when the reply actually mentions the candidate's name", () => {
     expect(verifyCircleBackExecuted("By the way, who is Marcus to you?", "Marcus")).toBe(true);
