@@ -4,7 +4,7 @@
 
 Enso is a private relationship journal with an AI companion, built to help its user remember people, incidents, relationships, and emotion — including as memory fades. This is a ground-up rebuild on an event-sourced foundation.
 
-**The specification is `enso-rebuild-requirements.md` (v1.7) in the repo root. It is canonical.** Every requirement has an EN-number. Reference EN-numbers in all reports, commits, and discussions. If an instruction here conflicts with the spec, the spec wins; if a task conflicts with both, stop and ask. If this pin and the spec's own version line disagree, the spec's version line wins — update this file.
+**The specification is `enso-rebuild-requirements.md` (v1.8) in the repo root. It is canonical.** Every requirement has an EN-number. Reference EN-numbers in all reports, commits, and discussions. If an instruction here conflicts with the spec, the spec wins; if a task conflicts with both, stop and ask. If this pin and the spec's own version line disagree, the spec's version line wins — update this file.
 
 Do not re-litigate settled decisions. Section 12 questions marked RESOLVED are closed. The regression ledger (Section 11) is a list of bugs already paid for once — reintroducing any of them is a failed build.
 
