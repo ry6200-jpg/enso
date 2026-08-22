@@ -1,7 +1,7 @@
 # Enso — Ground-Up Rebuild: Requirements & Architecture
 
-**Version 1.8 — August 2026**
-**Status: Draft for review — v1.8 adds EN-097 (elicitation: Enso actively helps people talk about themselves, three layers added to EN-030's curiosity pool, R33/R34 for the interview-mode and framework-visible failure classes) and EN-098 (first-session introduction rewrite, ordering resolved explicitly against EN-030's self-birthdate gate) — Section 12 gains an open item for the two related, deliberately-deferred taxonomy gaps this surfaced**
+**Version 1.9 — August 2026**
+**Status: Draft for review — v1.9 fixes R35: EN-030's "no open loop" precondition was implemented as a literal "ends in a question mark" check, which silently over-suppressed self-fact/third-party/elicitation eligibility across ordinary conversation (organic curiosity naturally ends most replies in a question) — caught live while verifying EN-097, fixed by checking the last reply's own gateActions for a genuinely tracked gate-directed ask instead**
 
 This document captures everything Enso must do (carried forward from Mirror and from the current Enso build), the recommended architecture for the rebuild, and the provider strategy. Requirements are numbered (EN-xxx) so build prompts and verification reports can reference them precisely.
 
@@ -288,6 +288,7 @@ Each entry below is a bug found in live use whose fix must survive the rebuild. 
 | R32 | Converted a stated feeling about a project (the vibe-coding thread) into a structured, unsolicited design recommendation — named by Enso itself, twice, only after being called out, never caught proactively. The opposite failure must not be reintroduced by the fix: a directly-asked technical question deflected, played dumb, or answered with a coaching question instead of the actual answer — the discriminator is whether the opinion was asked for, never the topic itself | EN-096 |
 | R33 | Interview mode: piling a second question onto someone who just opened up in response to a probe, instead of giving them room to keep going. Named as the failure mode to guard hardest at design time, prevented structurally (justOpenedUpFromElicitation's continuer suppression) before it was caught live — not yet observed in a real transcript, recorded here so removing that suppression during a future refactor is recognized as reintroducing a known risk, not a harmless simplification | EN-097 |
 | R34 | Framework-visible: elicitation's underlying taxonomy (name-generator / life-domain / key-scene layers) reading as an instrument, a checklist, or an intake form instead of genuine curiosity. Also named at design time, guarded against via mandatory fresh non-templated phrasing and by never exposing Layer 2's domain-coverage signal to the model as a spoken concept — not yet observed in a real transcript, recorded for the same reason as R33 | EN-097 |
+| R35 | EN-030's "no open loop" precondition, implemented as a literal "did Enso's last reply end in a question mark" check, silently over-suppressed self-fact/third-party/elicitation eligibility across most of an ordinary conversation — caught live (not at design time): ordinary organic curiosity (INVESTED CURIOSITY, BE ANALYTICAL) makes most replies end in a question as completely normal conversational flow, which isn't "Enso has something outstanding" in any real sense. Fixed by checking the last reply's own gateActions for a genuinely tracked gate-directed ask instead of scanning reply text | EN-030 |
 
 ---
 
