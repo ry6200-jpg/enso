@@ -1,6 +1,7 @@
 import type { EventLog } from "../events/eventLog.js";
 import type { ProjectionsDb } from "./db.js";
 import { primaryEntityId } from "./rebuild.js";
+import { resolveEntityAttribute } from "../perception/attributes.js";
 
 /**
  * Phase 7 Part 2 — the People view's data: what Enso holds about each
@@ -38,16 +39,17 @@ function resolveToldOn(eventLog: EventLog, sourceEventIds: string[]): string | n
 /**
  * The primary user's own stated birthdate, if any — extraction resolves
  * entityName "me" to primaryEntityId(userId) (see rebuild.ts), so this is
- * just the most recent "birthdate" entity_attributes row for that
- * synthetic id. Used by EN-031/032 (zodiac sidebar, Horoscope tab). No
- * separate onboarding flow exists yet (EN-021 is out of this phase's
- * scope) — this simply reads whatever the user has stated in ordinary
- * conversation, and returns null (never a guess) until they have.
+ * the resolved "birthdate" entity_attributes row for that synthetic id
+ * (resolveEntityAttribute, R36/R37: birthdate is immutable — first valid
+ * value wins, never simply the last-asserted row, which is how a stray
+ * misextraction used to silently override a correct birthdate). Used by
+ * EN-031/032 (zodiac sidebar, Horoscope tab). No separate onboarding flow
+ * exists yet (EN-021 is out of this phase's scope) — this simply reads
+ * whatever the user has stated in ordinary conversation, and returns null
+ * (never a guess) until they have.
  */
 export function getPrimaryUserBirthdate(projections: ProjectionsDb, userId: string): string | null {
-  const rows = projections.listEntityAttributes(userId, primaryEntityId(userId)).filter((r) => r.attribute === "birthdate");
-  if (rows.length === 0) return null;
-  return rows[rows.length - 1]!.value;
+  return resolveEntityAttribute(projections, userId, primaryEntityId(userId), "birthdate")?.value ?? null;
 }
 
 /**
@@ -60,9 +62,7 @@ export function getPrimaryUserBirthdate(projections: ProjectionsDb, userId: stri
  * already covered by selfBirthdateGate.ts's own one-shot mechanism.
  */
 export function getPrimaryUserAttribute(projections: ProjectionsDb, userId: string, attribute: "birthdate" | "location" | "occupation"): string | null {
-  const rows = projections.listEntityAttributes(userId, primaryEntityId(userId)).filter((r) => r.attribute === attribute);
-  if (rows.length === 0) return null;
-  return rows[rows.length - 1]!.value;
+  return resolveEntityAttribute(projections, userId, primaryEntityId(userId), attribute)?.value ?? null;
 }
 
 export function getPeopleView(eventLog: EventLog, projections: ProjectionsDb, userId: string): PersonView[] {

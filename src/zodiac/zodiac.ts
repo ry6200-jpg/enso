@@ -56,8 +56,13 @@ export type WesternZodiacSign = (typeof WESTERN_ZODIAC_SIGNS)[number];
  * date was stored correctly and then silently failed to parse here, so
  * the sidebar stayed locked even after a real fix elsewhere. Also accepts
  * the common US M/D/YYYY or MM/DD/YYYY form.
+ *
+ * Exported (R36/R37, attribute-integrity fix): also the ONE format
+ * validator src/perception/attributes.ts's shared resolveAttribute uses to
+ * decide whether a stored birthdate value is well-formed — never a second,
+ * separately-maintained date parser that could drift from this one.
  */
-function parseIsoDate(birthdate: string): { year: number; month: number; day: number } | null {
+export function parseIsoDate(birthdate: string): { year: number; month: number; day: number } | null {
   const trimmed = birthdate.trim();
   const iso = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (iso) return { year: Number(iso[1]), month: Number(iso[2]), day: Number(iso[3]) };
