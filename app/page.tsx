@@ -62,6 +62,25 @@ interface AttachmentStatus {
  * through) — see src/conversation/chatPipeline.ts's attachmentEventId
  * handling for where the content actually gets injected.
  *
+ * Focus-retention fix: the textarea is `disabled={sending}`, and a
+ * disabled form control is auto-blurred by the browser the instant it
+ * becomes disabled (a disabled element cannot hold focus, full stop) —
+ * so focus was already gone the moment a send started, on every single
+ * send, not just in long sessions. The old recovery attempt called
+ * `textareaRef.current?.focus()` synchronously right after
+ * `setSending(false)` in the same tick — but that state update only
+ * SCHEDULES a re-render; the DOM's `disabled` attribute hadn't actually
+ * been removed yet at that exact instant, so `.focus()` silently failed
+ * against a still-disabled node. Fixed by moving the refocus into a
+ * `useEffect` keyed on a dedicated `refocusInputSignal` counter, bumped
+ * only at the two moments that need it (send-complete, file selected) —
+ * effects run AFTER React commits the DOM, so by the time this one fires
+ * the textarea is genuinely re-enabled and `.focus()` actually lands. The
+ * same effect is guarded inline against an active text selection in the
+ * transcript and against focus sitting in a genuinely separate control
+ * (anything outside `formRef`) — event-tied to the explicit bumps above,
+ * never a blanket per-render effect.
+ *
  * Visual-system pass (batch 2, items 1/2/4/5): the header now uses
  * enso-mark.png — a crop of just the brush-stroke ring, generated from
  * public/assets/Enso.png (which bundles the ring with baked-in "ENSO
@@ -87,9 +106,11 @@ export default function Page() {
   const [attachmentStatus, setAttachmentStatus] = useState<AttachmentStatus | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [sidebarRefreshSignal, setSidebarRefreshSignal] = useState(0);
+  const [refocusInputSignal, setRefocusInputSignal] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -114,6 +135,21 @@ export default function Page() {
     const timer = setTimeout(() => setAttachmentStatus(null), 6000);
     return () => clearTimeout(timer);
   }, [attachmentStatus]);
+
+  // Fires ONLY when refocusInputSignal is explicitly bumped (after a send
+  // completes, after a file is selected) — never on every render. Runs
+  // inside an effect, not inline, specifically so it executes AFTER React
+  // has committed the DOM change that re-enables the textarea (see the
+  // focus-retention fix note above the component).
+  useEffect(() => {
+    if (refocusInputSignal === 0) return; // skip the initial mount call — autoFocus already owns first paint
+    const selection = window.getSelection();
+    if (selection && selection.toString().length > 0) return; // never yank focus out of an active transcript selection
+    const active = document.activeElement;
+    const stillWithinThisInteraction = active === null || active === document.body || active === textareaRef.current || (active instanceof Node && formRef.current?.contains(active));
+    if (!stillWithinThisInteraction) return; // focus is in a genuinely separate control — leave it alone
+    textareaRef.current?.focus();
+  }, [refocusInputSignal]);
 
   async function sendMessage() {
     const text = input.trim();
@@ -156,7 +192,7 @@ export default function Page() {
       }
     } finally {
       setSending(false);
-      textareaRef.current?.focus();
+      setRefocusInputSignal((n) => n + 1);
     }
   }
 
@@ -171,6 +207,10 @@ export default function Page() {
     const file = e.target.files?.[0];
     if (file) setPendingFile(file);
     if (fileInputRef.current) fileInputRef.current.value = "";
+    // The native file picker leaves focus on the (hidden) file input once
+    // it closes, not the textarea — bump the same signal so the user can
+    // keep typing without reaching for the mouse.
+    setRefocusInputSignal((n) => n + 1);
   }
 
   return (
@@ -201,6 +241,7 @@ export default function Page() {
           </div>
 
           <form
+            ref={formRef}
             onSubmit={(e) => {
               e.preventDefault();
               void sendMessage();
