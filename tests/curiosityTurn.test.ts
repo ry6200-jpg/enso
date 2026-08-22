@@ -142,28 +142,39 @@ describe("isWindingDown (EN-030 item B discriminator) — the two real transcrip
   });
 });
 
-describe("hasOpenLoop (EN-030 item B's other precondition)", () => {
-  it("both real fixtures above have no open loop — Enso's own last reply in each case doesn't end in a question", () => {
-    expect(
-      hasOpenLoop([
-        { role: "user", text: "but I did not ask for your help" },
-        { role: "enso", text: "I jumped in with advice you didn't ask for. I should have listened and stayed with what you were telling me. Sorry, Richard." }
-      ])
-    ).toBe(false);
-    expect(
-      hasOpenLoop([
-        { role: "user", text: "I am exhausted spending a lot time on it" },
-        { role: "enso", text: "Yeah—this is draining you now, not just taking time. Put it down for today; the work will still be there when you have more of yourself back." }
-      ])
-    ).toBe(false);
+describe("hasOpenLoop (EN-030 item B's other precondition) — revised after live testing", () => {
+  it("an empty event log has no open loop", () => {
+    expect(hasOpenLoop(eventLog, PRIMARY_USER_ID)).toBe(false);
   });
 
-  it("Enso's own last reply ending in a question IS an open loop", () => {
-    expect(hasOpenLoop([{ role: "enso", text: "What's been taking up most of your attention lately?" }])).toBe(true);
+  it("an ORGANIC question (no gate fired) is NOT an open loop — the original 'ends in ?' implementation over-suppressed on exactly this case, caught live: ordinary curious replies almost always end in a question, which isn't 'Enso has something outstanding'", () => {
+    const t = userTurn("some update");
+    recordFired(t.id, {}); // no gate fired; the reply text itself is irrelevant now — gateActions is what's checked
+    expect(hasOpenLoop(eventLog, PRIMARY_USER_ID)).toBe(false);
   });
 
-  it("an empty window has no open loop", () => {
-    expect(hasOpenLoop([])).toBe(false);
+  it("a genuine gate-directed ask (third-party) that hasn't been resolved yet IS an open loop", () => {
+    const t = userTurn("My coworker Marcus helped me move.");
+    recordFired(t.id, { circleBackFired: { entityId: "x", name: "Marcus", stableKey: "x" } });
+    expect(hasOpenLoop(eventLog, PRIMARY_USER_ID)).toBe(true);
+  });
+
+  it("a self-birthdate ask counts as an open loop too — deliberately checked here even though it's excluded from the shared cooldown scan", () => {
+    const t = userTurn("hi");
+    recordFired(t.id, { selfBirthdateAskFired: true });
+    expect(hasOpenLoop(eventLog, PRIMARY_USER_ID)).toBe(true);
+  });
+
+  it("an elicitation probe counts as an open loop too", () => {
+    const t = userTurn("just a regular day");
+    recordFired(t.id, { elicitationFired: { layer: 1, probeType: "call2am" } });
+    expect(hasOpenLoop(eventLog, PRIMARY_USER_ID)).toBe(true);
+  });
+
+  it("connectDot does NOT count as an open loop — it's an observation, not a question awaiting an answer", () => {
+    const t = userTurn("just a regular day");
+    recordFired(t.id, { connectDotFired: true });
+    expect(hasOpenLoop(eventLog, PRIMARY_USER_ID)).toBe(false);
   });
 });
 

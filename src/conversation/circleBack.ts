@@ -356,10 +356,27 @@ export function isWindingDown(recentTurns: RecentTurnForPrompt[]): boolean {
  * Enso's own last reply already ask something the user hasn't answered
  * yet." A genuinely open loop must always suppress taking a NEW turn,
  * independent of the winding-down question above.
+ *
+ * REVISED after live testing (not the original implementation): a literal
+ * "did the last reply end in '?'" check was tried first and demonstrably
+ * over-suppressed — ordinary organic curiosity (INVESTED CURIOSITY, BE
+ * ANALYTICAL) makes MOST replies end in a question as completely normal
+ * conversational flow, which isn't "Enso has something outstanding" in
+ * any meaningful sense and isn't what the user's own follow-up message
+ * needs to have "answered." What actually distinguishes a genuine open
+ * loop is whether the last reply's ask came from one of THIS gate
+ * family's own tracked mechanisms (self-fact, third-party, elicitation,
+ * or self-birthdate) — a deliberate, attempt-tracked question, not
+ * incidental curiosity. Checking gateActions directly, rather than reply
+ * text, is also what makes this correctly distinguish "Enso asked
+ * something structured" from "Enso happened to end a sentence with a
+ * question mark."
  */
-export function hasOpenLoop(recentTurns: RecentTurnForPrompt[]): boolean {
-  const lastEnso = [...recentTurns].reverse().find((t) => t.role === "enso");
-  return lastEnso !== undefined && lastEnso.text.trim().endsWith("?");
+export function hasOpenLoop(eventLog: EventLog, userId: string): boolean {
+  const lastReply = [...eventLog.listForUser(userId)].reverse().find((e) => e.type === "reply_sent");
+  if (!lastReply) return false;
+  const gateActions = (lastReply.payload as ReplySentPayload).gateActions;
+  return Boolean(gateActions?.circleBackFired || gateActions?.selfFactAskFired || gateActions?.elicitationFired || gateActions?.selfBirthdateAskFired);
 }
 
 /** Tracks the most recent turn ANY curiosity-turn kind fired on, regardless of which — the shared cooldown below applies across all three kinds jointly (a self-fact ask followed immediately by a connecting observation next turn would feel like the same over-eager pattern EN-030's "never two consecutive turns" already exists to prevent). Deliberately excludes selfBirthdateAskFired: that mechanism is separate, unconditional, and pre-existing — untouched by this generalization, see the file-level comment above. */
@@ -389,7 +406,7 @@ function mostRecentCuriosityFireTurn(eventLog: EventLog, userId: string, userTur
  */
 export function isCuriosityTurnEligible(eventLog: EventLog, userId: string, currentMessage: string, recentTurns: RecentTurnForPrompt[]): boolean {
   if (currentMessage.trim().endsWith("?")) return false;
-  if (hasOpenLoop(recentTurns)) return false;
+  if (hasOpenLoop(eventLog, userId)) return false;
   if (isWindingDown(recentTurns)) return false;
   if (justOpenedUpFromElicitation(eventLog, userId, currentMessage)) return false;
 
