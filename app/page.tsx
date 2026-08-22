@@ -8,6 +8,7 @@ interface ChatMessage {
   id: string;
   role: "user" | "enso";
   text: string;
+  attachmentFilename?: string;
 }
 
 interface AttachmentStatus {
@@ -50,6 +51,17 @@ interface AttachmentStatus {
  * concept or endpoint for it, since a real event log with zero messages
  * and "first session" are the exact same fact.
  *
+ * Item 8 (attachment function reported as "doesn't work at all"): the
+ * real bug was that selecting a file immediately fired its own,
+ * completely disconnected upload — nothing ever told the chat pipeline an
+ * attachment existed, so its extracted content never reached a reply no
+ * matter what you typed afterward. A file is now staged on selection
+ * (pendingFile below) and only actually uploaded at Send time, together
+ * with whatever text (or no text — R1/EN-064 already supported an
+ * attachment-only message; the /api/chat route just never allowed one
+ * through) — see src/conversation/chatPipeline.ts's attachmentEventId
+ * handling for where the content actually gets injected.
+ *
  * Visual-system pass (batch 2, items 1/2/4/5): the header now uses
  * enso-mark.png — a crop of just the brush-stroke ring, generated from
  * public/assets/Enso.png (which bundles the ring with baked-in "ENSO
@@ -73,6 +85,7 @@ export default function Page() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [attachmentStatus, setAttachmentStatus] = useState<AttachmentStatus | null>(null);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [sidebarRefreshSignal, setSidebarRefreshSignal] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -104,15 +117,31 @@ export default function Page() {
 
   async function sendMessage() {
     const text = input.trim();
-    if (!text || sending) return; // duplicate-send guard
+    const file = pendingFile;
+    if ((!text && !file) || sending) return; // duplicate-send guard; text OR a file is enough (item 8)
 
     setSending(true);
     setInput("");
+    setPendingFile(null);
     const recentTurns = messages.slice(-6).map((m) => ({ role: m.role, text: m.text }));
-    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", text }]);
+    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", text, attachmentFilename: file?.name }]);
 
     try {
-      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, recentTurns }) });
+      let attachmentEventId: string | undefined;
+      if (file) {
+        const formData = new FormData();
+        formData.append("file", file);
+        const uploadRes = await fetch("/api/attachments", { method: "POST", body: formData });
+        const uploadJson = await uploadRes.json();
+        if (!uploadRes.ok) {
+          setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "enso", text: `(couldn't attach ${file.name}: ${uploadJson.error})` }]);
+          return;
+        }
+        attachmentEventId = uploadJson.uploadEventId;
+        setAttachmentStatus({ filename: file.name, extractionSucceeded: uploadJson.extractionSucceeded, extractionError: uploadJson.extractionError });
+      }
+
+      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, recentTurns, attachmentEventId }) });
       const json = await res.json();
       if (!res.ok) {
         setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "enso", text: `(reply failed — your message was still saved: ${json.error})` }]);
@@ -138,15 +167,9 @@ export default function Page() {
     }
   }
 
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file) return;
-    setAttachmentStatus(null);
-    const formData = new FormData();
-    formData.append("file", file);
-    const res = await fetch("/api/attachments", { method: "POST", body: formData });
-    const json = await res.json();
-    setAttachmentStatus(res.ok ? { filename: file.name, extractionSucceeded: json.extractionSucceeded, extractionError: json.extractionError } : { filename: file.name, extractionSucceeded: false, extractionError: json.error });
+    if (file) setPendingFile(file);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -171,6 +194,7 @@ export default function Page() {
                 }`}
                 style={m.role === "user" ? { backgroundColor: "var(--enso-red)", color: "#faf7f2" } : { color: "var(--enso-ink)" }}
               >
+                {m.attachmentFilename && <div className="text-xs opacity-80 mb-1">Attached: {m.attachmentFilename}</div>}
                 {m.text}
               </div>
             ))}
@@ -181,38 +205,48 @@ export default function Page() {
               e.preventDefault();
               void sendMessage();
             }}
-            className="shrink-0 flex items-stretch gap-3 p-4 border-t border-stone-200"
+            className="shrink-0 flex flex-col gap-2 p-4 border-t border-stone-200"
             style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
           >
-            <input ref={fileInputRef} type="file" onChange={handleFileChange} className="hidden" id="attachment-input" />
-            <label
-              htmlFor="attachment-input"
-              className="shrink-0 w-14 h-28 flex items-center justify-center cursor-pointer rounded-xl bg-stone-100 border border-stone-300 text-stone-600 hover:bg-stone-200"
-              title="Attach a file"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-              </svg>
-            </label>
-            <textarea
-              ref={textareaRef}
-              autoFocus
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              disabled={sending}
-              placeholder="Tell Enso what's on your mind... (Enter to send, Shift+Enter for a new line)"
-              rows={4}
-              className="flex-1 h-28 resize-none rounded-xl px-4 py-3 text-base bg-white border border-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-300 disabled:opacity-50 overflow-y-auto"
-            />
-            <button
-              type="submit"
-              disabled={sending || !input.trim()}
-              className="shrink-0 h-28 rounded-xl text-white px-6 text-base font-medium disabled:opacity-50 hover:opacity-90"
-              style={{ backgroundColor: "var(--enso-red)" }}
-            >
-              Send
-            </button>
+            {pendingFile && (
+              <div className="flex items-center gap-2 text-sm text-stone-600 bg-stone-100 border border-stone-300 rounded-lg px-3 py-1.5 w-fit">
+                <span>{pendingFile.name}</span>
+                <button type="button" onClick={() => setPendingFile(null)} className="text-stone-400 hover:text-stone-700" title="Remove attachment">
+                  ×
+                </button>
+              </div>
+            )}
+            <div className="flex items-stretch gap-3">
+              <input ref={fileInputRef} type="file" onChange={handleFileChange} className="hidden" id="attachment-input" />
+              <label
+                htmlFor="attachment-input"
+                className="shrink-0 w-14 h-28 flex items-center justify-center cursor-pointer rounded-xl bg-stone-100 border border-stone-300 text-stone-600 hover:bg-stone-200"
+                title="Attach a file"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                </svg>
+              </label>
+              <textarea
+                ref={textareaRef}
+                autoFocus
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={sending}
+                placeholder="Tell Enso what's on your mind... (Enter to send, Shift+Enter for a new line)"
+                rows={4}
+                className="flex-1 h-28 resize-none rounded-xl px-4 py-3 text-base bg-white border border-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-300 disabled:opacity-50 overflow-y-auto"
+              />
+              <button
+                type="submit"
+                disabled={sending || (!input.trim() && !pendingFile)}
+                className="shrink-0 h-28 rounded-xl text-white px-6 text-base font-medium disabled:opacity-50 hover:opacity-90"
+                style={{ backgroundColor: "var(--enso-red)" }}
+              >
+                Send
+              </button>
+            </div>
           </form>
         </div>
 

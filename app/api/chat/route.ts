@@ -12,9 +12,15 @@ import { getChatRouter, getDevUserId, getEmbedder, getExtractionRouter, getInten
  * SendMessageDeps shape the REPL builds.
  */
 export async function POST(request: Request): Promise<Response> {
-  const body = (await request.json()) as { text: string; recentTurns: RecentTurnForPrompt[] };
-  if (typeof body.text !== "string" || body.text.trim() === "") {
-    return NextResponse.json({ error: "text is required" }, { status: 400 });
+  const body = (await request.json()) as { text: string; recentTurns: RecentTurnForPrompt[]; attachmentEventId?: string };
+  const hasText = typeof body.text === "string" && body.text.trim() !== "";
+  const hasAttachment = typeof body.attachmentEventId === "string" && body.attachmentEventId.length > 0;
+  // Item 8: text alone was required before, which made "attach a file and
+  // send with no other text" impossible even though captureMessage
+  // (R1/EN-064) already supported an attachment-only message — this just
+  // never let one reach it.
+  if (!hasText && !hasAttachment) {
+    return NextResponse.json({ error: "text or an attachment is required" }, { status: 400 });
   }
 
   const userId = getDevUserId();
@@ -26,7 +32,10 @@ export async function POST(request: Request): Promise<Response> {
 
   let result;
   try {
-    result = await sendMessage({ eventLog, projectionsDb, retrievalDb, embedder, chatRouter, intentRouter }, { userId, text: body.text, recentTurns: body.recentTurns ?? [] });
+    result = await sendMessage(
+      { eventLog, projectionsDb, retrievalDb, embedder, chatRouter, intentRouter },
+      { userId, text: body.text ?? "", recentTurns: body.recentTurns ?? [], attachmentEventId: body.attachmentEventId }
+    );
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 502 });
   }

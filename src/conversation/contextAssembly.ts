@@ -48,13 +48,19 @@ export interface AssembledContext {
  * them on `reply_sent` (the round-trip rule: what shaped this reply is
  * self-describing), rather than truncating invisibly inside this function
  * and losing the fact that it happened.
+ *
+ * `attachmentBlock` (item 8) is pre-built by the caller (chatPipeline.ts,
+ * which has the event-log access this pure function deliberately doesn't)
+ * from a file attached to THIS specific turn — kept a plain string here,
+ * same as `gateDirective`, so this function stays I/O-free.
  */
 export function assembleContext(
   candidateChunks: ContentChunkRow[],
   retrievalMeta: { mode: RetrievalMode; query: string },
   recentTurns: RecentTurnForPrompt[],
   budgets: ContextBudgets = DEFAULT_CONTEXT_BUDGETS,
-  gateDirective: string | null = null
+  gateDirective: string | null = null,
+  attachmentBlock: string | null = null
 ): AssembledContext {
   const countCapped = candidateChunks.slice(0, budgets.maxRetrievedChunks);
   let runningChars = 0;
@@ -73,7 +79,7 @@ export function assembleContext(
     injectedChunks.map((c) => ({ id: c.id, text: c.text, occurredAt: c.occurred_at, recordedAt: c.recorded_at }))
   );
   const recentWindowBlock = buildRecentWindowBlock(injectedTurns);
-  const baseSystemPrompt = buildSystemPrompt(retrievedBlock, recentWindowBlock);
+  const baseSystemPrompt = buildSystemPrompt(retrievedBlock, recentWindowBlock, attachmentBlock);
   // EN-071 stage 3: a gate directive, when present, is injected at the END
   // of the system prompt — highest-salience position, named action only.
   const systemPrompt = gateDirective ? `${baseSystemPrompt}\n\n${gateDirective}` : baseSystemPrompt;

@@ -72,6 +72,23 @@ export function buildRecentWindowBlock(turns: RecentTurnForPrompt[]): string {
   return `=== RECENT CONVERSATION (begin) ===\n${lines.join("\n")}\n=== RECENT CONVERSATION (end) ===`;
 }
 
-export function buildSystemPrompt(retrievedBlock: string, recentWindowBlock: string): string {
-  return [buildPersonaBlock(), retrievedBlock, recentWindowBlock].join("\n\n");
+/**
+ * Item 8's fix: a file attached to THIS turn was previously stored and
+ * extracted (EN-061/062) but never actually reached the model generating
+ * the reply — the upload and the chat call were two disconnected actions.
+ * This block is what makes the content genuinely present for the reply
+ * that answers it, distinct from the retrieved-memory block (this is new,
+ * not retrieved from history) and framed explicitly against the failure
+ * mode the user reported live: a document-summary report instead of a
+ * conversational reply.
+ */
+export function buildAttachmentContextBlock(filename: string, content: string): string {
+  return `=== JUST SHARED (begin) ===\nThe owner just attached a file ("${filename}") to this message. Its content:\n${content}\n\nRespond to it conversationally, carrying the discussion forward using what's actually in it — the way a person would if a friend handed them something to read and started talking about it. This is NOT a request for a document summary or report; don't structure the reply as one, and don't recite the file back.\n=== JUST SHARED (end) ===`;
+}
+
+export function buildSystemPrompt(retrievedBlock: string, recentWindowBlock: string, attachmentBlock: string | null = null): string {
+  const parts = [buildPersonaBlock(), retrievedBlock];
+  if (attachmentBlock) parts.push(attachmentBlock);
+  parts.push(recentWindowBlock);
+  return parts.join("\n\n");
 }

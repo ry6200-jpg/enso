@@ -160,3 +160,98 @@ describe("reply_sent always records contextProvenance, including when empty (rou
     expect(payload.model).toBe("gemini-3.7-flash");
   });
 });
+
+describe("sendMessage — attachment context reaches the reply (item 8)", () => {
+  function seedDocumentAttachment(fullText: string, boundedExcerpt: string) {
+    const upload = eventLog.append({
+      type: "file_uploaded",
+      actor: "user",
+      payload: { filename: "notes.txt", mimeType: "text/plain", byteLength: fullText.length, path: "x" },
+      userId: PRIMARY_USER_ID
+    });
+    eventLog.append({
+      type: "extraction_completed",
+      actor: "system",
+      payload: { sourceEventId: upload.id, extractorVersion: "attachment-v1", provider: "openai", model: "gpt-5.6-terra", kind: "document", fullText, boundedExcerpt, truncated: false, entities: [] },
+      userId: PRIMARY_USER_ID
+    });
+    return upload.id;
+  }
+
+  it("allows an attachment-only message with empty text (R1/EN-064), never crashing on an empty provider call", async () => {
+    const uploadId = seedDocumentAttachment("Trip itinerary: Lisbon, Oct 3-10.", "Trip itinerary: Lisbon, Oct 3-10.");
+    let receivedLatestMessage: string | undefined;
+    deps.chatRouter = {
+      async reply(request) {
+        receivedLatestMessage = request.latestMessage;
+        return CANNED_REPLY;
+      }
+    };
+
+    const result = await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "",
+      recentTurns: [],
+      retrievalOverride: { mode: "recency", query: "", n: 10 },
+      attachmentEventId: uploadId
+    });
+
+    expect(receivedLatestMessage).toBe("[attachment]"); // never an empty string to the provider
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.attachmentContext).toEqual({ sourceEventId: uploadId, filename: "notes.txt", kind: "document", contentInjected: true });
+  });
+
+  it("injects the attachment's actual content into the system prompt, framed conversationally not as a report", async () => {
+    const uploadId = seedDocumentAttachment("Trip itinerary: Lisbon, Oct 3-10.", "Trip itinerary: Lisbon, Oct 3-10.");
+    let receivedSystem = "";
+    deps.chatRouter = {
+      async reply(request) {
+        receivedSystem = request.system;
+        return CANNED_REPLY;
+      }
+    };
+
+    await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "what do you think?",
+      recentTurns: [],
+      retrievalOverride: { mode: "recency", query: "what do you think?", n: 10 },
+      attachmentEventId: uploadId
+    });
+
+    expect(receivedSystem).toContain("Trip itinerary: Lisbon, Oct 3-10.");
+    expect(receivedSystem).toContain("NOT a request for a document summary or report");
+  });
+
+  it("round-trip survival: attachmentContext is null when no attachment was part of this turn", async () => {
+    const result = await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "no file here",
+      recentTurns: [],
+      retrievalOverride: { mode: "recency", query: "no file here", n: 10 }
+    });
+
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.attachmentContext).toBeNull();
+  });
+
+  it("round-trip survival: records contentInjected false, with the real filename, when extraction hasn't completed yet — never indistinguishable from no attachment", async () => {
+    const upload = eventLog.append({
+      type: "file_uploaded",
+      actor: "user",
+      payload: { filename: "still-processing.pdf", mimeType: "application/pdf", byteLength: 100, path: "x" },
+      userId: PRIMARY_USER_ID
+    });
+
+    const result = await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "",
+      recentTurns: [],
+      retrievalOverride: { mode: "recency", query: "", n: 10 },
+      attachmentEventId: upload.id
+    });
+
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.attachmentContext).toEqual({ sourceEventId: upload.id, filename: "still-processing.pdf", kind: "document", contentInjected: false });
+  });
+});

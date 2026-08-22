@@ -1,4 +1,6 @@
-import { captureMessage } from "../capture/messageCapture.js";
+import { captureMessage, type MessageSentPayload } from "../capture/messageCapture.js";
+import type { FileUploadedPayload } from "../attachments/attachmentCapture.js";
+import type { DocumentExtractionCompletedPayload, ImageExtractionCompletedPayload } from "../attachments/attachmentContent.js";
 import type { Embedder } from "../embeddings/embedder.js";
 import type { EventLog } from "../events/eventLog.js";
 import type { EventRecord } from "../events/schema.js";
@@ -10,7 +12,7 @@ import { recencyMode } from "../retrieval/recencyMode.js";
 import type { ContentChunkRow, RetrievalDb } from "../retrieval/retrievalDb.js";
 import { assembleContext, DEFAULT_CONTEXT_BUDGETS, type AssembledContext, type ContextBudgets } from "./contextAssembly.js";
 import { decideRetrievalInvocation, type RetrievalInvocation, type RetrievalMode } from "./retrievalInvocation.js";
-import type { RecentTurnForPrompt } from "../persona/systemPrompt.js";
+import { buildAttachmentContextBlock, type RecentTurnForPrompt } from "../persona/systemPrompt.js";
 import { buildCircleBackDirective, findEligibleCircleBackCandidates, verifyCircleBackExecuted } from "./circleBack.js";
 import { recentAttributeClaims, resolveAttestation, type FactConfirmedPayload } from "./attestation.js";
 import type { IntentRouter, RouterResult } from "./router/intentRouter.js";
@@ -58,6 +60,15 @@ export interface ReplySentPayload {
     /** The fact_confirmed event id this turn produced, if the attestation gate resolved a validated affirmation. */
     attestationConfirmedEventId: string | null;
   };
+  /**
+   * Item 8 round-trip survival: non-null whenever this turn had an
+   * attachment attached, regardless of whether its content was actually
+   * found and injected — `contentInjected: false` with a real
+   * sourceEventId means the attachment existed but its extraction hadn't
+   * completed or had failed, which is meaningfully different from no
+   * attachment at all and must never be silently indistinguishable from it.
+   */
+  attachmentContext: { sourceEventId: string; filename: string; kind: "document" | "image"; contentInjected: boolean } | null;
 }
 
 export interface SendMessageDeps {
@@ -78,6 +89,40 @@ export interface SendMessageInput {
   /** Test/Phase-6 hook — same shape as hybridSearch's temporalWeight override (see retrievalInvocation.ts). */
   retrievalOverride?: RetrievalInvocation;
   budgets?: ContextBudgets;
+  /**
+   * Item 8: the file_uploaded event id of a file attached to THIS message,
+   * if any — set by the caller right after uploading it (see
+   * app/api/attachments and app/page.tsx). `text` may legitimately be
+   * empty when this is set (R1/EN-064's attachment-only placeholder).
+   */
+  attachmentEventId?: string;
+}
+
+/**
+ * Item 8: looks up the already-stored, already-extracted content for a
+ * file attached to this turn — never re-extracts, never re-reads the raw
+ * bytes; extraction already ran when the file was uploaded
+ * (uploadAndExtract/extractDocumentWithResilience et al.). Returns null
+ * content-wise (but a non-null filename/kind) when extraction hasn't
+ * completed or failed — the caller still records that the attachment
+ * existed, just without a content block to show the model.
+ */
+function resolveAttachmentContext(
+  eventLog: EventLog,
+  attachmentEventId: string
+): { filename: string; kind: "document" | "image"; content: string | null } | null {
+  const uploadEvent = eventLog.getById(attachmentEventId);
+  if (!uploadEvent || uploadEvent.type !== "file_uploaded") return null;
+  const filename = (uploadEvent.payload as FileUploadedPayload).filename;
+
+  const extractionEvent = eventLog
+    .listForUser(uploadEvent.userId)
+    .find((e) => e.type === "extraction_completed" && (e.payload as { sourceEventId?: string }).sourceEventId === attachmentEventId);
+  if (!extractionEvent) return { filename, kind: "document", content: null };
+
+  const payload = extractionEvent.payload as DocumentExtractionCompletedPayload | ImageExtractionCompletedPayload;
+  if (payload.kind === "image") return { filename, kind: "image", content: payload.description };
+  return { filename, kind: "document", content: payload.boundedExcerpt };
 }
 
 export interface SendMessageResult {
@@ -128,7 +173,22 @@ async function runRetrieval(deps: SendMessageDeps, userId: string, invocation: R
  * reply_sent exists for this turn.
  */
 export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput): Promise<SendMessageResult> {
-  const messageEvent = captureMessage(deps.eventLog, { userId: input.userId, text: input.text });
+  const messageEvent = captureMessage(deps.eventLog, {
+    userId: input.userId,
+    text: input.text,
+    attachmentCount: input.attachmentEventId ? 1 : 0
+  });
+
+  const attachmentInfo = input.attachmentEventId ? resolveAttachmentContext(deps.eventLog, input.attachmentEventId) : null;
+  const attachmentBlock = attachmentInfo?.content ? buildAttachmentContextBlock(attachmentInfo.filename, attachmentInfo.content) : null;
+
+  // R1/EN-064: an attachment-only turn has empty input.text — messageEvent's
+  // OWN persisted text is never empty (captureMessage already substituted
+  // ATTACHMENT_ONLY_PLACEHOLDER), so retrieval, the router, and the actual
+  // provider call all use this, never the possibly-empty raw input.text —
+  // exactly the bug R1's own comment warns about ("an empty user message
+  // crashes provider chat APIs").
+  const effectiveText = (messageEvent.payload as MessageSentPayload).text;
 
   let invocation: RetrievalInvocation;
   let routerResult: RouterResult | null = null;
@@ -139,12 +199,12 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     // Test/override hook (Part 1): bypasses the router entirely, no gates.
     invocation = input.retrievalOverride;
   } else if (deps.intentRouter) {
-    circleBackCandidates = findEligibleCircleBackCandidates(deps.eventLog, deps.projectionsDb, input.userId, input.text);
+    circleBackCandidates = findEligibleCircleBackCandidates(deps.eventLog, deps.projectionsDb, input.userId, effectiveText);
     const knownEntities = deps.projectionsDb.listEntities(input.userId).map((e) => ({ entityId: e.id, name: e.name }));
     claims = recentAttributeClaims(deps.eventLog, deps.projectionsDb, input.userId);
 
     routerResult = await deps.intentRouter.route({
-      message: input.text,
+      message: effectiveText,
       recentTurns: input.recentTurns,
       knownEntities,
       circleBackCandidates,
@@ -154,13 +214,13 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     const r = routerResult.decision.retrieval;
     invocation =
       r.mode === "entity"
-        ? { mode: "entity", query: input.text, entityId: r.entityId! }
+        ? { mode: "entity", query: effectiveText, entityId: r.entityId! }
         : r.mode === "recency"
-          ? { mode: "recency", query: input.text, n: r.n ?? 10 }
-          : { mode: "hybrid", query: input.text, temporalWeight: r.temporalWeight };
+          ? { mode: "recency", query: effectiveText, n: r.n ?? 10 }
+          : { mode: "hybrid", query: effectiveText, temporalWeight: r.temporalWeight };
   } else {
     // Pre-Phase-6 fallback: no router configured, use the Part 1 local heuristic, no gates.
-    invocation = decideRetrievalInvocation(input.text, deps.projectionsDb, input.userId);
+    invocation = decideRetrievalInvocation(effectiveText, deps.projectionsDb, input.userId);
   }
 
   const candidateChunks = await runRetrieval(deps, input.userId, invocation);
@@ -171,9 +231,16 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       : null;
   const gateDirective = circleBackFireEntity ? buildCircleBackDirective(circleBackFireEntity.name, circleBackFireEntity.attemptNumber, circleBackFireEntity.mentionAgeLabel) : null;
 
-  const assembled = assembleContext(candidateChunks, { mode: invocation.mode, query: invocation.query }, input.recentTurns, input.budgets ?? DEFAULT_CONTEXT_BUDGETS, gateDirective);
+  const assembled = assembleContext(
+    candidateChunks,
+    { mode: invocation.mode, query: invocation.query },
+    input.recentTurns,
+    input.budgets ?? DEFAULT_CONTEXT_BUDGETS,
+    gateDirective,
+    attachmentBlock
+  );
 
-  const callResult = await deps.chatRouter.reply({ system: assembled.systemPrompt, history: [], latestMessage: input.text });
+  const callResult = await deps.chatRouter.reply({ system: assembled.systemPrompt, history: [], latestMessage: effectiveText });
 
   // EN-073: only consume circle-back state (recorded below) if the reply actually executed the directive.
   const circleBackFired = circleBackFireEntity && verifyCircleBackExecuted(callResult.text, circleBackFireEntity.name) ? circleBackFireEntity : null;
@@ -213,7 +280,10 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     gateActions: {
       circleBackFired,
       attestationConfirmedEventId: factConfirmedEvent?.id ?? null
-    }
+    },
+    attachmentContext: attachmentInfo
+      ? { sourceEventId: input.attachmentEventId!, filename: attachmentInfo.filename, kind: attachmentInfo.kind, contentInjected: attachmentBlock !== null }
+      : null
   };
   const replyEvent = deps.eventLog.append({ type: "reply_sent", actor: "enso", payload, userId: input.userId });
 
