@@ -80,7 +80,7 @@ describe("sendMessage — backward compatibility (no intentRouter configured)", 
     const payload = result.replyEvent.payload as ReplySentPayload;
     expect(payload.router.used).toBe(false);
     expect(payload.router.provider).toBeNull();
-    expect(payload.gateActions).toEqual({ circleBackFired: null, attestationConfirmedEventId: null, selfBirthdateAskFired: false, selfFactAskFired: null, connectDotFired: false });
+    expect(payload.gateActions).toEqual({ circleBackFired: null, attestationConfirmedEventId: null, selfBirthdateAskFired: false, selfFactAskFired: null, connectDotFired: false, elicitationFired: null });
   });
 });
 
@@ -121,7 +121,7 @@ describe("sendMessage — EN-083 uncertified-tier gate bypass (verification item
 
     expect(result.replyText).toBe("Noted.");
     const payload = result.replyEvent.payload as ReplySentPayload;
-    expect(payload.gateActions).toEqual({ circleBackFired: null, attestationConfirmedEventId: null, selfBirthdateAskFired: false, selfFactAskFired: null, connectDotFired: false });
+    expect(payload.gateActions).toEqual({ circleBackFired: null, attestationConfirmedEventId: null, selfBirthdateAskFired: false, selfFactAskFired: null, connectDotFired: false, elicitationFired: null });
     expect(payload.router.certified).toBe(false);
   });
 });
@@ -144,7 +144,7 @@ describe("sendMessage — circle-back directive injection and EN-073 verificatio
 
     // Case 1: the reply follows through.
     deps.chatRouter = fakeChatRouter("Noted. Who is Marcus, by the way?");
-    deps.intentRouter = fakeIntentRouter({ decision: decisionWith({ curiosityTurn: { fire: true, kind: "thirdParty", entityId: marcusId, attribute: null } }) });
+    deps.intentRouter = fakeIntentRouter({ decision: decisionWith({ curiosityTurn: { fire: true, kind: "thirdParty", entityId: marcusId, attribute: null, probeType: null } }) });
     const followedThrough = await sendMessage(deps, { userId: PRIMARY_USER_ID, text: "another update", recentTurns: [] });
     const followedPayload = followedThrough.replyEvent.payload as ReplySentPayload;
     expect(followedPayload.gateActions.circleBackFired).toMatchObject({ entityId: marcusId, name: "Marcus" });
@@ -170,7 +170,7 @@ describe("sendMessage — circle-back directive injection and EN-073 verificatio
       projectionsDb: projections2,
       embedder: fakeEmbedder,
       chatRouter: fakeChatRouter("That sounds like a nice gesture."), // never mentions Marcus
-      intentRouter: fakeIntentRouter({ decision: decisionWith({ curiosityTurn: { fire: true, kind: "thirdParty", entityId: marcusId, attribute: null } }) })
+      intentRouter: fakeIntentRouter({ decision: decisionWith({ curiosityTurn: { fire: true, kind: "thirdParty", entityId: marcusId, attribute: null, probeType: null } }) })
     };
     const omitted = await sendMessage(deps2, { userId: PRIMARY_USER_ID, text: "another update", recentTurns: [] });
     const omittedPayload = omitted.replyEvent.payload as ReplySentPayload;
@@ -192,7 +192,7 @@ describe("sendMessage — circle-back directive injection and EN-073 verificatio
     });
     // No birthdate given this time — the router would happily fire on Marcus...
     deps.chatRouter = fakeChatRouter("Got it. When's your birthday, by the way?"); // ...but the self-directive should win, not the third-party one
-    deps.intentRouter = fakeIntentRouter({ decision: decisionWith({ curiosityTurn: { fire: true, kind: "thirdParty", entityId: marcusId, attribute: null } }) });
+    deps.intentRouter = fakeIntentRouter({ decision: decisionWith({ curiosityTurn: { fire: true, kind: "thirdParty", entityId: marcusId, attribute: null, probeType: null } }) });
 
     const result = await sendMessage(deps, { userId: PRIMARY_USER_ID, text: "another update", recentTurns: [] });
 

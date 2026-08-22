@@ -6,6 +6,7 @@ import { getPrimaryUserAttribute } from "../projections/peopleView.js";
 import type { CircleBackCandidate, CuriosityAskCandidate } from "./router/routerTypes.js";
 import type { RecentTurnForPrompt } from "../persona/systemPrompt.js";
 import type { ReplySentPayload } from "./chatPipeline.js";
+import { buildElicitationDirective, findElicitationCandidate, justOpenedUpFromElicitation, verifyElicitationExecuted } from "./elicitation.js";
 
 /**
  * Circle-back gate (EN-030/070-073), ported from the old repo's
@@ -368,7 +369,7 @@ function mostRecentCuriosityFireTurn(eventLog: EventLog, userId: string, userTur
   for (const event of eventLog.listForUser(userId)) {
     if (event.type !== "reply_sent") continue;
     const payload = event.payload as ReplySentPayload;
-    const fired = payload.gateActions?.circleBackFired || payload.gateActions?.selfFactAskFired || payload.gateActions?.connectDotFired;
+    const fired = payload.gateActions?.circleBackFired || payload.gateActions?.selfFactAskFired || payload.gateActions?.connectDotFired || payload.gateActions?.elicitationFired;
     if (!fired) continue;
     const turnIndex = turnIndexByMessageId.get(payload.inReplyToEventId) ?? userTurns.length - 1;
     latest = latest === null ? turnIndex : Math.max(latest, turnIndex);
@@ -380,13 +381,17 @@ function mostRecentCuriosityFireTurn(eventLog: EventLog, userId: string, userTur
  * The full item B eligibility gate, computed entirely in code (never left
  * to model judgment — see RouterRequest.curiosityTurnEligible's own
  * comment) and passed to the router as a fact, not a question. Order
- * matters only for readability; all four checks are independent
- * disqualifiers.
+ * matters only for readability; all checks are independent disqualifiers.
+ * EN-097's continuer rule (justOpenedUpFromElicitation) is folded in here
+ * rather than scoped to elicitation alone: piling ANY new ask on top of
+ * someone who just opened up is the same interview-mode failure regardless
+ * of which kind of ask it would be.
  */
 export function isCuriosityTurnEligible(eventLog: EventLog, userId: string, currentMessage: string, recentTurns: RecentTurnForPrompt[]): boolean {
   if (currentMessage.trim().endsWith("?")) return false;
   if (hasOpenLoop(recentTurns)) return false;
   if (isWindingDown(recentTurns)) return false;
+  if (justOpenedUpFromElicitation(eventLog, userId, currentMessage)) return false;
 
   const userTurns = userMessageTurns(eventLog, userId);
   const lastFireTurn = mostRecentCuriosityFireTurn(eventLog, userId, userTurns);
@@ -397,18 +402,22 @@ export function isCuriosityTurnEligible(eventLog: EventLog, userId: string, curr
 
 /**
  * The unified ranked pool the router actually sees (RouterRequest.curiosityCandidates):
- * self-fact gaps when any exist, third-party names otherwise — never both
- * in the same turn, preserving "the user already outranks third parties"
- * exactly as before. Callers are expected to have already checked
- * isCuriosityTurnEligible and pass [] without calling this at all when it
- * returned false (chatPipeline.ts does this, matching how it already
- * short-circuits third-party candidates entirely while self-birthdate is
- * eligible).
+ * self-fact gaps outrank third-party names, which outrank elicitation
+ * (EN-097) — never more than one kind in the same turn's list, preserving
+ * "the user already outranks third parties" exactly as before and
+ * extending the same hard-priority discipline to elicitation. Callers are
+ * expected to have already checked isCuriosityTurnEligible and pass []
+ * without calling this at all when it returned false (chatPipeline.ts does
+ * this, matching how it already short-circuits third-party candidates
+ * entirely while self-birthdate is eligible).
  */
 export function findCuriosityAskCandidates(eventLog: EventLog, projections: ProjectionsDb, userId: string, currentMessage: string): CuriosityAskCandidate[] {
   const selfFact = findEligibleSelfFactCandidates(projections, eventLog, userId);
   if (selfFact.length > 0) return selfFact;
-  return findEligibleCircleBackCandidates(eventLog, projections, userId, currentMessage).map((candidate) => ({ kind: "thirdParty", candidate }) as CuriosityAskCandidate);
+  const thirdParty = findEligibleCircleBackCandidates(eventLog, projections, userId, currentMessage);
+  if (thirdParty.length > 0) return thirdParty.map((candidate) => ({ kind: "thirdParty", candidate }) as CuriosityAskCandidate);
+  const elicitation = findElicitationCandidate(eventLog, projections, userId);
+  return elicitation ? [elicitation] : [];
 }
 
 /** attribute-specific phrasing for the self-fact ask, mirroring buildSelfBirthdateDirective's own register (weave in, never database-style, own voice). */
@@ -433,7 +442,9 @@ export function buildConnectDotDirective(): string {
 
 /** Dispatches to the kind-specific directive builder for an actual ask (never connectDot, which needs no candidate — see buildConnectDotDirective). */
 export function buildCuriosityAskDirective(candidate: CuriosityAskCandidate): string {
-  return candidate.kind === "thirdParty" ? buildCircleBackDirective(candidate.candidate.name, candidate.candidate.attemptNumber, candidate.candidate.mentionAgeLabel) : buildSelfFactDirective(candidate.attribute);
+  if (candidate.kind === "thirdParty") return buildCircleBackDirective(candidate.candidate.name, candidate.candidate.attemptNumber, candidate.candidate.mentionAgeLabel);
+  if (candidate.kind === "selfFact") return buildSelfFactDirective(candidate.attribute);
+  return buildElicitationDirective(candidate);
 }
 
 /** attribute-specific EN-073 verification, mirroring verifySelfBirthdateAskExecuted's own keyword-presence style. */
@@ -445,5 +456,7 @@ export function verifySelfFactAskExecuted(attribute: "location" | "occupation", 
 
 /** Dispatches to the kind-specific EN-073 verification for an actual ask (never connectDot — see the file-level comment on why it needs none: no attempt cap exists for it to wrongly consume). */
 export function verifyCuriosityAskExecuted(candidate: CuriosityAskCandidate, replyText: string): boolean {
-  return candidate.kind === "thirdParty" ? verifyCircleBackExecuted(replyText, candidate.candidate.name) : verifySelfFactAskExecuted(candidate.attribute, replyText);
+  if (candidate.kind === "thirdParty") return verifyCircleBackExecuted(replyText, candidate.candidate.name);
+  if (candidate.kind === "selfFact") return verifySelfFactAskExecuted(candidate.attribute, replyText);
+  return verifyElicitationExecuted(candidate, replyText);
 }

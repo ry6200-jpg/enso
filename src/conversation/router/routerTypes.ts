@@ -20,6 +20,24 @@ export interface CircleBackCandidate {
   stableKey: string;
 }
 
+/** EN-097 Layer 1 (name generators) — the answer is a NAME, not a feeling; see elicitation.ts's own doc comment for the full rationale and the fixed subtype list. */
+export type ElicitationLayer1ProbeType = "goodNews" | "call2am" | "seeVsMatter" | "lostTouch" | "dependsOnThem" | "knownLongest";
+
+/** EN-097 Layer 3 (key scenes) — unlocked only once an anchor entity exists; see elicitation.ts. */
+export type ElicitationLayer3ProbeType = "howMet" | "earliestMemory" | "highPoint" | "lowPoint" | "turningPoint" | "wantRemembered";
+
+/**
+ * EN-097: an elicitation probe candidate — Layer 1 (no anchor needed,
+ * "primary opener") or Layer 3 (requires an already-established anchor
+ * entity to deepen on). Layer 2 (life-domain coverage) is deliberately NOT
+ * a candidate kind at all — it's a hidden ranking signal used by
+ * elicitation.ts to decide priority/eligibility, never spoken and never
+ * exposed to the router as a choice of its own (see elicitation.ts).
+ */
+export type ElicitationCandidate =
+  | { kind: "elicitation"; layer: 1; probeType: ElicitationLayer1ProbeType }
+  | { kind: "elicitation"; layer: 3; probeType: ElicitationLayer3ProbeType; anchorEntityId: string; anchorName: string };
+
 /**
  * EN-030 item A: the self-initiated-curiosity candidate pool, generalized
  * beyond third-party names to also cover gaps in Enso's picture of the
@@ -30,8 +48,13 @@ export interface CircleBackCandidate {
  * generalization). A self-fact candidate always outranks a thirdParty one
  * — enforced in circleBack.ts's findCuriosityAskCandidates by never
  * including both kinds in the same list, never by ranking within one.
+ *
+ * EN-097 extends this same pool with ElicitationCandidate (Layer 1/3) —
+ * elicitation.ts's own priority order (selfFact > thirdParty > Layer 1 >
+ * Layer 3) is enforced the identical way: only the winning kind's
+ * candidates ever populate this list for a given turn.
  */
-export type CuriosityAskCandidate = { kind: "thirdParty"; candidate: CircleBackCandidate } | { kind: "selfFact"; attribute: "location" | "occupation" };
+export type CuriosityAskCandidate = { kind: "thirdParty"; candidate: CircleBackCandidate } | { kind: "selfFact"; attribute: "location" | "occupation" } | ElicitationCandidate;
 
 /** A specific attribute claim recently surfaced (in the retrieved-memory block or the prior reply) that this turn might be explicitly affirming or correcting (EN-066). */
 export interface RecentAttributeClaim {
@@ -89,11 +112,13 @@ export interface RouterDecision {
    */
   curiosityTurn: {
     fire: boolean;
-    kind: "selfFact" | "thirdParty" | "connectDot" | null;
-    /** Set only when kind is "thirdParty" — must match a curiosityCandidates entry's entityId. */
+    kind: "selfFact" | "thirdParty" | "connectDot" | "elicitation" | null;
+    /** Set only when kind is "thirdParty" — must match a curiosityCandidates entry's entityId. Also set for a Layer 3 "elicitation" candidate (the anchor entity) — same field, same validation shape, never ambiguous since kind disambiguates which meaning applies. */
     entityId: string | null;
     /** Set only when kind is "selfFact" — must match a curiosityCandidates entry's attribute. */
     attribute: "location" | "occupation" | null;
+    /** Set only when kind is "elicitation" — must match a curiosityCandidates entry's probeType (EN-097). */
+    probeType: string | null;
   };
   attestation: {
     isAffirmation: boolean;
@@ -127,7 +152,7 @@ export interface RouterCallResult {
 /** EN-075's fail-safe: hybrid retrieval, no temporal weighting, no gate actions, natural register (never zen) — used on router error/timeout/malformed JSON, and on EN-083's uncertified-failover-tier bypass. Never blocks the reply either way. */
 export const SAFE_DEFAULT_DECISION: RouterDecision = {
   retrieval: { mode: "hybrid", entityId: null, temporalWeight: 0, n: null },
-  curiosityTurn: { fire: false, kind: null, entityId: null, attribute: null },
+  curiosityTurn: { fire: false, kind: null, entityId: null, attribute: null, probeType: null },
   attestation: { isAffirmation: false, entityName: null, attribute: null, value: null },
   register: { mode: "natural" }
 };

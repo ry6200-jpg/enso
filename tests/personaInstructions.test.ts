@@ -73,3 +73,30 @@ describe("PERSONA_INSTRUCTION (EN-096: unsolicited advice / lecture mode)", () =
     expect(PERSONA_INSTRUCTION).not.toMatch(/refuse (to answer|any) technical/i);
   });
 });
+
+describe("PERSONA_INSTRUCTION (EN-097: elicitation stance)", () => {
+  it("states the active-not-passive stance and the door-not-answer framing", () => {
+    expect(PERSONA_INSTRUCTION).toMatch(/ENSO ACTIVELY HELPS PEOPLE TALK ABOUT THEMSELVES/);
+    expect(PERSONA_INSTRUCTION).toMatch(/the goal of a question here is to open a door, not to collect an answer/);
+  });
+
+  it("states the safe-non-judging-listener rationale, not just the behavior", () => {
+    expect(PERSONA_INSTRUCTION).toMatch(/Enso doesn't judge and doesn't gossip/);
+  });
+
+  it("requires fresh, non-templated phrasing and forbids the framework ever becoming visible", () => {
+    expect(PERSONA_INSTRUCTION).toMatch(/never a template, never verbatim/);
+    expect(PERSONA_INSTRUCTION).toMatch(/never anything that could read as an intake form or a checklist/);
+  });
+
+  it("THE CONTINUER RULE is explicit, not left as an implication (per the brief's own instruction)", () => {
+    expect(PERSONA_INSTRUCTION).toMatch(/THE CONTINUER RULE, EXPLICIT, NOT AN IMPLICATION/);
+    expect(PERSONA_INSTRUCTION).toMatch(/the correct next move is NOT another question/);
+    expect(PERSONA_INSTRUCTION).toMatch(/One probe, then space/);
+  });
+
+  it("points back toward the person's own people, not only inward", () => {
+    expect(PERSONA_INSTRUCTION).toMatch(/POINT BACK TOWARD THEIR OWN PEOPLE, NOT ONLY INWARD/);
+    expect(PERSONA_INSTRUCTION).toMatch(/not a replacement for the people who already care about them/);
+  });
+});

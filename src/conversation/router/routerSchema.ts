@@ -19,11 +19,12 @@ export const ROUTER_JSON_SCHEMA = {
       type: "object",
       properties: {
         fire: { type: "boolean" },
-        kind: { type: ["string", "null"], enum: ["selfFact", "thirdParty", "connectDot", null] },
+        kind: { type: ["string", "null"], enum: ["selfFact", "thirdParty", "connectDot", "elicitation", null] },
         entityId: { type: ["string", "null"] },
-        attribute: { type: ["string", "null"], enum: ["location", "occupation", null] }
+        attribute: { type: ["string", "null"], enum: ["location", "occupation", null] },
+        probeType: { type: ["string", "null"] }
       },
-      required: ["fire", "kind", "entityId", "attribute"],
+      required: ["fire", "kind", "entityId", "attribute", "probeType"],
       additionalProperties: false
     },
     attestation: {
@@ -70,7 +71,11 @@ export function buildRouterSystemPrompt(request: RouterRequest): string {
           .map((c) =>
             c.kind === "selfFact"
               ? `- [selfFact] attribute="${c.attribute}" — you don't have the owner's ${c.attribute} on record yet`
-              : `- [thirdParty] ${c.candidate.name} (id: ${c.candidate.entityId}) — attempt ${c.candidate.attemptNumber}${c.candidate.attemptNumber === 2 ? `, first asked ${c.candidate.mentionAgeLabel} and unanswered; this would be the final attempt` : ""}`
+              : c.kind === "thirdParty"
+                ? `- [thirdParty] ${c.candidate.name} (id: ${c.candidate.entityId}) — attempt ${c.candidate.attemptNumber}${c.candidate.attemptNumber === 2 ? `, first asked ${c.candidate.mentionAgeLabel} and unanswered; this would be the final attempt` : ""}`
+                : c.layer === 1
+                  ? `- [elicitation layer=1] probeType="${c.probeType}" — a name-generator prompt; helping the owner talk about someone in their life, the answer is a name`
+                  : `- [elicitation layer=3] probeType="${c.probeType}" anchor="${c.anchorName}" (id: ${c.anchorEntityId}) — a scene-deepening prompt about someone already established`
           )
           .join("\n")
       : "(no eligible ask-candidates this turn)";
@@ -107,8 +112,9 @@ Ask-candidates this turn (already filtered by cooldown/attempt limits and priori
 ${curiosityCandidatesBlock}
 - kind="selfFact": attribute MUST exactly match one tagged [selfFact] above.
 - kind="thirdParty": entityId MUST exactly match one tagged [thirdParty] above.
+- kind="elicitation": probeType MUST exactly match one tagged [elicitation] above (and entityId MUST match its anchor id, for a layer=3 candidate only). Elicitation probes actively help the owner talk about themselves and the people in their life — this is not filling silence, it's opening a door; a thin or quiet thread is itself a good reason to offer one of these when nothing else fits, never a hollow generic question invented on the spot.
 
-You may instead choose kind="connectDot" (entityId and attribute both null) when curiosityTurnEligible is true and making a connecting observation — noticing a real pattern from what you already know about this person — would serve this moment better than asking something new. Only choose this when a genuine pattern actually exists; never invent one to fill the slot.
+You may instead choose kind="connectDot" (entityId, attribute, and probeType all null) when curiosityTurnEligible is true and making a connecting observation — noticing a real pattern from what you already know about this person — would serve this moment better than asking something new. Only choose this when a genuine pattern actually exists; never invent one to fill the slot.
 
 If curiosityTurnEligible is true but the ask-candidate list above is empty AND no genuine connecting observation exists, fire MUST still be false — there is nothing to say yet, and that is the correct outcome, not a gap to paper over. Separately, even when otherwise eligible, decline (fire=false) if the CURRENT message is itself a direct question needing a real answer, or shares something emotionally weighty enough that even a brief aside would interrupt or trivialize it.
 

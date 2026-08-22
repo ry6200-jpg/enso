@@ -45,9 +45,9 @@ describe("ROUTER_JSON_SCHEMA (EN-030 curiosityTurn axis)", () => {
       required: readonly string[];
       additionalProperties: boolean;
     };
-    expect(schema.properties.kind.enum).toEqual(["selfFact", "thirdParty", "connectDot", null]);
+    expect(schema.properties.kind.enum).toEqual(["selfFact", "thirdParty", "connectDot", "elicitation", null]);
     expect(schema.properties.attribute.enum).toEqual(["location", "occupation", null]);
-    expect(schema.required).toEqual(["fire", "kind", "entityId", "attribute"]);
+    expect(schema.required).toEqual(["fire", "kind", "entityId", "attribute", "probeType"]);
     expect(schema.additionalProperties).toBe(false);
   });
 

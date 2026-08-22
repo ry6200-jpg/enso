@@ -43,25 +43,38 @@ function validateDecision(raw: RouterDecision, request: RouterRequest): { decisi
     decision.retrieval.n = 10;
   }
 
+  const NO_ACTION_CURIOSITY_TURN = { fire: false, kind: null, entityId: null, attribute: null, probeType: null } as const;
+
   if (decision.curiosityTurn.fire) {
     if (!request.curiosityTurnEligible) {
       reasons.push("curiosityTurn.fire=true but curiosityTurnEligible was false this turn — suppressed (EN-030 condition B precondition)");
-      decision.curiosityTurn = { fire: false, kind: null, entityId: null, attribute: null };
+      decision.curiosityTurn = NO_ACTION_CURIOSITY_TURN;
     } else if (decision.curiosityTurn.kind === "thirdParty") {
       const known = request.curiosityCandidates.some((c) => c.kind === "thirdParty" && c.candidate.entityId === decision.curiosityTurn.entityId);
       if (!known) {
         reasons.push(`curiosityTurn.entityId ${JSON.stringify(decision.curiosityTurn.entityId)} is not an eligible thirdParty candidate — suppressed`);
-        decision.curiosityTurn = { fire: false, kind: null, entityId: null, attribute: null };
+        decision.curiosityTurn = NO_ACTION_CURIOSITY_TURN;
       }
     } else if (decision.curiosityTurn.kind === "selfFact") {
       const known = request.curiosityCandidates.some((c) => c.kind === "selfFact" && c.attribute === decision.curiosityTurn.attribute);
       if (!known) {
         reasons.push(`curiosityTurn.attribute ${JSON.stringify(decision.curiosityTurn.attribute)} is not an eligible selfFact candidate — suppressed`);
-        decision.curiosityTurn = { fire: false, kind: null, entityId: null, attribute: null };
+        decision.curiosityTurn = NO_ACTION_CURIOSITY_TURN;
+      }
+    } else if (decision.curiosityTurn.kind === "elicitation") {
+      const known = request.curiosityCandidates.some(
+        (c) =>
+          c.kind === "elicitation" &&
+          c.probeType === decision.curiosityTurn.probeType &&
+          (c.layer === 1 || (c.layer === 3 && c.anchorEntityId === decision.curiosityTurn.entityId))
+      );
+      if (!known) {
+        reasons.push(`curiosityTurn.probeType ${JSON.stringify(decision.curiosityTurn.probeType)} is not an eligible elicitation candidate — suppressed`);
+        decision.curiosityTurn = NO_ACTION_CURIOSITY_TURN;
       }
     } else if (decision.curiosityTurn.kind !== "connectDot") {
       reasons.push(`curiosityTurn.kind ${JSON.stringify(decision.curiosityTurn.kind)} is not a recognized kind — suppressed`);
-      decision.curiosityTurn = { fire: false, kind: null, entityId: null, attribute: null };
+      decision.curiosityTurn = NO_ACTION_CURIOSITY_TURN;
     }
   }
 
@@ -134,7 +147,7 @@ export function createIntentRouter(
         reasons.push(`gates bypassed to no-action: decision served by uncertified tier "${raw.provider}" (EN-083)`);
         decision = {
           ...decision,
-          curiosityTurn: { fire: false, kind: null, entityId: null, attribute: null },
+          curiosityTurn: { fire: false, kind: null, entityId: null, attribute: null, probeType: null },
           attestation: { isAffirmation: false, entityName: null, attribute: null, value: null },
           register: { mode: "natural" }
         };

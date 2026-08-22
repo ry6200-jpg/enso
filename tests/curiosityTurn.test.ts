@@ -62,7 +62,7 @@ function giveSelfAttribute(attribute: "birthdate" | "location" | "occupation", v
 function recordFired(inReplyToEventId: string, gateActions: Partial<ReplySentPayload["gateActions"]>) {
   const payload: Partial<ReplySentPayload> = {
     inReplyToEventId,
-    gateActions: { circleBackFired: null, attestationConfirmedEventId: null, selfBirthdateAskFired: false, selfFactAskFired: null, connectDotFired: false, ...gateActions }
+    gateActions: { circleBackFired: null, attestationConfirmedEventId: null, selfBirthdateAskFired: false, selfFactAskFired: null, connectDotFired: false, elicitationFired: null, ...gateActions }
   };
   return eventLog.append({ type: "reply_sent", actor: "enso", payload, userId: PRIMARY_USER_ID });
 }

@@ -90,6 +90,16 @@ export interface ReplySentPayload {
      * this simply records the decision made.
      */
     connectDotFired: boolean;
+    /**
+     * EN-097: non-null only when the elicitation gate fired AND EN-073-style
+     * verification confirmed the reply actually asked something (see
+     * elicitation.ts's verifyElicitationExecuted for why that check is
+     * looser than circle-back's/self-fact's). anchorEntityId is set only
+     * for a Layer 3 probe; elicitation.ts's own attempt-cap scans (one-shot
+     * per Layer 1 probeType; one-shot per Layer 3 (probeType, anchor) pair)
+     * both derive from a scan of this field, never a new event type.
+     */
+    elicitationFired: { layer: 1 | 3; probeType: string; anchorEntityId?: string } | null;
   };
   /**
    * Item 8 round-trip survival: non-null whenever this turn had an
@@ -290,7 +300,11 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       ? (curiosityCandidates.find((c) => c.kind === "thirdParty" && c.candidate.entityId === curiosityDecision.entityId) ?? null)
       : curiosityDecision?.fire && curiosityDecision.kind === "selfFact"
         ? (curiosityCandidates.find((c) => c.kind === "selfFact" && c.attribute === curiosityDecision.attribute) ?? null)
-        : null;
+        : curiosityDecision?.fire && curiosityDecision.kind === "elicitation"
+          ? (curiosityCandidates.find(
+              (c) => c.kind === "elicitation" && c.probeType === curiosityDecision.probeType && (c.layer === 1 || (c.layer === 3 && c.anchorEntityId === curiosityDecision.entityId))
+            ) ?? null)
+          : null;
   const connectDotDecided = curiosityDecision?.fire === true && curiosityDecision.kind === "connectDot";
 
   const gateDirective = selfBirthdateEligible
@@ -361,7 +375,13 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       attestationConfirmedEventId: factConfirmedEvent?.id ?? null,
       selfBirthdateAskFired,
       selfFactAskFired: curiosityAskFired?.kind === "selfFact" ? { attribute: curiosityAskFired.attribute } : null,
-      connectDotFired: connectDotDecided
+      connectDotFired: connectDotDecided,
+      elicitationFired:
+        curiosityAskFired?.kind === "elicitation"
+          ? curiosityAskFired.layer === 1
+            ? { layer: 1, probeType: curiosityAskFired.probeType }
+            : { layer: 3, probeType: curiosityAskFired.probeType, anchorEntityId: curiosityAskFired.anchorEntityId }
+          : null
     },
     attachmentContext: attachmentInfo
       ? { sourceEventId: input.attachmentEventId!, filename: attachmentInfo.filename, kind: attachmentInfo.kind, contentInjected: attachmentBlock !== null }

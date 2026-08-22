@@ -22,7 +22,7 @@ beforeEach(() => {
 
 function appendSelfBirthdateFiredReply(): void {
   eventLog.append({ type: "message_sent", actor: "user", payload: { text: "some update", attachmentOnly: false }, userId: PRIMARY_USER_ID });
-  const payload: Partial<ReplySentPayload> = { gateActions: { circleBackFired: null, attestationConfirmedEventId: null, selfBirthdateAskFired: true, selfFactAskFired: null, connectDotFired: false } };
+  const payload: Partial<ReplySentPayload> = { gateActions: { circleBackFired: null, attestationConfirmedEventId: null, selfBirthdateAskFired: true, selfFactAskFired: null, connectDotFired: false, elicitationFired: null } };
   eventLog.append({ type: "reply_sent", actor: "enso", payload, userId: PRIMARY_USER_ID });
 }
 
