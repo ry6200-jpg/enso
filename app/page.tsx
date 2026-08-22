@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import Link from "next/link";
 import ZodiacSidebar from "./components/ZodiacSidebar";
 import { PROACTIVE_OPENER_MESSAGE } from "../src/persona/proactiveOpener.js";
 
@@ -209,21 +208,14 @@ export default function Page() {
             className="shrink-0 flex flex-col gap-2 p-4 border-t border-stone-200"
             style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
           >
-            <div className="flex items-center justify-between">
-              {pendingFile ? (
-                <div className="flex items-center gap-2 text-sm text-stone-600 bg-stone-100 border border-stone-300 rounded-lg px-3 py-1.5 w-fit">
-                  <span>{pendingFile.name}</span>
-                  <button type="button" onClick={() => setPendingFile(null)} className="text-stone-400 hover:text-stone-700" title="Remove attachment">
-                    ×
-                  </button>
-                </div>
-              ) : (
-                <span />
-              )}
-              <Link href="/attachments" className="text-xs text-stone-400 hover:text-stone-600">
-                Manage attachments
-              </Link>
-            </div>
+            {pendingFile && (
+              <div className="flex items-center gap-2 text-sm text-stone-600 bg-stone-100 border border-stone-300 rounded-lg px-3 py-1.5 w-fit">
+                <span>{pendingFile.name}</span>
+                <button type="button" onClick={() => setPendingFile(null)} className="text-stone-400 hover:text-stone-700" title="Remove attachment">
+                  ×
+                </button>
+              </div>
+            )}
             <div className="flex items-stretch gap-3">
               <input ref={fileInputRef} type="file" onChange={handleFileChange} className="hidden" id="attachment-input" />
               <label
