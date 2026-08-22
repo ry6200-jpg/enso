@@ -13,6 +13,14 @@ import { useEffect, useState } from "react";
  * Order: Western zodiac on top, Chinese below — reversed from the
  * original design per live feedback; EN-031 in the spec is updated to
  * match.
+ *
+ * Item 7 (one of the two root causes — the other was extraction never
+ * producing a birthdate attribute at all, fixed separately in
+ * src/providers/taxonomySchema.ts): this only ever fetched once, on
+ * mount. Establishing a birthdate mid-session, without reloading the
+ * page, would never unlock the sidebar even with extraction fixed —
+ * nothing told it to look again. refreshSignal (bumped by the parent
+ * after every chat turn) re-runs the fetch effect.
  */
 
 interface ZodiacSidebarData {
@@ -35,7 +43,7 @@ function ZodiacSection({ sign, iconUrl, reflection }: { sign: string; iconUrl: s
   );
 }
 
-export default function ZodiacSidebar() {
+export default function ZodiacSidebar({ refreshSignal = 0 }: { refreshSignal?: number }) {
   const [data, setData] = useState<ZodiacSidebarData | null>(null);
 
   useEffect(() => {
@@ -51,7 +59,7 @@ export default function ZodiacSidebar() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshSignal]);
 
   return (
     <aside className="w-72 shrink-0 border-l border-stone-200 p-4 flex flex-col gap-5 overflow-y-auto">

@@ -66,6 +66,7 @@ export default function Page() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [attachmentStatus, setAttachmentStatus] = useState<AttachmentStatus | null>(null);
+  const [sidebarRefreshSignal, setSidebarRefreshSignal] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -111,6 +112,12 @@ export default function Page() {
         setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "enso", text: `(reply failed — your message was still saved: ${json.error})` }]);
       } else {
         setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "enso", text: json.replyText }]);
+        // Item 7: /api/chat awaits extraction (refreshMemoryAfterTurn)
+        // before responding, so any attribute — a just-established
+        // birthdate, say — is already committed by the time this resolves.
+        // Bump the sidebar's refresh signal so it re-fetches instead of
+        // only ever checking once on page load.
+        setSidebarRefreshSignal((n) => n + 1);
       }
     } finally {
       setSending(false);
@@ -203,7 +210,7 @@ export default function Page() {
           </form>
         </div>
 
-        <ZodiacSidebar />
+        <ZodiacSidebar refreshSignal={sidebarRefreshSignal} />
       </div>
 
       {attachmentStatus && (

@@ -70,7 +70,8 @@ export async function extractMessageWithResilience(
   router: ExtractionRouter,
   messageEvent: EventRecord,
   retryConfig: RetryConfig = DEFAULT_RETRY_CONFIG,
-  knownPeopleNames: string[] = []
+  knownPeopleNames: string[] = [],
+  precedingReplyText?: string
 ): Promise<EventRecord> {
   const text = (messageEvent.payload as { text: string }).text;
   const classifierDecision = classifyPersonalVsDocument(text);
@@ -96,7 +97,7 @@ export async function extractMessageWithResilience(
 
   try {
     const referenceDate = messageEvent.recordedAt.slice(0, 10);
-    const result = await retryWithBackoff(() => router.extract({ kind: "message", text, referenceDate, knownPeopleNames }), retryConfig);
+    const result = await retryWithBackoff(() => router.extract({ kind: "message", text, referenceDate, knownPeopleNames, precedingReplyText }), retryConfig);
     const payload: MessageExtractionCompletedPayload = {
       sourceEventId: messageEvent.id,
       extractorVersion: MESSAGE_EXTRACTOR_VERSION,

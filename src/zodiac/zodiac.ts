@@ -44,10 +44,26 @@ export const WESTERN_ZODIAC_SIGNS = [
 ] as const;
 export type WesternZodiacSign = (typeof WESTERN_ZODIAC_SIGNS)[number];
 
+/**
+ * Item 7's third distinct root cause (beyond extraction never producing a
+ * birthdate attribute at all, and the sidebar never re-fetching mid-
+ * session — both fixed separately): the extraction prompt deliberately
+ * records a birthdate's value "as literally asserted" (taxonomySchema.ts),
+ * by design, for provenance — so a user who types "4/24/1970" gets exactly
+ * that string stored, not a silently-reformatted one. This function used
+ * to accept ONLY strict ISO (YYYY-MM-DD) and returned null on anything
+ * else, which is exactly what happened live: a real, valid, unambiguous
+ * date was stored correctly and then silently failed to parse here, so
+ * the sidebar stayed locked even after a real fix elsewhere. Also accepts
+ * the common US M/D/YYYY or MM/DD/YYYY form.
+ */
 function parseIsoDate(birthdate: string): { year: number; month: number; day: number } | null {
-  const match = birthdate.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (!match) return null;
-  return { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
+  const trimmed = birthdate.trim();
+  const iso = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return { year: Number(iso[1]), month: Number(iso[2]), day: Number(iso[3]) };
+  const us = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (us) return { year: Number(us[3]), month: Number(us[1]), day: Number(us[2]) };
+  return null;
 }
 
 export function getChineseZodiacSign(birthdate: string): ChineseZodiacSign | null {

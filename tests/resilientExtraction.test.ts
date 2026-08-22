@@ -104,6 +104,44 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
     expect(received).toEqual(["Elena", "Marcus"]);
   });
 
+  it("passes precedingReplyText through to the router (item 7: resolving elliptical answers like a bare date)", async () => {
+    const message = captureTestMessage("4/24/1970");
+    let received: string | undefined;
+    const router: ExtractionRouter = {
+      extract: async (request) => {
+        received = request.precedingReplyText;
+        return {
+          provider: "openai",
+          model: "gpt-5.6-terra",
+          taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
+          usage: { inputTokens: 1, outputTokens: 1 }
+        };
+      }
+    };
+
+    await extractMessageWithResilience(eventLog, router, message, undefined, [], "I'd love to. When is it?");
+    expect(received).toBe("I'd love to. When is it?");
+  });
+
+  it("passes precedingReplyText as undefined when none is available, never a placeholder string", async () => {
+    const message = captureTestMessage("A message with no preceding reply.");
+    let received: string | undefined = "sentinel";
+    const router: ExtractionRouter = {
+      extract: async (request) => {
+        received = request.precedingReplyText;
+        return {
+          provider: "openai",
+          model: "gpt-5.6-terra",
+          taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
+          usage: { inputTokens: 1, outputTokens: 1 }
+        };
+      }
+    };
+
+    await extractMessageWithResilience(eventLog, router, message);
+    expect(received).toBeUndefined();
+  });
+
   it("round-trip survival (CLAUDE.md): the knownPeopleNames that shaped this extraction are recorded in its own payload", async () => {
     const message = captureTestMessage("My mom called.");
     const router: ExtractionRouter = {

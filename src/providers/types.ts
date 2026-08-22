@@ -104,6 +104,20 @@ export interface ExtractionRequest {
    * projection as of the last rebuild is a reasonable source.
    */
   knownPeopleNames?: string[];
+  /**
+   * Batch 2, item 7's root cause: per-message extraction previously saw
+   * ONLY the current message's bare text, with zero conversational
+   * context — a real bug found live where the user answered Enso's own
+   * "When is it?" (about their birthday) with the bare text "4/24/1970",
+   * and extraction correctly-by-its-own-narrow-view produced an empty
+   * attributes array, because nothing in "4/24/1970" alone says what the
+   * date IS. Enso's own immediately-preceding reply, when present, is now
+   * passed through so the model can resolve what a short, elliptical
+   * answer refers to before deciding what (if anything) to extract from
+   * it — this is read-only context for INTERPRETATION, never a second
+   * source of facts to extract from.
+   */
+  precedingReplyText?: string;
 }
 
 export interface TokenUsage {

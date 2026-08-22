@@ -31,7 +31,7 @@ export function createGeminiAdapter(apiKey: string): ProviderAdapter {
         model: GEMINI_EXTRACTION_MODEL,
         contents: request.text,
         config: {
-          systemInstruction: buildExtractionSystemPrompt(request.referenceDate ?? new Date().toISOString().slice(0, 10), request.knownPeopleNames ?? []),
+          systemInstruction: buildExtractionSystemPrompt(request.referenceDate ?? new Date().toISOString().slice(0, 10), request.knownPeopleNames ?? [], request.precedingReplyText),
           responseMimeType: "application/json",
           responseSchema: TAXONOMY_JSON_SCHEMA,
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
