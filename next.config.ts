@@ -17,14 +17,27 @@ const nextConfig: NextConfig = {
   // src/ is written for Node's native ESM loader (scripts/chat.ts, vitest,
   // both of which resolve a relative "./foo.js" import to "./foo.ts" the
   // way tsx/vite do) — every relative import in src/ therefore uses an
-  // explicit .js extension pointing at the .ts source. Neither Turbopack
-  // nor webpack do that "js specifier -> ts source" mapping by default;
-  // it's a TypeScript-compiler-level (moduleResolution:"bundler")
-  // convenience, not something bundlers replicate automatically — this is
-  // the standard, documented fix for exactly this combination (confirmed
-  // live: without it, `next dev` fails to resolve the very first relative
-  // import inside any src/ file reached from an API route, under BOTH
-  // Turbopack and webpack).
+  // explicit .js extension pointing at the .ts source, which is correct
+  // NodeNext ESM and must not be rewritten to work around one bundler's
+  // limitation. webpack's `resolve.extensionAlias` below is the standard,
+  // documented fix that actually remaps an already-".js" specifier onto
+  // the real ".ts" file, and it is confirmed live to make every src/
+  // import resolve correctly (see `npm run build`/`npm run dev`, both
+  // pinned to `--webpack` in package.json for exactly this reason).
+  //
+  // Turbopack has NO equivalent of extensionAlias — its `resolveExtensions`
+  // below only appends candidate extensions to an EXTENSIONLESS specifier;
+  // it does not remap a specifier that already ends in ".js" onto a ".ts"
+  // file. A wildcard `resolveAlias` ("*.js" -> "*.ts") was also tried live
+  // and does not fix it either. Concretely: under plain `next dev` / `next
+  // build` (Turbopack, the framework default), every src/-importing API
+  // route 500s and the client bundle fails to compile — confirmed live
+  // across the whole app, not just one file. Do not drop `--webpack` from
+  // the dev/build/start scripts without first confirming Turbopack has
+  // grown a real extensionAlias equivalent; until then this project is not
+  // Turbopack-compatible, despite `next dev`/`next build` appearing to run
+  // (they just serve 500s). The block below is kept only for anyone who
+  // explicitly passes `--turbopack`; it is NOT sufficient on its own.
   turbopack: {
     resolveExtensions: [".tsx", ".ts", ".jsx", ".js", ".mjs", ".json"]
   },

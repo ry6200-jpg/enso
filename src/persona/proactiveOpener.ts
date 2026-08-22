@@ -3,9 +3,16 @@
  * the old repo (/home/yer/gemini_project) sent a fixed first message
  * immediately on load for a genuinely new user, rather than waiting for
  * them to speak into an empty page. This is that behavior; the mechanism
- * (client-side, gated on GET /api/history genuinely holding zero messages
- * for the user, never rebuilt) is unchanged — only the text changed, and
- * only once since, for EN-097's first-session-introduction batch below.
+ * (server-owned, GET /api/history substitutes this text when the log
+ * genuinely holds zero messages for the user, never rebuilt) is unchanged
+ * in effect — only the text changed, and only once since, for EN-097's
+ * first-session-introduction batch below. Originally the client (app/
+ * page.tsx) imported this constant directly and applied the same
+ * empty-history fallback itself; that duplicated the string in two places
+ * and broke under Turbopack (which can't resolve this file's .js-suffixed
+ * sibling imports from client-bundled code — see next.config.ts), so
+ * app/api/history/route.ts now owns the substitution and page.tsx just
+ * renders whatever GET /api/history returns.
  *
  * EN-097 revision: the previous text ("Hi, I'm Enso. I'd love to get to
  * know you a little before we start — what should I call you?") was a
@@ -39,9 +46,10 @@
  * turn after that, once the quick housekeeping is done.
  *
  * Deliberately NOT an LLM call and NOT a persisted event: it's a literal,
- * unvarying string the client renders directly (see app/page.tsx) — the
- * user's explicit requirement was FIXED, not varied, and no chat pipeline
- * run actually produced it, so recording it as a reply_sent event would
+ * unvarying string that GET /api/history substitutes for an empty result
+ * (see app/api/history/route.ts) — the user's explicit requirement was
+ * FIXED, not varied, and no chat pipeline run actually produced it, so
+ * recording it as a reply_sent event would
  * fabricate provenance (contextProvenance/router/gateActions) for a turn
  * that never happened. It only ever appears once, gated on GET
  * /api/history genuinely holding zero messages for the user — once they

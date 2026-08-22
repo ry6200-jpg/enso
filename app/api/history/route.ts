@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getConversationHistory } from "../../../src/conversation/conversationHistory.js";
 import { getDevUserId, getStores } from "../../../lib/serverPipeline.js";
+import { PROACTIVE_OPENER_MESSAGE } from "../../../src/persona/proactiveOpener.js";
 
 /**
  * Item 9: the chat page reads its message history from here on mount,
@@ -9,9 +10,20 @@ import { getDevUserId, getStores } from "../../../lib/serverPipeline.js";
  * never touched). An empty result here is also how the client knows a
  * session is genuinely fresh, for the proactive-opener check (item 13) —
  * no separate "is this the first session" endpoint needed.
+ *
+ * The opener text itself is owned entirely server-side: when the log is
+ * genuinely empty, this response substitutes the fixed opener line rather
+ * than an empty array. Previously app/page.tsx imported
+ * src/persona/proactiveOpener.ts directly to render this same fallback —
+ * two sources for one string, and the one Turbopack couldn't bundle for
+ * the client (see next.config.ts). The substituted message is still never
+ * written to the event log — see proactiveOpener.ts for why.
  */
 export async function GET(): Promise<Response> {
   const userId = getDevUserId();
   const { eventLog } = getStores();
-  return NextResponse.json({ messages: getConversationHistory(eventLog, userId) });
+  const messages = getConversationHistory(eventLog, userId);
+  return NextResponse.json({
+    messages: messages.length > 0 ? messages : [{ id: "proactive-opener", role: "enso" as const, text: PROACTIVE_OPENER_MESSAGE }]
+  });
 }

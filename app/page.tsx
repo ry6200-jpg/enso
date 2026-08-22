@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import ZodiacSidebar from "./components/ZodiacSidebar";
-import { PROACTIVE_OPENER_MESSAGE } from "../src/persona/proactiveOpener.js";
 
 interface ChatMessage {
   id: string;
@@ -39,8 +38,15 @@ interface AttachmentStatus {
  *
  * Item 13: on a genuinely fresh session Enso proactively opens with a
  * fixed line rather than waiting for the user to speak first. That opener
- * is rendered directly, never round-tripped through /api/chat — see
+ * is never round-tripped through /api/chat — see
  * src/persona/proactiveOpener.ts for why it's deliberately not persisted.
+ * The text itself is owned server-side by GET /api/history (it substitutes
+ * the opener for an empty result), not imported here — a prior version of
+ * this file imported proactiveOpener.ts directly for the same fallback,
+ * which both duplicated the string and broke the Turbopack client bundle
+ * (see next.config.ts: Turbopack can't resolve this codebase's .js-
+ * suffixed imports the way webpack can, so a src/ import that's fine
+ * server-side can still fail once it's reachable from client code).
  *
  * Item 9 (conversation appeared to vanish on refresh — confirmed via
  * direct dev-data inspection that the event log had every message intact
@@ -118,7 +124,7 @@ export default function Page() {
       .then((r) => r.json())
       .then((json: { messages: ChatMessage[] }) => {
         if (cancelled) return;
-        setMessages(json.messages.length > 0 ? json.messages : [{ id: crypto.randomUUID(), role: "enso", text: PROACTIVE_OPENER_MESSAGE }]);
+        setMessages(json.messages);
       })
       .catch(() => {});
     return () => {

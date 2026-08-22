@@ -9,7 +9,10 @@
     "test:watch": "vitest --exclude '**/*.live.test.ts'",
     "demo": "tsx scripts/demo.ts",
     "chat": "node --env-file=.env --import tsx scripts/chat.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
+    "start": "next start"
   },
   "dependencies": {
     "@google/genai": "^2.18.0",
