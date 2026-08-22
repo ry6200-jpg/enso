@@ -333,7 +333,7 @@ export function findEligibleSelfFactCandidates(projections: ProjectionsDb, event
  * low-stakes turns" philosophy — but the moment either signal is present
  * anywhere in the recent window, this returns true and the whole
  * curiosity-turn axis is suppressed regardless of what candidates exist.
- * See R<TBD> in the regression ledger: taking a turn while the person is
+ * See R31 in the regression ledger: taking a turn while the person is
  * winding down is the new named failure class this half of the
  * discriminator exists to prevent; staying silent while they're still open
  * is the ledger's OTHER, opposite failure this same function exists to fix.
