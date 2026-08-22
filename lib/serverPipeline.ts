@@ -147,3 +147,42 @@ export function getDailyContentCache(): DailyContentCache {
   if (!cache.dailyContentCache) cache.dailyContentCache = new DailyContentCache(path.join(DEV_DATA_DIR, "dailyContent.db"));
   return cache.dailyContentCache;
 }
+
+/**
+ * The gap that made /wipe (correctly, at the file level — see
+ * scripts/chat.ts's performWipe) look broken through the web app: this
+ * module caches EventLog/ProjectionsDb/RetrievalDb/DailyContentCache
+ * connections on globalThis so Next.js dev-mode hot reload doesn't reopen
+ * them every HMR cycle. But an EXTERNAL wipe (the REPL, a separate OS
+ * process, deleting and recreating ./dev-data) has no way to touch this
+ * process's already-open file descriptors — they silently become bound
+ * to the deleted (but still-readable/writable-via-fd) old files. Reads
+ * through the web app after that point return whatever was last cached;
+ * writes go into those orphaned files, invisible to any fresh connection
+ * at the real path (the REPL, a direct query, or this same process after
+ * a restart) — reproduced live and confirmed: a message sent through the
+ * web app after an external wipe never appeared in a subsequent direct
+ * query of events.db.
+ *
+ * Fix: give the web app's OWN process a wipe path that closes its own
+ * cached connections before deleting ./dev-data, so nothing is ever
+ * orphaned. This is the same underlying delete-and-recreate operation
+ * scripts/chat.ts's /wipe already does — exposed here so it can run
+ * in-process for the surface that actually holds long-lived connections.
+ * A wipe triggered externally (REPL) while the web app keeps running
+ * still requires restarting the web app — no in-process fix can reach
+ * into a different OS process's file descriptors.
+ */
+export function resetDevData(): void {
+  cache.eventLog?.close();
+  cache.projectionsDb?.close();
+  cache.retrievalDb?.close();
+  cache.dailyContentCache?.close();
+  fs.rmSync(DEV_DATA_DIR, { recursive: true, force: true });
+  cache.eventLog = undefined;
+  cache.projectionsDb = undefined;
+  cache.retrievalDb = undefined;
+  cache.blobStore = undefined;
+  cache.dailyContentCache = undefined;
+  ensureDevDataDir();
+}
