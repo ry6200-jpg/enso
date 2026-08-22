@@ -15,13 +15,15 @@ export const ROUTER_JSON_SCHEMA = {
       required: ["mode", "entityId", "temporalWeight", "n"],
       additionalProperties: false
     },
-    circleBack: {
+    curiosityTurn: {
       type: "object",
       properties: {
         fire: { type: "boolean" },
-        entityId: { type: ["string", "null"] }
+        kind: { type: ["string", "null"], enum: ["selfFact", "thirdParty", "connectDot", null] },
+        entityId: { type: ["string", "null"] },
+        attribute: { type: ["string", "null"], enum: ["location", "occupation", null] }
       },
-      required: ["fire", "entityId"],
+      required: ["fire", "kind", "entityId", "attribute"],
       additionalProperties: false
     },
     attestation: {
@@ -44,7 +46,7 @@ export const ROUTER_JSON_SCHEMA = {
       additionalProperties: false
     }
   },
-  required: ["retrieval", "circleBack", "attestation", "register"],
+  required: ["retrieval", "curiosityTurn", "attestation", "register"],
   additionalProperties: false
 } as const;
 
@@ -62,12 +64,16 @@ export function buildRouterSystemPrompt(request: RouterRequest): string {
     request.knownEntities.length > 0
       ? request.knownEntities.map((e) => `- ${e.name} (id: ${e.entityId})`).join("\n")
       : "(none on record yet)";
-  const circleBackBlock =
-    request.circleBackCandidates.length > 0
-      ? request.circleBackCandidates
-          .map((c) => `- ${c.name} (id: ${c.entityId}) — attempt ${c.attemptNumber}${c.attemptNumber === 2 ? `, first asked ${c.mentionAgeLabel} and unanswered; this would be the final attempt` : ""}`)
+  const curiosityCandidatesBlock =
+    request.curiosityCandidates.length > 0
+      ? request.curiosityCandidates
+          .map((c) =>
+            c.kind === "selfFact"
+              ? `- [selfFact] attribute="${c.attribute}" — you don't have the owner's ${c.attribute} on record yet`
+              : `- [thirdParty] ${c.candidate.name} (id: ${c.candidate.entityId}) — attempt ${c.candidate.attemptNumber}${c.candidate.attemptNumber === 2 ? `, first asked ${c.candidate.mentionAgeLabel} and unanswered; this would be the final attempt` : ""}`
+          )
           .join("\n")
-      : "(no eligible candidates this turn)";
+      : "(no eligible ask-candidates this turn)";
   const claimsBlock =
     request.recentAttributeClaims.length > 0
       ? request.recentAttributeClaims.map((c) => `- ${c.entityName}'s ${c.attribute}: "${c.value}" (extraction event: ${c.extractionEventId})`).join("\n")
@@ -93,10 +99,18 @@ ${recentWindowBlock}
 People already on record (for entity-mode retrieval ONLY — entityId must come from here or be null):
 ${knownEntitiesBlock}
 
-2. CIRCLE-BACK — should this reply also gently ask who one of the people below is? Only ever fire on an id from the exact candidate list (never invent one, never fire on someone not listed). DEFAULT TO FIRING whenever the list below is non-empty and the current message is an ordinary, low-stakes moment — a routine update, a plan, small talk, anything without real emotional weight: that is exactly the right kind of turn to slip in a brief, natural "by the way, who's [name]?", and it is the common, EXPECTED outcome when a candidate is eligible, not a rare exception to reach for cautiously. Only decline (fire=false) when firing would genuinely be bad timing: the CURRENT message is itself a direct question that needs a real answer, or the user is sharing something emotionally weighty that a circle-back would interrupt or trivialize. If the candidate list below is empty, fire is always false — there's nothing to ask about.
+2. CURIOSITY TURN — should this reply proactively take a turn, either by asking about ONE specific missing piece of information or by connecting an observation across what you already know? This is never about filling silence with a generic question — only fire when there is genuine, specific content below to offer.
 
-Circle-back-eligible candidates this turn (already filtered by cooldown/attempt limits — you only ever pick ONE of these, or none):
-${circleBackBlock}
+curiosityTurnEligible this turn: ${request.curiosityTurnEligible ? "true" : "false"}. If this is false, fire MUST be false and kind MUST be null, no matter what you notice — the timing itself has already been screened out in code (your own last reply left something open, or recent turns show the person winding down rather than staying engaged), and nothing below can override that.
+
+Ask-candidates this turn (already filtered by cooldown/attempt limits and priority — you only ever pick ONE, or none):
+${curiosityCandidatesBlock}
+- kind="selfFact": attribute MUST exactly match one tagged [selfFact] above.
+- kind="thirdParty": entityId MUST exactly match one tagged [thirdParty] above.
+
+You may instead choose kind="connectDot" (entityId and attribute both null) when curiosityTurnEligible is true and making a connecting observation — noticing a real pattern from what you already know about this person — would serve this moment better than asking something new. Only choose this when a genuine pattern actually exists; never invent one to fill the slot.
+
+If curiosityTurnEligible is true but the ask-candidate list above is empty AND no genuine connecting observation exists, fire MUST still be false — there is nothing to say yet, and that is the correct outcome, not a gap to paper over. Separately, even when otherwise eligible, decline (fire=false) if the CURRENT message is itself a direct question needing a real answer, or shares something emotionally weighty enough that even a brief aside would interrupt or trivialize it.
 
 3. ATTESTATION — is the CURRENT message the owner EXPLICITLY affirming one specific value listed below as correct (e.g. "yes, that's right," "May 12 exactly")? A bare continuer ("yeah," "ok," "mm," "sure," "sounds right" with no specific value re-addressed) is NEVER an affirmation — isAffirmation must be false for those. It must also be false if the message corrects or contradicts the value, or addresses something not in this list at all. Only set isAffirmation true when the message specifically and unambiguously affirms one of these exact values; entityName/attribute/value must then exactly match one entry below (copy it verbatim), never a paraphrase.
 

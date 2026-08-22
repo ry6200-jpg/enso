@@ -110,7 +110,8 @@ describe("Validation bank — router flags (EN-075)", () => {
       message: "How's my mom doing?",
       recentTurns: [],
       knownEntities: [{ entityId: "e-elena", name: "Elena" }],
-      circleBackCandidates: [],
+      curiosityTurnEligible: true,
+      curiosityCandidates: [],
       recentAttributeClaims: []
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
@@ -123,7 +124,7 @@ describe("Validation bank — router flags (EN-075)", () => {
   }, 180_000);
 
   it("A2 (negative): with no known entities, never fabricates entity mode", async () => {
-    const request: RouterRequest = { message: "How's my mom doing?", recentTurns: [], knownEntities: [], circleBackCandidates: [], recentAttributeClaims: [] };
+    const request: RouterRequest = { message: "How's my mom doing?", recentTurns: [], knownEntities: [], curiosityTurnEligible: true, curiosityCandidates: [], recentAttributeClaims: [] };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
       const pass = decision.retrieval.mode !== "entity";
@@ -138,13 +139,14 @@ describe("Validation bank — router flags (EN-075)", () => {
       message: "Just got back from grabbing coffee, nothing major today.",
       recentTurns: [],
       knownEntities: [],
-      circleBackCandidates: [{ entityId: "c-marcus", name: "Marcus", attemptNumber: 1, mentionAgeLabel: "earlier today", stableKey: "stable-c-marcus" }],
+      curiosityTurnEligible: true,
+      curiosityCandidates: [{ kind: "thirdParty", candidate: { entityId: "c-marcus", name: "Marcus", attemptNumber: 1, mentionAgeLabel: "earlier today", stableKey: "stable-c-marcus" } }],
       recentAttributeClaims: []
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
-      const pass = decision.circleBack.fire === true && decision.circleBack.entityId === "c-marcus";
-      return { index: i, pass, detail: JSON.stringify(decision.circleBack) };
+      const pass = decision.curiosityTurn.fire === true && decision.curiosityTurn.kind === "thirdParty" && decision.curiosityTurn.entityId === "c-marcus";
+      return { index: i, pass, detail: JSON.stringify(decision.curiosityTurn) };
     });
     reportConfusionMatrix("B1 circle-back positive", outcomes);
     expect(outcomes.filter((o) => o.pass).length).toBeGreaterThanOrEqual(PASS_THRESHOLD);
@@ -155,13 +157,14 @@ describe("Validation bank — router flags (EN-075)", () => {
       message: "I'm honestly feeling pretty overwhelmed right now and just need to vent for a second.",
       recentTurns: [],
       knownEntities: [],
-      circleBackCandidates: [{ entityId: "c-marcus", name: "Marcus", attemptNumber: 1, mentionAgeLabel: "earlier today", stableKey: "stable-c-marcus" }],
+      curiosityTurnEligible: true,
+      curiosityCandidates: [{ kind: "thirdParty", candidate: { entityId: "c-marcus", name: "Marcus", attemptNumber: 1, mentionAgeLabel: "earlier today", stableKey: "stable-c-marcus" } }],
       recentAttributeClaims: []
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
-      const pass = decision.circleBack.fire === false;
-      return { index: i, pass, detail: JSON.stringify(decision.circleBack) };
+      const pass = decision.curiosityTurn.fire === false;
+      return { index: i, pass, detail: JSON.stringify(decision.curiosityTurn) };
     });
     reportConfusionMatrix("B2 circle-back negative (asymmetric: false positive is the costly error)", outcomes);
     expect(outcomes.filter((o) => o.pass).length).toBeGreaterThanOrEqual(PASS_THRESHOLD);
@@ -172,7 +175,8 @@ describe("Validation bank — router flags (EN-075)", () => {
       message: "Yes, that's right, she's in Seattle.",
       recentTurns: [{ role: "enso", text: "Last I heard, Elena was settling into Seattle." }],
       knownEntities: [{ entityId: "e-elena", name: "Elena" }],
-      circleBackCandidates: [],
+      curiosityTurnEligible: true,
+      curiosityCandidates: [],
       recentAttributeClaims: [{ entityName: "Elena", attribute: "location", value: "Seattle", extractionEventId: "ext1" }]
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
@@ -189,7 +193,8 @@ describe("Validation bank — router flags (EN-075)", () => {
       message: "yeah",
       recentTurns: [{ role: "enso", text: "Last I heard, Elena was settling into Seattle." }],
       knownEntities: [{ entityId: "e-elena", name: "Elena" }],
-      circleBackCandidates: [],
+      curiosityTurnEligible: true,
+      curiosityCandidates: [],
       recentAttributeClaims: [{ entityName: "Elena", attribute: "location", value: "Seattle", extractionEventId: "ext1" }]
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {

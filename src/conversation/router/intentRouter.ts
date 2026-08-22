@@ -43,11 +43,25 @@ function validateDecision(raw: RouterDecision, request: RouterRequest): { decisi
     decision.retrieval.n = 10;
   }
 
-  if (decision.circleBack.fire) {
-    const known = request.circleBackCandidates.some((c) => c.entityId === decision.circleBack.entityId);
-    if (!known) {
-      reasons.push(`circleBack.entityId ${JSON.stringify(decision.circleBack.entityId)} is not an eligible candidate — suppressed`);
-      decision.circleBack = { fire: false, entityId: null };
+  if (decision.curiosityTurn.fire) {
+    if (!request.curiosityTurnEligible) {
+      reasons.push("curiosityTurn.fire=true but curiosityTurnEligible was false this turn — suppressed (EN-030 condition B precondition)");
+      decision.curiosityTurn = { fire: false, kind: null, entityId: null, attribute: null };
+    } else if (decision.curiosityTurn.kind === "thirdParty") {
+      const known = request.curiosityCandidates.some((c) => c.kind === "thirdParty" && c.candidate.entityId === decision.curiosityTurn.entityId);
+      if (!known) {
+        reasons.push(`curiosityTurn.entityId ${JSON.stringify(decision.curiosityTurn.entityId)} is not an eligible thirdParty candidate — suppressed`);
+        decision.curiosityTurn = { fire: false, kind: null, entityId: null, attribute: null };
+      }
+    } else if (decision.curiosityTurn.kind === "selfFact") {
+      const known = request.curiosityCandidates.some((c) => c.kind === "selfFact" && c.attribute === decision.curiosityTurn.attribute);
+      if (!known) {
+        reasons.push(`curiosityTurn.attribute ${JSON.stringify(decision.curiosityTurn.attribute)} is not an eligible selfFact candidate — suppressed`);
+        decision.curiosityTurn = { fire: false, kind: null, entityId: null, attribute: null };
+      }
+    } else if (decision.curiosityTurn.kind !== "connectDot") {
+      reasons.push(`curiosityTurn.kind ${JSON.stringify(decision.curiosityTurn.kind)} is not a recognized kind — suppressed`);
+      decision.curiosityTurn = { fire: false, kind: null, entityId: null, attribute: null };
     }
   }
 
@@ -72,7 +86,7 @@ function validateDecision(raw: RouterDecision, request: RouterRequest): { decisi
  * certifiedProviders: which provider(s) this phase's N=20 bank (EN-074/075)
  * has actually validated for gate judgment — only openai/gpt-5.6-terra by
  * default. A decision served by any other provider gets its gates
- * (circleBack, attestation, and EN-048's register — zen forced back to
+ * (curiosityTurn, attestation, and EN-048's register — zen forced back to
  * natural, the same no-action treatment as the other two) forced to
  * no-action (EN-083); retrieval mode is not a gate in this sense (it has
  * its own safe fallback already, and a wrong retrieval mode degrades
@@ -116,11 +130,11 @@ export function createIntentRouter(
       }
 
       const isCertified = certifiedProviders.has(raw.provider);
-      if (!isCertified && (decision.circleBack.fire || decision.attestation.isAffirmation || decision.register.mode === "zen")) {
+      if (!isCertified && (decision.curiosityTurn.fire || decision.attestation.isAffirmation || decision.register.mode === "zen")) {
         reasons.push(`gates bypassed to no-action: decision served by uncertified tier "${raw.provider}" (EN-083)`);
         decision = {
           ...decision,
-          circleBack: { fire: false, entityId: null },
+          curiosityTurn: { fire: false, kind: null, entityId: null, attribute: null },
           attestation: { isAffirmation: false, entityName: null, attribute: null, value: null },
           register: { mode: "natural" }
         };

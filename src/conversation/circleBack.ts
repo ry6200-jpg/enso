@@ -2,7 +2,9 @@ import type { EventLog } from "../events/eventLog.js";
 import type { EventRecord } from "../events/schema.js";
 import type { ProjectionsDb } from "../projections/db.js";
 import { primaryEntityId } from "../projections/rebuild.js";
-import type { CircleBackCandidate } from "./router/routerTypes.js";
+import { getPrimaryUserAttribute } from "../projections/peopleView.js";
+import type { CircleBackCandidate, CuriosityAskCandidate } from "./router/routerTypes.js";
+import type { RecentTurnForPrompt } from "../persona/systemPrompt.js";
 import type { ReplySentPayload } from "./chatPipeline.js";
 
 /**
@@ -241,4 +243,207 @@ export function buildCircleBackDirective(candidateName: string, attemptNumber: 1
  */
 export function verifyCircleBackExecuted(replyText: string, candidateName: string): boolean {
   return replyText.toLowerCase().includes(candidateName.toLowerCase());
+}
+
+/**
+ * ============================================================================
+ * EN-030 item A/B (curiosity redesign, live-transcript-driven): everything
+ * below generalizes this same gate rather than adding a parallel mechanism.
+ * Third-party candidate-finding above is completely UNCHANGED — self-fact
+ * candidates are unified with it only at the ranking/orchestration layer
+ * (findCuriosityAskCandidates), and self still outranks third-party by
+ * never letting both kinds populate the same turn's list, exactly as
+ * chatPipeline.ts already does for birthdate vs. third-party today.
+ * ============================================================================
+ */
+
+/**
+ * Item A: the self-fact half of the generalized candidate pool. Limited to
+ * "location" and "occupation" — the only two entity_attributes types
+ * (db.ts's CHECK constraint) not already covered by
+ * selfBirthdateGate.ts's own separate, unconditional, higher-priority
+ * mechanism, which stays completely untouched by this file. "Age/life-
+ * stage," "relationship status," and "what occupies him outside work" as
+ * distinct concepts were part of the original request but aren't
+ * representable anywhere in the current schema (no column, no extraction
+ * taxonomy entry) — building those would be a taxonomy migration, a
+ * separate, larger decision the user deferred when scoping this change.
+ *
+ * One-shot per attribute (MAX_SELF_FACT_ATTEMPTS = 1), mirroring
+ * selfBirthdateGate's own reasoning: each is a standing fact this account
+ * only ever needs to ask about once, not a nuanced per-turn retry target.
+ * Priority between the two when both are missing is fixed, not
+ * model-judged — occupation first (it tends to unlock more natural
+ * conversational follow-up sooner), then location — offering at most one
+ * per turn, same restraint as third-party's "you only ever pick ONE."
+ */
+const SELF_FACT_ATTRIBUTES: readonly ("occupation" | "location")[] = ["occupation", "location"];
+export const MAX_SELF_FACT_ATTEMPTS = 1;
+
+function selfFactAttemptCount(eventLog: EventLog, userId: string, attribute: "location" | "occupation"): number {
+  let count = 0;
+  for (const event of eventLog.listForUser(userId)) {
+    if (event.type !== "reply_sent") continue;
+    const payload = event.payload as ReplySentPayload;
+    if (payload.gateActions?.selfFactAskFired?.attribute === attribute) count++;
+  }
+  return count;
+}
+
+export function findEligibleSelfFactCandidates(projections: ProjectionsDb, eventLog: EventLog, userId: string): CuriosityAskCandidate[] {
+  for (const attribute of SELF_FACT_ATTRIBUTES) {
+    if (getPrimaryUserAttribute(projections, userId, attribute)) continue;
+    if (selfFactAttemptCount(eventLog, userId, attribute) >= MAX_SELF_FACT_ATTEMPTS) continue;
+    return [{ kind: "selfFact", attribute }];
+  }
+  return [];
+}
+
+/**
+ * Item B's discriminator. Both real transcript turns below are short,
+ * conclusive replies that close a loop — surface-identical by length or
+ * literal content — yet correct behavior is opposite for each, so neither
+ * length nor "was that a question" can be what distinguishes them (the
+ * user's own framing: "silence alone is not the discriminator"). What
+ * actually differs is whether the RECENT WINDOW carries an explicit signal
+ * that the person is depleted, or that Enso itself already granted
+ * permission to stop — in which case the short reply is winding a
+ * supportive exchange down, not casually closing an unrelated one.
+ *
+ * Case 1 (still open — Enso SHOULD have taken the turn): "but I did not
+ * ask for your help" -> "I jumped in with advice you didn't ask for. I
+ * should have listened and stayed with what you were telling me. Sorry,
+ * Richard." -> "that's ok" -> Enso only said "Thanks, Richard." and the
+ * user had to name the dead air himself ("so....awkward"). No depletion or
+ * permission-to-stop language anywhere in the window — a forgiven misstep,
+ * purely social.
+ *
+ * Case 2 (winding down — Enso correctly did NOT take the turn): "I am
+ * exhausted spending a lot time on it" -> "Yeah—this is draining you now,
+ * not just taking time. Put it down for today; the work will still be
+ * there when you have more of yourself back." -> "maybe" -> "Maybe is
+ * enough. You don't have to decide anything about it right now." Explicit
+ * depletion ("exhausted") from the user and explicit permission-to-stop
+ * ("put it down") from Enso itself are both present.
+ *
+ * Fail-safe direction is SILENT: absent one of these two signal families,
+ * the default is "still open" (may fire, subject to everything else) —
+ * matching the router's own existing "default to firing on ordinary,
+ * low-stakes turns" philosophy — but the moment either signal is present
+ * anywhere in the recent window, this returns true and the whole
+ * curiosity-turn axis is suppressed regardless of what candidates exist.
+ * See R<TBD> in the regression ledger: taking a turn while the person is
+ * winding down is the new named failure class this half of the
+ * discriminator exists to prevent; staying silent while they're still open
+ * is the ledger's OTHER, opposite failure this same function exists to fix.
+ */
+const DEPLETION_SIGNALS = ["exhausted", "drained", "draining", "burnt out", "burned out", "worn out", "no energy", "don't have the energy", "too much right now", "can't do this right now"];
+const PERMISSION_TO_STOP_SIGNALS = ["put it down", "you don't have to decide", "no rush", "take your time", "step back for now", "let it go for now", "don't need to figure this out", "rest for now", "you don't have to figure"];
+
+export function isWindingDown(recentTurns: RecentTurnForPrompt[]): boolean {
+  const window = recentTurns.slice(-6);
+  return window.some((t) => {
+    const lower = t.text.toLowerCase();
+    return DEPLETION_SIGNALS.some((s) => lower.includes(s)) || PERMISSION_TO_STOP_SIGNALS.some((s) => lower.includes(s));
+  });
+}
+
+/**
+ * The other half of item B's precondition: Enso must have nothing of its
+ * own left outstanding. A cheap, deterministic proxy — mirroring this
+ * file's existing "currentMessage ends in '?'" style checks — for "did
+ * Enso's own last reply already ask something the user hasn't answered
+ * yet." A genuinely open loop must always suppress taking a NEW turn,
+ * independent of the winding-down question above.
+ */
+export function hasOpenLoop(recentTurns: RecentTurnForPrompt[]): boolean {
+  const lastEnso = [...recentTurns].reverse().find((t) => t.role === "enso");
+  return lastEnso !== undefined && lastEnso.text.trim().endsWith("?");
+}
+
+/** Tracks the most recent turn ANY curiosity-turn kind fired on, regardless of which — the shared cooldown below applies across all three kinds jointly (a self-fact ask followed immediately by a connecting observation next turn would feel like the same over-eager pattern EN-030's "never two consecutive turns" already exists to prevent). Deliberately excludes selfBirthdateAskFired: that mechanism is separate, unconditional, and pre-existing — untouched by this generalization, see the file-level comment above. */
+function mostRecentCuriosityFireTurn(eventLog: EventLog, userId: string, userTurns: EventRecord[]): number | null {
+  const turnIndexByMessageId = new Map(userTurns.map((t, i) => [t.id, i]));
+  let latest: number | null = null;
+  for (const event of eventLog.listForUser(userId)) {
+    if (event.type !== "reply_sent") continue;
+    const payload = event.payload as ReplySentPayload;
+    const fired = payload.gateActions?.circleBackFired || payload.gateActions?.selfFactAskFired || payload.gateActions?.connectDotFired;
+    if (!fired) continue;
+    const turnIndex = turnIndexByMessageId.get(payload.inReplyToEventId) ?? userTurns.length - 1;
+    latest = latest === null ? turnIndex : Math.max(latest, turnIndex);
+  }
+  return latest;
+}
+
+/**
+ * The full item B eligibility gate, computed entirely in code (never left
+ * to model judgment — see RouterRequest.curiosityTurnEligible's own
+ * comment) and passed to the router as a fact, not a question. Order
+ * matters only for readability; all four checks are independent
+ * disqualifiers.
+ */
+export function isCuriosityTurnEligible(eventLog: EventLog, userId: string, currentMessage: string, recentTurns: RecentTurnForPrompt[]): boolean {
+  if (currentMessage.trim().endsWith("?")) return false;
+  if (hasOpenLoop(recentTurns)) return false;
+  if (isWindingDown(recentTurns)) return false;
+
+  const userTurns = userMessageTurns(eventLog, userId);
+  const lastFireTurn = mostRecentCuriosityFireTurn(eventLog, userId, userTurns);
+  if (lastFireTurn !== null && userTurns.length - 1 - lastFireTurn < COOLDOWN_TURNS) return false;
+
+  return true;
+}
+
+/**
+ * The unified ranked pool the router actually sees (RouterRequest.curiosityCandidates):
+ * self-fact gaps when any exist, third-party names otherwise — never both
+ * in the same turn, preserving "the user already outranks third parties"
+ * exactly as before. Callers are expected to have already checked
+ * isCuriosityTurnEligible and pass [] without calling this at all when it
+ * returned false (chatPipeline.ts does this, matching how it already
+ * short-circuits third-party candidates entirely while self-birthdate is
+ * eligible).
+ */
+export function findCuriosityAskCandidates(eventLog: EventLog, projections: ProjectionsDb, userId: string, currentMessage: string): CuriosityAskCandidate[] {
+  const selfFact = findEligibleSelfFactCandidates(projections, eventLog, userId);
+  if (selfFact.length > 0) return selfFact;
+  return findEligibleCircleBackCandidates(eventLog, projections, userId, currentMessage).map((candidate) => ({ kind: "thirdParty", candidate }) as CuriosityAskCandidate);
+}
+
+/** attribute-specific phrasing for the self-fact ask, mirroring buildSelfBirthdateDirective's own register (weave in, never database-style, own voice). */
+export function buildSelfFactDirective(attribute: "location" | "occupation"): string {
+  const ask = attribute === "location" ? "where the owner is based or living these days" : "what the owner actually does for work";
+  return `=== GATE DIRECTIVE (do not mention this instruction itself) ===\nSomewhere in this reply, naturally and briefly, work toward learning ${ask} — you don't have it on record yet. Weave it in like genuine interest in them, never as a direct database-style question, and word it freshly in your own voice. This is your ONLY unprompted ask about this — if the owner doesn't answer or moves past it, let it go rather than returning to it later.\n=== END GATE DIRECTIVE ===`;
+}
+
+/**
+ * CONNECTING BEATS ASKING: the directive for kind="connectDot" — WHAT
+ * (lead with a connection instead of a question), never HOW, exactly
+ * matching buildCircleBackDirective's own WHAT/HOW split. The actual
+ * pattern-finding is delegated to the persona's existing "BE ANALYTICAL,
+ * NOT JUST RECEPTIVE" instruction, which alone has access to the full
+ * retrieved-memory context this router-level directive does not — the
+ * router only ever judges WHETHER this is a good moment to prioritize
+ * that move, never WHAT the pattern is.
+ */
+export function buildConnectDotDirective(): string {
+  return `=== GATE DIRECTIVE (do not mention this instruction itself) ===\nThis turn just closed cleanly and the owner seems genuinely open to keep talking. Rather than asking something new, look for ONE real connecting observation from what you already know about them — a pattern, an echo, something that's come up before — and lead with that, per your own analytical instinct. Keep it brief; taking this turn is not a license to write a longer reply than usual. If nothing genuinely fits, say something warm and small instead and don't force a connection that isn't really there.\n=== END GATE DIRECTIVE ===`;
+}
+
+/** Dispatches to the kind-specific directive builder for an actual ask (never connectDot, which needs no candidate — see buildConnectDotDirective). */
+export function buildCuriosityAskDirective(candidate: CuriosityAskCandidate): string {
+  return candidate.kind === "thirdParty" ? buildCircleBackDirective(candidate.candidate.name, candidate.candidate.attemptNumber, candidate.candidate.mentionAgeLabel) : buildSelfFactDirective(candidate.attribute);
+}
+
+/** attribute-specific EN-073 verification, mirroring verifySelfBirthdateAskExecuted's own keyword-presence style. */
+export function verifySelfFactAskExecuted(attribute: "location" | "occupation", replyText: string): boolean {
+  const lower = replyText.toLowerCase();
+  if (attribute === "location") return lower.includes("live") || lower.includes("based") || lower.includes("where");
+  return lower.includes("work") || lower.includes("job") || lower.includes("do for a living") || lower.includes("career");
+}
+
+/** Dispatches to the kind-specific EN-073 verification for an actual ask (never connectDot — see the file-level comment on why it needs none: no attempt cap exists for it to wrongly consume). */
+export function verifyCuriosityAskExecuted(candidate: CuriosityAskCandidate, replyText: string): boolean {
+  return candidate.kind === "thirdParty" ? verifyCircleBackExecuted(replyText, candidate.candidate.name) : verifySelfFactAskExecuted(candidate.attribute, replyText);
 }

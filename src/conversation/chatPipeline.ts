@@ -14,7 +14,8 @@ import type { ContentChunkRow, RetrievalDb } from "../retrieval/retrievalDb.js";
 import { assembleContext, DEFAULT_CONTEXT_BUDGETS, type AssembledContext, type ContextBudgets } from "./contextAssembly.js";
 import { decideRetrievalInvocation, type RetrievalInvocation, type RetrievalMode } from "./retrievalInvocation.js";
 import { buildAttachmentContextBlock, type RecentTurnForPrompt, type VoiceMode } from "../persona/systemPrompt.js";
-import { buildCircleBackDirective, findEligibleCircleBackCandidates, verifyCircleBackExecuted } from "./circleBack.js";
+import { buildConnectDotDirective, buildCuriosityAskDirective, findCuriosityAskCandidates, isCuriosityTurnEligible, verifyCuriosityAskExecuted } from "./circleBack.js";
+import type { CuriosityAskCandidate } from "./router/routerTypes.js";
 import { buildSelfBirthdateDirective, isSelfBirthdateEligible, verifySelfBirthdateAskExecuted } from "./selfBirthdateGate.js";
 import { recentAttributeClaims, resolveAttestation, type FactConfirmedPayload } from "./attestation.js";
 import { decideVoiceMode, hasZenTriggerPhrase } from "./voiceMode.js";
@@ -71,6 +72,24 @@ export interface ReplySentPayload {
      * field, never a new event type).
      */
     selfBirthdateAskFired: boolean;
+    /**
+     * EN-030 item A: the generalized self-fact half of the curiosity pool
+     * (location/occupation — birthdate keeps using selfBirthdateAskFired
+     * above, untouched). Non-null only when decided AND EN-073-verified,
+     * same discipline as circleBackFired; circleBack.ts's
+     * findEligibleSelfFactCandidates derives its one-shot-per-attribute cap
+     * from a scan of this field.
+     */
+    selfFactAskFired: { attribute: "location" | "occupation" } | null;
+    /**
+     * EN-030 item B/"connecting beats asking": true whenever the router
+     * decided kind="connectDot" and curiosityTurnEligible was true. No
+     * EN-073 verification exists for this one — unlike an ask, there is no
+     * attempt cap or cooldown resource a false positive could wrongly
+     * consume (see circleBack.ts's buildConnectDotDirective comment), so
+     * this simply records the decision made.
+     */
+    connectDotFired: boolean;
   };
   /**
    * Item 8 round-trip survival: non-null whenever this turn had an
@@ -221,7 +240,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   let invocation: RetrievalInvocation;
   let routerResult: RouterResult | null = null;
   let claims: ReturnType<typeof recentAttributeClaims> = [];
-  let circleBackCandidates: ReturnType<typeof findEligibleCircleBackCandidates> = [];
+  let curiosityCandidates: CuriosityAskCandidate[] = [];
+  let curiosityTurnEligible = false;
   let selfBirthdateEligible = false;
 
   if (input.retrievalOverride) {
@@ -233,7 +253,11 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     // candidates are never even offered to the router this turn, rather
     // than being weighed against a self-candidate on equal footing.
     selfBirthdateEligible = isSelfBirthdateEligible(deps.eventLog, deps.projectionsDb, input.userId, effectiveText);
-    circleBackCandidates = selfBirthdateEligible ? [] : findEligibleCircleBackCandidates(deps.eventLog, deps.projectionsDb, input.userId, effectiveText);
+    // EN-030 item B: the open-loop/winding-down precondition is computed
+    // once here, in code, and short-circuits candidate lookup entirely
+    // when false — never left to the router to notice or ignore.
+    curiosityTurnEligible = !selfBirthdateEligible && isCuriosityTurnEligible(deps.eventLog, input.userId, effectiveText, input.recentTurns);
+    curiosityCandidates = curiosityTurnEligible ? findCuriosityAskCandidates(deps.eventLog, deps.projectionsDb, input.userId, effectiveText) : [];
     const knownEntities = deps.projectionsDb.listEntities(input.userId).map((e) => ({ entityId: e.id, name: e.name }));
     claims = recentAttributeClaims(deps.eventLog, deps.projectionsDb, input.userId);
 
@@ -241,7 +265,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       message: effectiveText,
       recentTurns: input.recentTurns,
       knownEntities,
-      circleBackCandidates,
+      curiosityTurnEligible,
+      curiosityCandidates,
       recentAttributeClaims: claims
     });
 
@@ -259,15 +284,22 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
 
   const candidateChunks = await runRetrieval(deps, input.userId, invocation);
 
-  const circleBackFireEntity =
-    routerResult?.decision.circleBack.fire && routerResult.decision.circleBack.entityId
-      ? (circleBackCandidates.find((c) => c.entityId === routerResult!.decision.circleBack.entityId) ?? null)
-      : null;
+  const curiosityDecision = routerResult?.decision.curiosityTurn;
+  const curiosityAskCandidate: CuriosityAskCandidate | null =
+    curiosityDecision?.fire && curiosityDecision.kind === "thirdParty"
+      ? (curiosityCandidates.find((c) => c.kind === "thirdParty" && c.candidate.entityId === curiosityDecision.entityId) ?? null)
+      : curiosityDecision?.fire && curiosityDecision.kind === "selfFact"
+        ? (curiosityCandidates.find((c) => c.kind === "selfFact" && c.attribute === curiosityDecision.attribute) ?? null)
+        : null;
+  const connectDotDecided = curiosityDecision?.fire === true && curiosityDecision.kind === "connectDot";
+
   const gateDirective = selfBirthdateEligible
     ? buildSelfBirthdateDirective()
-    : circleBackFireEntity
-      ? buildCircleBackDirective(circleBackFireEntity.name, circleBackFireEntity.attemptNumber, circleBackFireEntity.mentionAgeLabel)
-      : null;
+    : curiosityAskCandidate
+      ? buildCuriosityAskDirective(curiosityAskCandidate)
+      : connectDotDecided
+        ? buildConnectDotDirective()
+        : null;
 
   // EN-047/048: cheap literal-trigger layer always wins outright; otherwise
   // the router's own register judgment (already fail-safed to "natural" on
@@ -288,8 +320,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
 
   const callResult = await deps.chatRouter.reply({ system: assembled.systemPrompt, history: [], latestMessage: effectiveText });
 
-  // EN-073: only consume circle-back state (recorded below) if the reply actually executed the directive.
-  const circleBackFired = circleBackFireEntity && verifyCircleBackExecuted(callResult.text, circleBackFireEntity.name) ? circleBackFireEntity : null;
+  // EN-073: only consume curiosity-ask state (recorded below) if the reply actually executed the directive. connectDot has no cap to protect, so it's recorded purely on the decision — see chatPipeline's gateActions.connectDotFired doc comment.
+  const curiosityAskFired = curiosityAskCandidate && verifyCuriosityAskExecuted(curiosityAskCandidate, callResult.text) ? curiosityAskCandidate : null;
   const selfBirthdateAskFired = selfBirthdateEligible && verifySelfBirthdateAskExecuted(callResult.text);
 
   let factConfirmedEvent: EventRecord | undefined;
@@ -325,9 +357,11 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       failureReason: routerResult?.failureReason ?? null
     },
     gateActions: {
-      circleBackFired,
+      circleBackFired: curiosityAskFired?.kind === "thirdParty" ? { entityId: curiosityAskFired.candidate.entityId, name: curiosityAskFired.candidate.name, stableKey: curiosityAskFired.candidate.stableKey } : null,
       attestationConfirmedEventId: factConfirmedEvent?.id ?? null,
-      selfBirthdateAskFired
+      selfBirthdateAskFired,
+      selfFactAskFired: curiosityAskFired?.kind === "selfFact" ? { attribute: curiosityAskFired.attribute } : null,
+      connectDotFired: connectDotDecided
     },
     attachmentContext: attachmentInfo
       ? { sourceEventId: input.attachmentEventId!, filename: attachmentInfo.filename, kind: attachmentInfo.kind, contentInjected: attachmentBlock !== null }

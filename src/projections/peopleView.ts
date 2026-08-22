@@ -50,6 +50,21 @@ export function getPrimaryUserBirthdate(projections: ProjectionsDb, userId: stri
   return rows[rows.length - 1]!.value;
 }
 
+/**
+ * EN-030 item A generalization: the same "does Enso already have this
+ * self-fact on record" lookup as getPrimaryUserBirthdate above, but for any
+ * of the three attribute types entity_attributes actually supports
+ * (db.ts's CHECK constraint: 'birthdate' | 'location' | 'occupation' — the
+ * only three that exist anywhere in this data model). Used by
+ * circleBack.ts's self-fact candidate pool for the two of these not
+ * already covered by selfBirthdateGate.ts's own one-shot mechanism.
+ */
+export function getPrimaryUserAttribute(projections: ProjectionsDb, userId: string, attribute: "birthdate" | "location" | "occupation"): string | null {
+  const rows = projections.listEntityAttributes(userId, primaryEntityId(userId)).filter((r) => r.attribute === attribute);
+  if (rows.length === 0) return null;
+  return rows[rows.length - 1]!.value;
+}
+
 export function getPeopleView(eventLog: EventLog, projections: ProjectionsDb, userId: string): PersonView[] {
   const primary = primaryEntityId(userId);
   const entities = projections.listEntities(userId);

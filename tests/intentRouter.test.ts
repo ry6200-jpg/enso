@@ -9,7 +9,8 @@ const BASE_REQUEST: RouterRequest = {
   message: "hello",
   recentTurns: [],
   knownEntities: [{ entityId: "e1", name: "Elena" }],
-  circleBackCandidates: [{ entityId: "c1", name: "Marcus", attemptNumber: 1, mentionAgeLabel: "earlier today", stableKey: "stable-c1" }],
+  curiosityTurnEligible: true,
+  curiosityCandidates: [{ kind: "thirdParty", candidate: { entityId: "c1", name: "Marcus", attemptNumber: 1, mentionAgeLabel: "earlier today", stableKey: "stable-c1" } }],
   recentAttributeClaims: [{ entityName: "Elena", attribute: "location", value: "Seattle", extractionEventId: "ext1" }]
 };
 
@@ -104,22 +105,60 @@ describe("createIntentRouter — per-axis validation against candidate lists", (
     expect(result.certified).toBe(true);
   });
 
-  it("suppresses circleBack.fire when the model invents an entityId not in circleBackCandidates", async () => {
-    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ circleBack: { fire: true, entityId: "not-a-candidate" } })));
+  it("suppresses curiosityTurn.fire when the model invents an entityId not in curiosityCandidates", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ curiosityTurn: { fire: true, kind: "thirdParty", entityId: "not-a-candidate", attribute: null } })));
     const router = createIntentRouter(primary, primary);
 
     const result = await router.route(BASE_REQUEST);
 
-    expect(result.decision.circleBack).toEqual({ fire: false, entityId: null });
+    expect(result.decision.curiosityTurn).toEqual({ fire: false, kind: null, entityId: null, attribute: null });
   });
 
-  it("keeps circleBack.fire when the entityId IS in circleBackCandidates", async () => {
-    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ circleBack: { fire: true, entityId: "c1" } })));
+  it("keeps curiosityTurn.fire when the entityId IS in curiosityCandidates", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ curiosityTurn: { fire: true, kind: "thirdParty", entityId: "c1", attribute: null } })));
     const router = createIntentRouter(primary, primary);
 
     const result = await router.route(BASE_REQUEST);
 
-    expect(result.decision.circleBack).toEqual({ fire: true, entityId: "c1" });
+    expect(result.decision.curiosityTurn).toEqual({ fire: true, kind: "thirdParty", entityId: "c1", attribute: null });
+  });
+
+  it("suppresses curiosityTurn.fire outright when curiosityTurnEligible was false, regardless of a valid candidate", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ curiosityTurn: { fire: true, kind: "thirdParty", entityId: "c1", attribute: null } })));
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route({ ...BASE_REQUEST, curiosityTurnEligible: false });
+
+    expect(result.decision.curiosityTurn).toEqual({ fire: false, kind: null, entityId: null, attribute: null });
+    expect(result.failureReason).toContain("condition B");
+  });
+
+  it("suppresses curiosityTurn.fire when the model invents an attribute not in the selfFact candidates", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ curiosityTurn: { fire: true, kind: "selfFact", entityId: null, attribute: "occupation" } })));
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(BASE_REQUEST); // BASE_REQUEST's only candidate is thirdParty, not selfFact
+
+    expect(result.decision.curiosityTurn).toEqual({ fire: false, kind: null, entityId: null, attribute: null });
+  });
+
+  it("keeps curiosityTurn.fire for a selfFact attribute that IS in the candidates", async () => {
+    const request: RouterRequest = { ...BASE_REQUEST, curiosityCandidates: [{ kind: "selfFact", attribute: "occupation" }] };
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ curiosityTurn: { fire: true, kind: "selfFact", entityId: null, attribute: "occupation" } })));
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(request);
+
+    expect(result.decision.curiosityTurn).toEqual({ fire: true, kind: "selfFact", entityId: null, attribute: "occupation" });
+  });
+
+  it("keeps curiosityTurn.fire for kind=connectDot with no candidate list needed, same as register", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ curiosityTurn: { fire: true, kind: "connectDot", entityId: null, attribute: null } })));
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.curiosityTurn).toEqual({ fire: true, kind: "connectDot", entityId: null, attribute: null });
   });
 
   it("suppresses attestation when the (entityName, attribute, value) triple doesn't exactly match a recent claim", async () => {
@@ -146,19 +185,19 @@ describe("createIntentRouter — per-axis validation against candidate lists", (
 });
 
 describe("createIntentRouter — EN-083 uncertified-tier gate bypass", () => {
-  it("forces circleBack and attestation to no-action when the decision was served by an uncertified provider, even though it validated cleanly", async () => {
+  it("forces curiosityTurn and attestation to no-action when the decision was served by an uncertified provider, even though it validated cleanly", async () => {
     const primary = vi.fn<RouterAdapter>(async () => {
       throw new ProviderAvailabilityError("503", 503);
     });
     const fallback = vi.fn<RouterAdapter>(async () =>
-      fakeResult("gemini", decisionWith({ circleBack: { fire: true, entityId: "c1" }, attestation: { isAffirmation: true, entityName: "Elena", attribute: "location", value: "Seattle" } }))
+      fakeResult("gemini", decisionWith({ curiosityTurn: { fire: true, kind: "thirdParty", entityId: "c1", attribute: null }, attestation: { isAffirmation: true, entityName: "Elena", attribute: "location", value: "Seattle" } }))
     );
     const router = createIntentRouter(primary, fallback, new Set(["openai"]));
 
     const result = await router.route(BASE_REQUEST);
 
     expect(result.provider).toBe("gemini");
-    expect(result.decision.circleBack).toEqual({ fire: false, entityId: null });
+    expect(result.decision.curiosityTurn).toEqual({ fire: false, kind: null, entityId: null, attribute: null });
     expect(result.decision.attestation.isAffirmation).toBe(false);
     expect(result.certified).toBe(false);
     expect(result.failureReason).toContain("uncertified tier");
@@ -186,7 +225,7 @@ describe("createIntentRouter — EN-083 uncertified-tier gate bypass", () => {
     expect(result.failureReason).toBeNull();
   });
 
-  it("EN-048: forces register.mode from zen back to natural when served by an uncertified provider, same no-action treatment as circleBack/attestation", async () => {
+  it("EN-048: forces register.mode from zen back to natural when served by an uncertified provider, same no-action treatment as curiosityTurn/attestation", async () => {
     const primary = vi.fn<RouterAdapter>(async () => {
       throw new ProviderAvailabilityError("503", 503);
     });
