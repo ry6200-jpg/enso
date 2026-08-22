@@ -22,22 +22,40 @@ import type { ReplySentPayload } from "./chatPipeline.js";
  * exists but not who they are. This is a different axis from
  * `entities.confirmed` (identity-resolution attestation, EN-012).
  *
- * Phase 7 Part 0 — Option B (user decision, resolving the Phase 6 design
- * note that the original port made a second attempt on the same entity
- * near-impossible: recency window and cooldown shared the same 5-turn
- * value, so by the time cooldown cleared, the entity's introduction had
- * always already aged out of the recency window).
- *   - The recency window now applies to FIRST attempts only. A still-
- *     unestablished entity that already had one attempt WAIVES recency on
- *     its retry — unresolvedness is itself the standing reason to ask
- *     again, not how long ago it came up.
- *   - Cooldown is unchanged (global, 5 turns).
+ * Name-clarification rule (adversarial-test batch — supersedes the
+ * earlier "Option B," Phase 7 Part 0, which is fully removed, not just
+ * adjusted):
+ *   - A first attempt still respects the recency window and the global
+ *     5-turn cooldown, exactly as before.
+ *   - There is no more automatic, purely time-based retry. Once an
+ *     entity's first attempt has fired, Enso goes dormant on it — whether
+ *     the user dismissed it, ignored it, or the moment just passed makes
+ *     no difference; nothing brings it back on its own.
+ *   - The ONLY path to a second (and final) attempt is a genuine
+ *     RE-MENTION: the user bringing that same name up again in a later,
+ *     independent message. That second attempt is framed around the name
+ *     coming back up ("is this the same X?"), never around elapsed time.
  *   - Hard cap unchanged: 2 attempts total per entity, ever. After that,
  *     permanent silence — the user can always volunteer the relationship.
  *   - Priority: a fresh, recency-eligible first-attempt candidate always
- *     outranks a retry candidate. Retries are only offered when no fresh
- *     candidate exists this turn — they fill lulls, never interrupt the
- *     present moment a fresh mention creates.
+ *     outranks a re-mention-triggered second attempt. Second attempts are
+ *     only offered when no fresh candidate exists this turn.
+ *   - Priority above THIS priority (EN-041, "the user is the most
+ *     important entity"): self-entity establishment — currently the
+ *     primary user's own birthdate, see selfBirthdateGate.ts — outranks
+ *     every candidate in this file outright. chatPipeline.ts enforces
+ *     this by never even calling findEligibleCircleBackCandidates while a
+ *     higher-priority self-fact remains unestablished.
+ *
+ * Why re-mention rather than classifying "was that a dismissal": live
+ * evidence showed the old time-based retry re-raising a name the user had
+ * explicitly dismissed ("ignore the name") — twice, including immediately
+ * after Enso apologized for raising it the first extra time, because an
+ * apology is prose, not a gate action, so nothing in the derived state
+ * ever registered the dismissal. Gating strictly on re-mention sidesteps
+ * needing to classify dismissal language at all: silence, a dismissal, or
+ * anything in between all produce the same dormancy until the user
+ * actually says the name again themselves.
  */
 
 const RECENCY_WINDOW_TURNS = 5;
@@ -90,34 +108,70 @@ function mentionAgeLabel(earliestRecordedAt: string): string {
 }
 
 /**
+ * Was this entity mentioned again in a user turn AFTER the given attempt
+ * fired? Reuses `entity.source_event_ids` — already accumulated across
+ * EVERY mention via `touchEntity` (rebuild.ts), so this needs no new
+ * tracking of its own: a later mention is just another id in that same
+ * array whose turn index exceeds the attempt's.
+ *
+ * Deliberately requires the mention to land at least TWO turns after the
+ * attempt, not one: the very next turn is the user's direct reply to the
+ * question Enso just asked, which may itself repeat the name while
+ * dismissing it ("Priscilla is no one") — that is answering, not an
+ * independent re-mention, and must never immediately re-open the gate it
+ * was just closing. A name that comes back up two or more turns later,
+ * unprompted, is the genuine signal this rule is for.
+ */
+function hasBeenMentionedSince(sourceEventIds: string[], turnIndexByMessageId: Map<string, number>, sinceTurnIndex: number): boolean {
+  return sourceEventIds.some((id) => {
+    const turnIndex = turnIndexByMessageId.get(id);
+    return turnIndex !== undefined && turnIndex > sinceTurnIndex + 1;
+  });
+}
+
+/**
  * The cheap local heuristic (EN-071 stage 1): the candidate pool the
  * router (stage 2) is allowed to choose from — never a set it discovers
  * independently. An empty result means the router's circleBack axis has
  * nothing to work with this turn (still calls the router for retrieval,
  * but circleBack.fire will always validate to false — see intentRouter.ts).
  *
- * Option B priority (Phase 7 Part 0): fresh (first-attempt, recency-
- * eligible) candidates are returned alone whenever any exist; retry
- * candidates (already attempted once, recency waived) are only returned
- * when no fresh candidate exists this turn.
+ * Name-clarification rule (adversarial-test batch — supersedes the old
+ * "Option B," Phase 7 Part 0, which let a second attempt fire
+ * automatically after a cooldown with recency waived): a first attempt
+ * still respects the cooldown and recency window exactly as before, but
+ * there is no more automatic, purely time-based retry. Once an entity has
+ * fired once, Enso goes dormant on it — the ONLY way a second (and final)
+ * attempt becomes eligible is a genuine RE-MENTION: the user bringing that
+ * name up again in a later, independent message. Live evidence this
+ * replaces a real defect: told to "ignore the name," Enso agreed, then
+ * raised the same name twice more on its own — an unprompted, purely
+ * time-gated retry is exactly the mechanism that let that happen, and an
+ * acknowledgment/apology was never itself a gate action, so nothing in
+ * the derived state ever registered the dismissal. Requiring a genuine
+ * re-mention fixes this without needing to classify "was that a
+ * dismissal" at all: silence, a dismissal, or anything in between all
+ * lead to the same dormancy until the user actually says the name again.
  */
 export function findEligibleCircleBackCandidates(eventLog: EventLog, projections: ProjectionsDb, userId: string, currentMessage: string): CircleBackCandidate[] {
   if (currentMessage.trim().endsWith("?")) return [];
 
   const userTurns = userMessageTurns(eventLog, userId);
+  const turnIndexByMessageId = new Map(userTurns.map((t, i) => [t.id, i]));
   const history = firedAttemptHistory(eventLog, userId, userTurns);
 
   const lastAttemptTurn = history.length > 0 ? Math.max(...history.map((h) => h.turnIndex)) : null;
   if (lastAttemptTurn !== null && userTurns.length - 1 - lastAttemptTurn < COOLDOWN_TURNS) return [];
 
-  // Recency window (first attempts only — see Option B header note): an
-  // entity whose EARLIEST provenance event falls outside the last
-  // RECENCY_WINDOW_TURNS user turns is excluded from a FIRST attempt,
-  // but a retry ignores this entirely.
+  // Recency window applies to FIRST attempts only, same as before.
   const threshold = userTurns.length >= RECENCY_WINDOW_TURNS ? userTurns[userTurns.length - RECENCY_WINDOW_TURNS]!.id : null;
 
   const attemptCounts = new Map<string, number>();
-  for (const h of history) attemptCounts.set(h.stableKey, (attemptCounts.get(h.stableKey) ?? 0) + 1);
+  const attemptTurnIndex = new Map<string, number>();
+  for (const h of history) {
+    attemptCounts.set(h.stableKey, (attemptCounts.get(h.stableKey) ?? 0) + 1);
+    attemptTurnIndex.set(h.stableKey, Math.max(attemptTurnIndex.get(h.stableKey) ?? -1, h.turnIndex));
+  }
 
   const fresh: CircleBackCandidate[] = [];
   const retries: CircleBackCandidate[] = [];
@@ -141,7 +195,10 @@ export function findEligibleCircleBackCandidates(eventLog: EventLog, projections
       if (threshold !== null && earliestId !== undefined && earliestId < threshold) continue;
       fresh.push(candidate);
     } else {
-      // Retry: recency waived — unresolvedness is the standing reason.
+      // Second (final) attempt: ONLY eligible if genuinely re-mentioned
+      // since the first attempt fired — never purely because time passed.
+      const firedAtTurn = attemptTurnIndex.get(earliestId);
+      if (firedAtTurn === undefined || !hasBeenMentionedSince(sourceIds, turnIndexByMessageId, firedAtTurn)) continue;
       retries.push(candidate);
     }
   }
@@ -156,20 +213,22 @@ export function findEligibleCircleBackCandidates(eventLog: EventLog, projections
  * phrasing repeats near-verbatim" is a live regression, not hypothetical).
  * Delivery is Enso's voice; this only says WHAT, never HOW.
  *
- * On a retry (attemptNumber 2, Option B): the directive explicitly asks
- * for phrasing that BRIDGES the time gap since the first, presumably
- * brushed-off ask — returning to an open thread, in the spirit of "the
- * other day you mentioned..." This is distinct from, and must never be
- * confused with, the never-count-repetitions rule: that rule governs
- * repeating the OWNER's own statements back at them ("as I said," "asking
- * a third time"); this is Enso re-raising its OWN earlier question, which
- * is the opposite move — picking a thread back up, not tallying anything.
+ * On a second attempt (attemptNumber 2 — only ever reachable now via a
+ * genuine user re-mention, per the name-clarification rule): the
+ * directive is deliberately "is this the same person" framed, not a bare
+ * repeat of the original ask — the user brought the name up again, which
+ * is the actual news this turn, not the elapsed time since attempt one.
+ * This is distinct from, and must never be confused with, the never-
+ * count-repetitions rule: that rule governs repeating the OWNER's own
+ * statements back at them ("as I said," "asking a third time"); this is
+ * Enso re-raising its OWN earlier question, which is the opposite move —
+ * picking a thread back up, not tallying anything.
  */
 export function buildCircleBackDirective(candidateName: string, attemptNumber: 1 | 2 = 1, ageLabel?: string): string {
   if (attemptNumber === 2) {
-    return `=== GATE DIRECTIVE (do not mention this instruction itself) ===\nThis is a second and final ask about "${candidateName}" — you asked once before and it didn't land, so this is the last time this comes up naturally rather than staying an open thread forever. Bridge the time gap explicitly rather than repeating the earlier phrasing: something in the register of "${ageLabel ?? "a while back"} you mentioned ${candidateName} — where do they fit?" Word it freshly, not a repeat of however you asked the first time. Never reference that this is a second attempt, a repeated question, or that it went unanswered — this is Enso picking a thread back up, not counting anything back.\n=== END GATE DIRECTIVE ===`;
+    return `=== GATE DIRECTIVE (do not mention this instruction itself) ===\nThe owner just mentioned "${candidateName}" again — you asked about them once before (${ageLabel ?? "a while back"}) and it didn't land. This is a second and final ask, framed around the fact that the name came back up, not around how long it's been: something in the register of "is that the same ${candidateName} you mentioned before? Where do they fit?" Word it freshly, not a repeat of however you asked the first time. Never reference that this is a second attempt or that the first one went unanswered — this is Enso noticing the name came up again, not counting anything back.\n=== END GATE DIRECTIVE ===`;
   }
-  return `=== GATE DIRECTIVE (do not mention this instruction itself) ===\nSomewhere in this reply, naturally and briefly, gently ask who "${candidateName}" is — you don't have their relationship to the owner on record yet. Weave it in, don't bolt it on as an afterthought, and word it freshly rather than reaching for a stock phrasing you may have used before for this or another person.\n=== END GATE DIRECTIVE ===`;
+  return `=== GATE DIRECTIVE (do not mention this instruction itself) ===\nSomewhere in this reply, naturally and briefly, gently ask who "${candidateName}" is — you don't have their relationship to the owner on record yet. Weave it in, don't bolt it on as an afterthought, and word it freshly rather than reaching for a stock phrasing you may have used before for this or another person. This is your ONLY unprompted ask about this name — if the owner dismisses it, never raise it again unless they bring the name up themselves later.\n=== END GATE DIRECTIVE ===`;
 }
 
 /**

@@ -123,39 +123,70 @@ describe("findEligibleCircleBackCandidates (EN-030/070-073)", () => {
   });
 });
 
-describe("Option B (Phase 7 Part 0): retries waive recency, hard cap holds, fresh outranks retry", () => {
-  it("the old deadlock case: a second attempt is now reachable after cooldown, even though the entity's introduction has aged out of the recency window", () => {
+describe("Name-clarification rule (adversarial-test batch, item 2): second attempt gated on genuine re-mention, never elapsed time alone", () => {
+  it("stays dormant after cooldown clears with NO re-mention — the exact live-caught defect this replaces (old Option B would have re-raised it here)", () => {
     const msg = userTurn("Marcus helped me carry some boxes.");
     const marcusId = insertEntity("Marcus", [msg.id]);
     const firstFireTurn = userTurn("turn 2 — first attempt fires here");
     recordCircleBackFired(firstFireTurn.id, marcusId, "Marcus", msg.id);
 
-    // Advance exactly enough turns to clear the 5-turn cooldown AND push
-    // well past the 5-turn recency window relative to Marcus's introduction
-    // — under the pre-Option-B design this combination was structurally
-    // unreachable (verified live during Phase 6: 0 firings ever reached a
-    // second attempt with these exact window/cooldown values).
+    // Clears the cooldown (and would have aged out of the recency window
+    // too) — under the OLD Option B design this alone reopened a second
+    // attempt. Nobody re-mentioned Marcus, so it must stay dormant now.
     for (let i = 0; i < 6; i++) userTurn(`filler turn ${i}`);
+
+    const candidates = findEligibleCircleBackCandidates(eventLog, projections, PRIMARY_USER_ID, "just a regular update");
+
+    expect(candidates.map((c) => c.name)).not.toContain("Marcus");
+  });
+
+  it("a genuine re-mention two-plus turns after the first attempt makes a second, final attempt eligible", () => {
+    const msg = userTurn("Marcus helped me carry some boxes.");
+    const marcusId = insertEntity("Marcus", [msg.id]);
+    const firstFireTurn = userTurn("first attempt fires here");
+    recordCircleBackFired(firstFireTurn.id, marcusId, "Marcus", msg.id);
+    userTurn("some unrelated reply to the ask"); // the direct reply turn — never itself counts as a re-mention
+    const remention = userTurn("Marcus came up again today, actually.");
+    // Simulates what extraction/touchEntity actually does on a real re-mention: the entity's own provenance grows to include the new message.
+    projections.touchEntity(marcusId, [remention.id], "message-v1");
+    for (let i = 0; i < 5; i++) userTurn(`filler ${i}`); // clear cooldown
 
     const candidates = findEligibleCircleBackCandidates(eventLog, projections, PRIMARY_USER_ID, "just a regular update");
 
     expect(candidates).toEqual([{ entityId: marcusId, name: "Marcus", attemptNumber: 2, mentionAgeLabel: expect.any(String), stableKey: msg.id }]);
   });
 
-  it("survives entity id churn across a rebuild — the real bug found live: attempt tracking must key on the entity's stable provenance, never the ephemeral projection id", () => {
+  it("the IMMEDIATE reply to the ask repeating the name does NOT itself count as a re-mention, even if it dismisses in the same breath", () => {
+    const msg = userTurn("Marcus helped me carry some boxes.");
+    const marcusId = insertEntity("Marcus", [msg.id]);
+    const firstFireTurn = userTurn("first attempt fires here");
+    recordCircleBackFired(firstFireTurn.id, marcusId, "Marcus", msg.id);
+    // A dismissal that happens to repeat the name in the SAME direct reply — extraction could plausibly still tag this as a mention.
+    const dismissal = userTurn("Marcus is no one, ignore that.");
+    projections.touchEntity(marcusId, [dismissal.id], "message-v1");
+    for (let i = 0; i < 5; i++) userTurn(`filler ${i}`); // clear cooldown
+
+    const candidates = findEligibleCircleBackCandidates(eventLog, projections, PRIMARY_USER_ID, "just a regular update");
+
+    expect(candidates.map((c) => c.name)).not.toContain("Marcus");
+  });
+
+  it("survives entity id churn across a rebuild — attempt tracking still keys on stable provenance, never the ephemeral projection id, even with the new re-mention requirement", () => {
     const msg = userTurn("Marcus helped me carry some boxes.");
     const marcusIdBeforeRebuild = insertEntity("Marcus", [msg.id]);
     const firstFireTurn = userTurn("first attempt fires here");
     recordCircleBackFired(firstFireTurn.id, marcusIdBeforeRebuild, "Marcus", msg.id);
-    for (let i = 0; i < 6; i++) userTurn(`filler ${i}`);
+    userTurn("the direct reply to the ask");
+    const remention = userTurn("Marcus came up again.");
+    for (let i = 0; i < 5; i++) userTurn(`filler ${i}`);
 
     // Simulate what rebuildProjections actually does after every turn in
     // production (scripts/chat.ts / turnMemoryRefresh.ts): drop projections
     // and recreate the entity fresh, which assigns it a BRAND NEW id, while
-    // its real provenance (source_event_ids, starting from the same msg)
+    // its real provenance (source_event_ids, now including the re-mention)
     // is unchanged.
     projections.clearProjections();
-    const marcusIdAfterRebuild = insertEntity("Marcus", [msg.id]);
+    const marcusIdAfterRebuild = insertEntity("Marcus", [msg.id, remention.id]);
     expect(marcusIdAfterRebuild).not.toBe(marcusIdBeforeRebuild);
 
     const candidates = findEligibleCircleBackCandidates(eventLog, projections, PRIMARY_USER_ID, "just a regular update");
@@ -163,27 +194,36 @@ describe("Option B (Phase 7 Part 0): retries waive recency, hard cap holds, fres
     expect(candidates).toEqual([{ entityId: marcusIdAfterRebuild, name: "Marcus", attemptNumber: 2, mentionAgeLabel: expect.any(String), stableKey: msg.id }]);
   });
 
-  it("hard cap: a third attempt is never offered, even after another full cooldown period", () => {
+  it("hard cap: a third attempt is never offered, even after another genuine re-mention", () => {
     const msg = userTurn("Marcus helped me carry some boxes.");
     const marcusId = insertEntity("Marcus", [msg.id]);
     const firstFireTurn = userTurn("first attempt fires here");
     recordCircleBackFired(firstFireTurn.id, marcusId, "Marcus", msg.id);
-    for (let i = 0; i < 6; i++) userTurn(`filler ${i}`);
+    userTurn("direct reply");
+    const remention1 = userTurn("Marcus again.");
+    projections.touchEntity(marcusId, [remention1.id], "message-v1");
+    for (let i = 0; i < 5; i++) userTurn(`filler ${i}`);
     const secondFireTurn = userTurn("second attempt fires here");
     recordCircleBackFired(secondFireTurn.id, marcusId, "Marcus", msg.id);
-    for (let i = 0; i < 6; i++) userTurn(`more filler ${i}`);
+    userTurn("direct reply 2");
+    const remention2 = userTurn("Marcus yet again.");
+    projections.touchEntity(marcusId, [remention2.id], "message-v1");
+    for (let i = 0; i < 5; i++) userTurn(`more filler ${i}`);
 
     const candidates = findEligibleCircleBackCandidates(eventLog, projections, PRIMARY_USER_ID, "just a regular update");
 
     expect(candidates.map((c) => c.name)).not.toContain("Marcus");
   });
 
-  it("priority: a fresh, recency-eligible candidate is offered alone, even when a cooldown-cleared retry candidate also exists", () => {
+  it("priority: a fresh, recency-eligible candidate is offered alone, even when a re-mention-eligible second-attempt candidate also exists", () => {
     const marcusMsg = userTurn("Marcus helped me carry some boxes.");
     const marcusId = insertEntity("Marcus", [marcusMsg.id]);
     const firstFireTurn = userTurn("first attempt on Marcus fires here");
     recordCircleBackFired(firstFireTurn.id, marcusId, "Marcus", marcusMsg.id);
-    for (let i = 0; i < 5; i++) userTurn(`filler ${i}`); // clears cooldown, Marcus now retry-eligible
+    userTurn("direct reply");
+    const remention = userTurn("Marcus came up again.");
+    projections.touchEntity(marcusId, [remention.id], "message-v1");
+    for (let i = 0; i < 3; i++) userTurn(`filler ${i}`); // clears cooldown, Marcus now second-attempt-eligible
 
     // A brand new person, freshly mentioned, also becomes a candidate this turn.
     const priyaMsg = userTurn("Ran into Priya at the store today.");
@@ -212,5 +252,15 @@ describe("verifyCircleBackExecuted (EN-073 — directive-execution verification)
 describe("buildCircleBackDirective", () => {
   it("names the specific candidate", () => {
     expect(buildCircleBackDirective("Marcus")).toContain("Marcus");
+  });
+
+  it("first attempt tells Enso this is its ONLY unprompted ask, never to raise it again unless the user re-mentions it", () => {
+    expect(buildCircleBackDirective("Marcus", 1)).toMatch(/ONLY unprompted ask/);
+  });
+
+  it("second attempt is framed around the name coming back up, not elapsed time", () => {
+    const directive = buildCircleBackDirective("Marcus", 2, "a while back");
+    expect(directive).toMatch(/mentioned "Marcus" again/);
+    expect(directive).toMatch(/is that the same Marcus/);
   });
 });
