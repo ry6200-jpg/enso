@@ -34,14 +34,38 @@ async function generate(chatRouter: ChatRouter, system: string, latestMessage: s
  * identical Dog/Taurus advice — each sign gets its own generation call
  * with the sign name and tradition named explicitly, cached per
  * (kind, sign, day), never shared or templated across signs.
+ *
+ * UI fixes batch (item 12): grounded in the owner's actual recent
+ * conversation themes rather than a generic disconnected forecast — the
+ * sign is an interpretive LENS on something real, not a fortune pulled
+ * from nowhere. For the Chinese reading specifically, the current
+ * calendar year's own animal (yearSign) is folded in as a dynamic angle:
+ * the relationship between the owner's sign and the year's sign, which
+ * changes what the reflection can honestly say from one year to the next
+ * even for the same person.
  */
-export function getZodiacSidebarReflection(cache: DailyContentCache, chatRouter: ChatRouter, kind: "chinese" | "western", sign: ChineseZodiacSign | WesternZodiacSign): Promise<string> {
+export function getZodiacSidebarReflection(
+  cache: DailyContentCache,
+  chatRouter: ChatRouter,
+  kind: "chinese" | "western",
+  sign: ChineseZodiacSign | WesternZodiacSign,
+  recentContext: string[] = [],
+  yearSign?: ChineseZodiacSign
+): Promise<string> {
   const cacheKey = `sidebar:${kind}:${sign}:${todayIsoDate()}`;
   return cache.getOrGenerate(cacheKey, async () => {
     const traditionLabel = kind === "chinese" ? "Chinese zodiac sign" : "Western zodiac sign";
+    const contextBlock =
+      recentContext.length > 0
+        ? `\nSomething real from the owner's own recent conversation, to interpret THROUGH the sign's lens rather than write a disconnected forecast (never invent a detail beyond what's here; if nothing here is usable, fall back to a general relational reflection for the sign instead of forcing a connection):\n${recentContext.map((c) => `- ${c}`).join("\n")}\n`
+        : "";
+    const yearAngle =
+      kind === "chinese" && yearSign
+        ? `\nThis calendar year's own animal is ${yearSign} — weave in ONE angle on how being ${sign} meeting a ${yearSign} year shades things right now (real, well-established lore about how these two animals relate is fine to draw on; never invent a specific prediction or event).`
+        : "";
     const system = `${VOICE_PREAMBLE}
 
-TASK: Write ONE short passage (2-3 sentences, under 55 words) of relationship-focused reflection tied to the ${traditionLabel} "${sign}" — draw on real, well-established traits traditionally associated with this specific sign, filtered through how a trait like that tends to show up in how someone connects with the people close to them. Not generic personality traits in isolation, not career/luck/health. The sign name is already shown as a heading next to this text — don't open with "As a ${sign}..." or restate the name; just write the reflection itself as prose. This must read as distinctly about ${sign} specifically, not copy that could be swapped onto a different sign unchanged.`;
+TASK: Write ONE short passage (2-3 sentences, under 55 words) of relationship-focused reflection tied to the ${traditionLabel} "${sign}" — draw on real, well-established traits traditionally associated with this specific sign, filtered through how a trait like that tends to show up in how someone connects with the people close to them. Not generic personality traits in isolation, not career/luck/health. The sign name is already shown as a heading next to this text — don't open with "As a ${sign}..." or restate the name; just write the reflection itself as prose. This must read as distinctly about ${sign} specifically, not copy that could be swapped onto a different sign unchanged.${contextBlock}${yearAngle}`;
     return generate(chatRouter, system, `Write today's ${kind} zodiac reflection for ${sign}.`);
   });
 }

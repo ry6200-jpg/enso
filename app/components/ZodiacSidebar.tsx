@@ -1,8 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
-/** EN-031: Chinese zodiac on top, Western below, both derived from the user's stored birthdate, using the approved 24-icon set (public/assets/). */
+/**
+ * UI fixes batch: this sidebar is now also where Horoscope and People are
+ * reached (item 9 — the Chat/Horoscope/People tab row was removed
+ * entirely; see app/page.tsx and the design note there). The nav links
+ * below are unconditional — reaching Horoscope or People was never meant
+ * to depend on having a birthdate on record, only the zodiac content
+ * itself is gated on that (item 10, unchanged behavior).
+ *
+ * Order: Western zodiac on top, Chinese below — reversed from the
+ * original design per live feedback; EN-031 in the spec is updated to
+ * match.
+ */
 
 interface ZodiacSidebarData {
   available: boolean;
@@ -24,6 +36,19 @@ function ZodiacSection({ sign, iconUrl, reflection }: { sign: string; iconUrl: s
   );
 }
 
+function SidebarNav() {
+  return (
+    <nav className="flex gap-4 text-sm pb-4 mb-1 border-b border-stone-200">
+      <Link href="/horoscope" className="text-stone-500 hover:text-stone-800">
+        Horoscope
+      </Link>
+      <Link href="/people" className="text-stone-500 hover:text-stone-800">
+        People
+      </Link>
+    </nav>
+  );
+}
+
 export default function ZodiacSidebar() {
   const [data, setData] = useState<ZodiacSidebarData | null>(null);
 
@@ -42,16 +67,17 @@ export default function ZodiacSidebar() {
     };
   }, []);
 
-  if (!data) return <aside className="w-72 shrink-0 border-l border-stone-200 p-4 text-sm text-stone-400">Loading...</aside>;
-
-  if (!data.available) {
-    return <aside className="w-72 shrink-0 border-l border-stone-200 p-4 text-sm text-stone-400">Mention your birthdate to Enso in chat to unlock your zodiac sidebar.</aside>;
-  }
-
   return (
     <aside className="w-72 shrink-0 border-l border-stone-200 p-4 flex flex-col gap-5 overflow-y-auto">
-      {data.chinese && <ZodiacSection {...data.chinese} />}
-      {data.western && <ZodiacSection {...data.western} />}
+      <SidebarNav />
+      {!data && <p className="text-sm text-stone-400">Loading...</p>}
+      {data && !data.available && <p className="text-sm text-stone-400">Mention your birthdate to Enso in chat to unlock your zodiac sidebar.</p>}
+      {data?.available && (
+        <>
+          {data.western && <ZodiacSection {...data.western} />}
+          {data.chinese && <ZodiacSection {...data.chinese} />}
+        </>
+      )}
     </aside>
   );
 }

@@ -57,6 +57,12 @@ export function getChineseZodiacSign(birthdate: string): ChineseZodiacSign | nul
   return CHINESE_ZODIAC_SIGNS[offset]!;
 }
 
+/** The current calendar year's own Chinese zodiac animal (2026 = Horse) — same anchor/approximation as getChineseZodiacSign, just applied to today's year instead of a birth year. Used for the sidebar's year-vs-person angle (EN-031). */
+export function getCurrentChineseYearSign(now: Date = new Date()): ChineseZodiacSign {
+  const offset = (((now.getFullYear() - 2020) % 12) + 12) % 12;
+  return CHINESE_ZODIAC_SIGNS[offset]!;
+}
+
 // Standard tropical Western zodiac date ranges. Boundary dates use the most
 // commonly published cutoffs; a birthday landing exactly on a cusp date
 // resolves to the sign whose range the day-of-month check below assigns it

@@ -10,6 +10,10 @@ const nextConfig: NextConfig = {
   // CLAUDE.md is this project's own maintained conventions doc — never let
   // `next dev` auto-append its agent-rules block to it.
   agentRules: false,
+  // The round black "N" button bottom-left is Next.js's own dev-mode tools
+  // indicator, not anything in this app's code (confirmed: it's injected
+  // by the framework, not app/ or public/) — turned off per live feedback.
+  devIndicators: false,
   // src/ is written for Node's native ESM loader (scripts/chat.ts, vitest,
   // both of which resolve a relative "./foo.js" import to "./foo.ts" the
   // way tsx/vite do) — every relative import in src/ therefore uses an
