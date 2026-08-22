@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import ZodiacSidebar from "./components/ZodiacSidebar";
+import { PROACTIVE_OPENER_MESSAGE } from "../src/persona/proactiveOpener.js";
 
 interface ChatMessage {
   id: string;
@@ -35,13 +36,19 @@ interface AttachmentStatus {
  * The attachment status notice is an overlay (fixed position, own stacking
  * context), not inline flow, for the same static-layout reason.
  *
- * Item 13: on a genuinely fresh session (the event log has never seen a
- * message_sent from this user — checked server-side via /api/first-session,
- * never inferred from this component's own empty local state, since that's
- * true on every reload) Enso proactively opens with a fixed line rather
- * than waiting for the user to speak first. That opener is rendered
- * directly, never round-tripped through /api/chat — see
+ * Item 13: on a genuinely fresh session Enso proactively opens with a
+ * fixed line rather than waiting for the user to speak first. That opener
+ * is rendered directly, never round-tripped through /api/chat — see
  * src/persona/proactiveOpener.ts for why it's deliberately not persisted.
+ *
+ * Item 9 (conversation appeared to vanish on refresh — confirmed via
+ * direct dev-data inspection that the event log had every message intact
+ * the whole time; this was a pure display bug): messages now hydrate from
+ * GET /api/history on mount instead of always starting empty. Whether a
+ * session is "genuinely fresh" (for the item 13 opener above) is now
+ * simply whether that history came back empty — there's no separate
+ * concept or endpoint for it, since a real event log with zero messages
+ * and "first session" are the exact same fact.
  *
  * Visual-system pass (batch 2, items 1/2/4/5): the header now uses
  * enso-mark.png — a crop of just the brush-stroke ring, generated from
@@ -73,12 +80,11 @@ export default function Page() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/first-session")
+    fetch("/api/history")
       .then((r) => r.json())
-      .then((json: { isFirstSession: boolean; openerText: string }) => {
-        if (!cancelled && json.isFirstSession) {
-          setMessages((prev) => (prev.length === 0 ? [{ id: crypto.randomUUID(), role: "enso", text: json.openerText }] : prev));
-        }
+      .then((json: { messages: ChatMessage[] }) => {
+        if (cancelled) return;
+        setMessages(json.messages.length > 0 ? json.messages : [{ id: crypto.randomUUID(), role: "enso", text: PROACTIVE_OPENER_MESSAGE }]);
       })
       .catch(() => {});
     return () => {

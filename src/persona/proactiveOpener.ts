@@ -8,14 +8,17 @@
  * and the shorter En/Zen voice (EN_ZEN_VOICE_INSTRUCTION).
  *
  * Deliberately NOT an LLM call and NOT a persisted event: it's a literal,
- * unvarying string the client renders directly (see app/page.tsx and
- * app/api/first-session/route.ts) — the user's explicit requirement was
- * FIXED, not varied, and no chat pipeline run actually produced it, so
- * recording it as a reply_sent event would fabricate provenance
- * (contextProvenance/router/gateActions) for a turn that never happened.
- * It only ever appears once, gated on the event log genuinely holding zero
- * message_sent events for the user — once they reply, that reply is
- * captured through the normal pipeline like any other message, and the
- * gate never opens again.
+ * unvarying string the client renders directly (see app/page.tsx) — the
+ * user's explicit requirement was FIXED, not varied, and no chat pipeline
+ * run actually produced it, so recording it as a reply_sent event would
+ * fabricate provenance (contextProvenance/router/gateActions) for a turn
+ * that never happened. It only ever appears once, gated on GET
+ * /api/history genuinely holding zero messages for the user — once they
+ * reply, that reply is captured through the normal pipeline like any
+ * other message, and the gate never opens again. Also used server-side
+ * (turnMemoryRefresh.ts, item 10) as the known-fixed text to fall back on
+ * when extraction needs to know what the very first message of a session
+ * was answering, since this string is never itself in the event log for
+ * that lookup to find.
  */
 export const PROACTIVE_OPENER_MESSAGE = "Hi, I'm Enso. I'd love to get to know you a little before we start — what should I call you?";
