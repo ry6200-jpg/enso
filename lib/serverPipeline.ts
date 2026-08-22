@@ -14,6 +14,7 @@
  * top-level code on hot reload; without this, every HMR cycle would open
  * a fresh set of SQLite connections to the same files.
  */
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { newId } from "../src/ids.js";
@@ -85,13 +86,89 @@ interface PipelineGlobals {
   documentRouter?: { extract: DocumentContentAdapter };
   imageRouter?: { extract: ImageContentAdapter };
   dailyContentCache?: DailyContentCache;
+  sourceFingerprint?: string;
 }
 
 const g = globalThis as unknown as { __ensoPipeline?: PipelineGlobals };
 if (!g.__ensoPipeline) g.__ensoPipeline = {};
 const cache = g.__ensoPipeline;
 
+/**
+ * Dev-only staleness safeguard. `globalThis` caching survives every HMR
+ * cycle by design (see the class doc comment above), but that means any
+ * cached instance built via `new X(...)` or `createX(...)` keeps running
+ * whatever code existed at construction time forever, even after the
+ * source file it came from changes — the object's methods and closures
+ * don't retroactively update just because Next.js re-executed the module.
+ * This bit three times in one session, each a different cached field:
+ * ProjectionsDb missing a newly-added method, the intent router still
+ * returning decisions shaped for the pre-refactor schema (crashing on
+ * `decision.register.mode`), and the /wipe orphaned-connections bug this
+ * file's `resetDevData` already exists to fix. All three were "restart
+ * the dev server and it's fine" — this makes that automatic instead of
+ * something to remember.
+ *
+ * Fingerprints every .ts file under src/ and lib/ by path+mtime+size (not
+ * content — hashing bytes is needless work for a debounced per-request
+ * check) and, if it differs from the fingerprint recorded when the cache
+ * was last populated, closes and drops every cached entry so the next
+ * getter call rebuilds it from the current code. Debounced to at most
+ * once per second so an active dev session doesn't pay a directory walk
+ * on every request. Never runs in production: a deployed process's code
+ * cannot change without an actual restart, which already clears
+ * `globalThis` by definition, so this check would be pure overhead there.
+ */
+function computeSourceFingerprint(): string {
+  const parts: string[] = [];
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith(".ts")) {
+        const stat = fs.statSync(full);
+        parts.push(`${full}:${stat.mtimeMs}:${stat.size}`);
+      }
+    }
+  };
+  walk(path.join(REPO_ROOT, "src"));
+  walk(path.join(REPO_ROOT, "lib"));
+  return crypto.createHash("sha1").update(parts.sort().join("|")).digest("hex");
+}
+
+let lastFingerprintCheckAt = 0;
+const FINGERPRINT_CHECK_INTERVAL_MS = 1000;
+
+function invalidateIfStale(): void {
+  if (process.env.NODE_ENV === "production") return;
+  const now = Date.now();
+  if (now - lastFingerprintCheckAt < FINGERPRINT_CHECK_INTERVAL_MS) return;
+  lastFingerprintCheckAt = now;
+
+  const current = computeSourceFingerprint();
+  if (cache.sourceFingerprint === current) return;
+  const isFirstRun = cache.sourceFingerprint === undefined;
+  if (!isFirstRun) {
+    cache.eventLog?.close();
+    cache.projectionsDb?.close();
+    cache.retrievalDb?.close();
+    cache.dailyContentCache?.close();
+    for (const key of Object.keys(cache) as (keyof PipelineGlobals)[]) {
+      if (key !== "sourceFingerprint") delete cache[key];
+    }
+    // eslint-disable-next-line no-console
+    console.warn("[serverPipeline] source changed under a running dev server — pipeline cache invalidated, rebuilding on next use.");
+  }
+  cache.sourceFingerprint = current;
+}
+
 export function getStores(): { eventLog: EventLog; projectionsDb: ProjectionsDb; retrievalDb: RetrievalDb } {
+  invalidateIfStale();
   ensureDevDataDir();
   if (!cache.eventLog) cache.eventLog = new EventLog(EVENTS_DB);
   if (!cache.projectionsDb) cache.projectionsDb = new ProjectionsDb(PROJECTIONS_DB);
@@ -100,12 +177,14 @@ export function getStores(): { eventLog: EventLog; projectionsDb: ProjectionsDb;
 }
 
 export function getBlobStore(): BlobStore {
+  invalidateIfStale();
   ensureDevDataDir();
   if (!cache.blobStore) cache.blobStore = new BlobStore(BLOBS_DIR);
   return cache.blobStore;
 }
 
 export function getEmbedder(): Promise<Embedder> {
+  invalidateIfStale();
   if (!cache.embedderPromise) {
     configureLocalOnlyEmbeddings();
     cache.embedderPromise = createEmbedder();
@@ -114,36 +193,43 @@ export function getEmbedder(): Promise<Embedder> {
 }
 
 export function getCostTracker(): CostTracker {
+  invalidateIfStale();
   if (!cache.costTracker) cache.costTracker = new CostTracker();
   return cache.costTracker;
 }
 
 export function getChatRouter(): ChatRouter {
+  invalidateIfStale();
   if (!cache.chatRouter) cache.chatRouter = createDefaultChatRouter({ openai: requireEnv("OPENAI_API_KEY"), gemini: requireEnv("GEMINI_API_KEY") }, getCostTracker());
   return cache.chatRouter;
 }
 
 export function getExtractionRouter(): ExtractionRouter {
+  invalidateIfStale();
   if (!cache.extractionRouter) cache.extractionRouter = createDefaultRouter({ openai: requireEnv("OPENAI_API_KEY"), gemini: requireEnv("GEMINI_API_KEY") }, getCostTracker());
   return cache.extractionRouter;
 }
 
 export function getIntentRouter(): IntentRouter {
+  invalidateIfStale();
   if (!cache.intentRouter) cache.intentRouter = createDefaultIntentRouter({ openai: requireEnv("OPENAI_API_KEY"), gemini: requireEnv("GEMINI_API_KEY") }, getCostTracker());
   return cache.intentRouter;
 }
 
 export function getDocumentRouter(): { extract: DocumentContentAdapter } {
+  invalidateIfStale();
   if (!cache.documentRouter) cache.documentRouter = createDocumentRouter({ openai: requireEnv("OPENAI_API_KEY"), gemini: requireEnv("GEMINI_API_KEY") }, getCostTracker());
   return cache.documentRouter;
 }
 
 export function getImageRouter(): { extract: ImageContentAdapter } {
+  invalidateIfStale();
   if (!cache.imageRouter) cache.imageRouter = createImageRouter({ openai: requireEnv("OPENAI_API_KEY"), gemini: requireEnv("GEMINI_API_KEY") }, getCostTracker());
   return cache.imageRouter;
 }
 
 export function getDailyContentCache(): DailyContentCache {
+  invalidateIfStale();
   if (!cache.dailyContentCache) cache.dailyContentCache = new DailyContentCache(path.join(DEV_DATA_DIR, "dailyContent.db"));
   return cache.dailyContentCache;
 }
