@@ -42,6 +42,24 @@ interface AttachmentStatus {
  * than waiting for the user to speak first. That opener is rendered
  * directly, never round-tripped through /api/chat — see
  * src/persona/proactiveOpener.ts for why it's deliberately not persisted.
+ *
+ * Visual-system pass (batch 2, items 1/2/4/5): the header now uses
+ * enso-mark.png — a crop of just the brush-stroke ring, generated from
+ * public/assets/Enso.png (which bundles the ring with baked-in "ENSO
+ * INTELLIGENCE" pixel text) — because the OLD header rendered that whole
+ * source image at 44x44px: the baked-in text was both illegible at that
+ * size AND redundant with the separate "Enso" HTML label already next to
+ * it. The wordmark itself switched from font-serif to a bold, wide-tracked
+ * sans, matching the actual typography baked into the brand mark (checked
+ * by reading the source PNG directly, not assumed) rather than an
+ * unrelated serif. Logo, input, attachment button, and Send button were
+ * all sized as one pass (w-16 mark / h-28 input+button) so enlarging the
+ * identity mark didn't leave the input row looking undersized by
+ * comparison. The red accent (var(--enso-red), the same color as the
+ * mark's brush stroke) is now the ONE consistent accent — user bubbles and
+ * Send button — while Enso's own bubbles stay recessive (white, a thin
+ * border, near-black text) so the accent reads as "the user's voice /
+ * action," not decoration.
  */
 export default function Page() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -121,17 +139,25 @@ export default function Page() {
 
   return (
     <div className="h-full flex flex-col">
-      <header className="shrink-0 flex items-center gap-3 px-5 py-3 border-b border-stone-200">
+      <header className="shrink-0 flex items-center gap-4 px-6 py-4 border-b border-stone-200">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/assets/Enso.png" alt="Enso" className="w-11 h-11" />
-        <span className="font-serif text-2xl">Enso</span>
+        <img src="/assets/enso-mark.png" alt="" className="w-16 h-16" />
+        <span className="text-4xl font-bold tracking-wide" style={{ color: "var(--enso-ink)" }}>
+          Enso
+        </span>
       </header>
 
       <div className="flex-1 flex min-h-0">
         <div className="flex-1 flex flex-col min-h-0">
           <div ref={listRef} className="flex-1 overflow-y-auto min-h-0 p-4 flex flex-col gap-3">
             {messages.map((m) => (
-              <div key={m.id} className={`max-w-lg rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${m.role === "user" ? "self-end bg-stone-800 text-white" : "self-start bg-stone-100"}`}>
+              <div
+                key={m.id}
+                className={`max-w-lg rounded-lg px-4 py-3 text-base whitespace-pre-wrap ${
+                  m.role === "user" ? "self-end text-white" : "self-start bg-white border border-stone-200"
+                }`}
+                style={m.role === "user" ? { backgroundColor: "var(--enso-red)", color: "#faf7f2" } : { color: "var(--enso-ink)" }}
+              >
                 {m.text}
               </div>
             ))}
@@ -142,16 +168,16 @@ export default function Page() {
               e.preventDefault();
               void sendMessage();
             }}
-            className="shrink-0 flex items-stretch gap-2 p-3 border-t border-stone-200"
-            style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+            className="shrink-0 flex items-stretch gap-3 p-4 border-t border-stone-200"
+            style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
           >
             <input ref={fileInputRef} type="file" onChange={handleFileChange} className="hidden" id="attachment-input" />
             <label
               htmlFor="attachment-input"
-              className="shrink-0 w-12 h-24 flex items-center justify-center cursor-pointer rounded-xl bg-stone-100 border border-stone-300 text-stone-600 hover:bg-stone-200"
+              className="shrink-0 w-14 h-28 flex items-center justify-center cursor-pointer rounded-xl bg-stone-100 border border-stone-300 text-stone-600 hover:bg-stone-200"
               title="Attach a file"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
               </svg>
             </label>
@@ -164,9 +190,14 @@ export default function Page() {
               disabled={sending}
               placeholder="Tell Enso what's on your mind... (Enter to send, Shift+Enter for a new line)"
               rows={4}
-              className="flex-1 h-24 resize-none rounded-xl px-4 py-3 text-sm bg-white border border-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-300 disabled:opacity-50 overflow-y-auto"
+              className="flex-1 h-28 resize-none rounded-xl px-4 py-3 text-base bg-white border border-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-300 disabled:opacity-50 overflow-y-auto"
             />
-            <button type="submit" disabled={sending || !input.trim()} className="shrink-0 h-24 rounded-xl bg-stone-800 text-white px-4 text-sm disabled:opacity-50">
+            <button
+              type="submit"
+              disabled={sending || !input.trim()}
+              className="shrink-0 h-28 rounded-xl text-white px-6 text-base font-medium disabled:opacity-50 hover:opacity-90"
+              style={{ backgroundColor: "var(--enso-red)" }}
+            >
               Send
             </button>
           </form>
