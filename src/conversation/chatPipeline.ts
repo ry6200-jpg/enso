@@ -15,6 +15,7 @@ import { assembleContext, DEFAULT_CONTEXT_BUDGETS, type AssembledContext, type C
 import { decideRetrievalInvocation, type RetrievalInvocation, type RetrievalMode } from "./retrievalInvocation.js";
 import { buildAttachmentContextBlock, type RecentTurnForPrompt } from "../persona/systemPrompt.js";
 import { buildCircleBackDirective, findEligibleCircleBackCandidates, verifyCircleBackExecuted } from "./circleBack.js";
+import { buildSelfBirthdateDirective, isSelfBirthdateEligible, verifySelfBirthdateAskExecuted } from "./selfBirthdateGate.js";
 import { recentAttributeClaims, resolveAttestation, type FactConfirmedPayload } from "./attestation.js";
 import type { IntentRouter, RouterResult } from "./router/intentRouter.js";
 
@@ -60,6 +61,15 @@ export interface ReplySentPayload {
     circleBackFired: { entityId: string; name: string; stableKey: string } | null;
     /** The fact_confirmed event id this turn produced, if the attestation gate resolved a validated affirmation. */
     attestationConfirmedEventId: string | null;
+    /**
+     * Adversarial-test batch, item 1: true only when the self-birthdate
+     * gate fired AND EN-073-style verification confirmed the ask actually
+     * appeared in the reply — same decided-vs-executed discipline as
+     * circleBackFired above, and the only state src/conversation/
+     * selfBirthdateGate.ts derives its one-shot cap from (a scan of this
+     * field, never a new event type).
+     */
+    selfBirthdateAskFired: boolean;
   };
   /**
    * Item 8 round-trip survival: non-null whenever this turn had an
@@ -203,12 +213,18 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   let routerResult: RouterResult | null = null;
   let claims: ReturnType<typeof recentAttributeClaims> = [];
   let circleBackCandidates: ReturnType<typeof findEligibleCircleBackCandidates> = [];
+  let selfBirthdateEligible = false;
 
   if (input.retrievalOverride) {
     // Test/override hook (Part 1): bypasses the router entirely, no gates.
     invocation = input.retrievalOverride;
   } else if (deps.intentRouter) {
-    circleBackCandidates = findEligibleCircleBackCandidates(deps.eventLog, deps.projectionsDb, input.userId, effectiveText);
+    // Item 1: self-entity establishment OUTRANKS third-party circle-back,
+    // not merely competes with it — so when eligible, third-party
+    // candidates are never even offered to the router this turn, rather
+    // than being weighed against a self-candidate on equal footing.
+    selfBirthdateEligible = isSelfBirthdateEligible(deps.eventLog, deps.projectionsDb, input.userId, effectiveText);
+    circleBackCandidates = selfBirthdateEligible ? [] : findEligibleCircleBackCandidates(deps.eventLog, deps.projectionsDb, input.userId, effectiveText);
     const knownEntities = deps.projectionsDb.listEntities(input.userId).map((e) => ({ entityId: e.id, name: e.name }));
     claims = recentAttributeClaims(deps.eventLog, deps.projectionsDb, input.userId);
 
@@ -238,7 +254,11 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     routerResult?.decision.circleBack.fire && routerResult.decision.circleBack.entityId
       ? (circleBackCandidates.find((c) => c.entityId === routerResult!.decision.circleBack.entityId) ?? null)
       : null;
-  const gateDirective = circleBackFireEntity ? buildCircleBackDirective(circleBackFireEntity.name, circleBackFireEntity.attemptNumber, circleBackFireEntity.mentionAgeLabel) : null;
+  const gateDirective = selfBirthdateEligible
+    ? buildSelfBirthdateDirective()
+    : circleBackFireEntity
+      ? buildCircleBackDirective(circleBackFireEntity.name, circleBackFireEntity.attemptNumber, circleBackFireEntity.mentionAgeLabel)
+      : null;
 
   const assembled = assembleContext(
     candidateChunks,
@@ -253,6 +273,7 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
 
   // EN-073: only consume circle-back state (recorded below) if the reply actually executed the directive.
   const circleBackFired = circleBackFireEntity && verifyCircleBackExecuted(callResult.text, circleBackFireEntity.name) ? circleBackFireEntity : null;
+  const selfBirthdateAskFired = selfBirthdateEligible && verifySelfBirthdateAskExecuted(callResult.text);
 
   let factConfirmedEvent: EventRecord | undefined;
   const attestation = routerResult?.decision.attestation;
@@ -288,7 +309,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     },
     gateActions: {
       circleBackFired,
-      attestationConfirmedEventId: factConfirmedEvent?.id ?? null
+      attestationConfirmedEventId: factConfirmedEvent?.id ?? null,
+      selfBirthdateAskFired
     },
     attachmentContext: attachmentInfo
       ? { sourceEventId: input.attachmentEventId!, filename: attachmentInfo.filename, kind: attachmentInfo.kind, contentInjected: attachmentBlock !== null }

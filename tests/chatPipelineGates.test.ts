@@ -9,7 +9,21 @@ import type { IntentRouter, RouterResult } from "../src/conversation/router/inte
 import { SAFE_DEFAULT_DECISION, type RouterDecision } from "../src/conversation/router/routerTypes.js";
 import { EMBEDDING_DIMENSIONS, type Embedder } from "../src/embeddings/embedder.js";
 import { newId } from "../src/ids.js";
+import { primaryEntityId } from "../src/projections/rebuild.js";
 import { PRIMARY_USER_ID } from "../src/test/seed.js";
+
+/** Item 1: self-birthdate establishment outranks third-party circle-back whenever the birthdate isn't known yet — tests isolating THIRD-PARTY circle-back behavior give the primary user a stored birthdate so that priority never shadows what's actually being tested here. */
+function givePrimaryUserBirthdate(projections: ProjectionsDb): void {
+  projections.insertEntityAttribute({
+    id: newId(),
+    user_id: PRIMARY_USER_ID,
+    entity_id: primaryEntityId(PRIMARY_USER_ID),
+    attribute: "birthdate",
+    value: "1970-04-24",
+    source_event_ids: JSON.stringify(["seed"]),
+    created_at: new Date().toISOString()
+  });
+}
 
 const CANNED_REPLY: ChatCallResult = { provider: "openai", model: "gpt-5.6-sol", text: "Noted.", usage: { inputTokens: 10, outputTokens: 5 } };
 
@@ -54,7 +68,7 @@ describe("sendMessage — backward compatibility (no intentRouter configured)", 
     const payload = result.replyEvent.payload as ReplySentPayload;
     expect(payload.router.used).toBe(false);
     expect(payload.router.provider).toBeNull();
-    expect(payload.gateActions).toEqual({ circleBackFired: null, attestationConfirmedEventId: null });
+    expect(payload.gateActions).toEqual({ circleBackFired: null, attestationConfirmedEventId: null, selfBirthdateAskFired: false });
   });
 });
 
@@ -95,13 +109,14 @@ describe("sendMessage — EN-083 uncertified-tier gate bypass (verification item
 
     expect(result.replyText).toBe("Noted.");
     const payload = result.replyEvent.payload as ReplySentPayload;
-    expect(payload.gateActions).toEqual({ circleBackFired: null, attestationConfirmedEventId: null });
+    expect(payload.gateActions).toEqual({ circleBackFired: null, attestationConfirmedEventId: null, selfBirthdateAskFired: false });
     expect(payload.router.certified).toBe(false);
   });
 });
 
 describe("sendMessage — circle-back directive injection and EN-073 verification", () => {
   it("end-to-end: an eligible entity + router fire + reply that follows through -> recorded; reply that doesn't -> not recorded (R7)", async () => {
+    givePrimaryUserBirthdate(projectionsDb); // isolates third-party circle-back from item 1's self-priority
     const marcusId = newId();
     const msg = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "My coworker Marcus helped me move.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
     projectionsDb.insertEntity({
@@ -125,6 +140,7 @@ describe("sendMessage — circle-back directive injection and EN-073 verificatio
     // Case 2: fresh store, router fires again, but the reply omits the ask (R7) -> not recorded.
     const eventLog2 = new EventLog(":memory:");
     const projections2 = new ProjectionsDb(":memory:");
+    givePrimaryUserBirthdate(projections2);
     const msg2 = eventLog2.append({ type: "message_sent", actor: "user", payload: { text: "My coworker Marcus helped me move.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
     projections2.insertEntity({
       id: marcusId,
@@ -147,6 +163,30 @@ describe("sendMessage — circle-back directive injection and EN-073 verificatio
     const omitted = await sendMessage(deps2, { userId: PRIMARY_USER_ID, text: "another update", recentTurns: [] });
     const omittedPayload = omitted.replyEvent.payload as ReplySentPayload;
     expect(omittedPayload.gateActions.circleBackFired).toBeNull();
+  });
+
+  it("item 1: self-birthdate establishment OUTRANKS an otherwise-eligible third-party circle-back — third party never fires while the birthdate is unknown", async () => {
+    const marcusId = newId();
+    const msg = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "My coworker Marcus helped me move.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    projectionsDb.insertEntity({
+      id: marcusId,
+      user_id: PRIMARY_USER_ID,
+      name: "Marcus",
+      confirmed: 0,
+      source_event_ids: JSON.stringify([msg.id]),
+      extractor_version: "message-v1",
+      pending_disambiguation: null,
+      created_at: new Date().toISOString()
+    });
+    // No birthdate given this time — the router would happily fire on Marcus...
+    deps.chatRouter = fakeChatRouter("Got it. When's your birthday, by the way?"); // ...but the self-directive should win, not the third-party one
+    deps.intentRouter = fakeIntentRouter({ decision: decisionWith({ circleBack: { fire: true, entityId: marcusId } }) });
+
+    const result = await sendMessage(deps, { userId: PRIMARY_USER_ID, text: "another update", recentTurns: [] });
+
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.gateActions.circleBackFired).toBeNull(); // Marcus never got the slot
+    expect(payload.gateActions.selfBirthdateAskFired).toBe(true);
   });
 });
 
