@@ -1,7 +1,20 @@
 import { NextResponse } from "next/server";
 import { uploadAndExtract } from "../../../src/attachments/uploadAndExtract.js";
 import { UploadTooLargeError } from "../../../src/attachments/attachmentCapture.js";
+import { listUploads } from "../../../src/attachments/uploadDeletion.js";
 import { getBlobStore, getDevUserId, getDocumentRouter, getImageRouter, getStores } from "../../../lib/serverPipeline.js";
+
+/**
+ * EN-065's uploads-list surface: didn't exist at all before this — there
+ * was no way to even see what you'd uploaded, let alone delete one.
+ * Deleted uploads are excluded (listUploads already filters them via the
+ * same eclipsed-set logic deletion itself uses).
+ */
+export async function GET(): Promise<Response> {
+  const userId = getDevUserId();
+  const { eventLog } = getStores();
+  return NextResponse.json({ uploads: listUploads(eventLog, userId) });
+}
 
 /**
  * EN-061/062: store every upload, always, then attempt content extraction

@@ -182,3 +182,84 @@ describe("rebuildProjections (EN-054 v1.5 — payload-reading, no extraction)", 
     expect(comparison.equivalent).toBe(false);
   });
 });
+
+describe("rebuildProjections + upload deletion (EN-065)", () => {
+  it("a fact whose SOLE provenance is a deleted upload's extraction is not recreated on rebuild", () => {
+    const upload = eventLog.append({ type: "file_uploaded", actor: "user", payload: { filename: "notes.pdf", mimeType: "application/pdf", byteLength: 1, path: "x" }, userId: PRIMARY_USER_ID });
+    eventLog.append({
+      type: "extraction_completed",
+      actor: "system",
+      payload: { sourceEventId: upload.id, extractorVersion: "attachment-v1", entities: [{ name: "Diego", type: "person" }] },
+      userId: PRIMARY_USER_ID
+    });
+
+    rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+    expect(projections.listEntities(PRIMARY_USER_ID).map((e) => e.name)).toContain("Diego");
+
+    eventLog.append({ type: "upload_deleted", actor: "user", payload: { uploadEventId: upload.id, filename: "notes.pdf", removedFactCount: 0, preservedFactCount: 0 }, userId: PRIMARY_USER_ID });
+    rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+
+    expect(projections.listEntities(PRIMARY_USER_ID).map((e) => e.name)).not.toContain("Diego");
+  });
+
+  it("an entity mentioned in BOTH a deleted upload and a separate message survives — only the eclipsed extraction is skipped", () => {
+    const upload = eventLog.append({ type: "file_uploaded", actor: "user", payload: { filename: "notes.pdf", mimeType: "application/pdf", byteLength: 1, path: "x" }, userId: PRIMARY_USER_ID });
+    eventLog.append({
+      type: "extraction_completed",
+      actor: "system",
+      payload: { sourceEventId: upload.id, extractorVersion: "attachment-v1", entities: [{ name: "Diego", type: "person" }] },
+      userId: PRIMARY_USER_ID
+    });
+    const msg = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "Diego called today." }, userId: PRIMARY_USER_ID });
+    eventLog.append({
+      type: "extraction_completed",
+      actor: "system",
+      payload: { sourceEventId: msg.id, extractorVersion: "message-v1", entities: [{ name: "Diego", type: "person" }] },
+      userId: PRIMARY_USER_ID
+    });
+    eventLog.append({ type: "upload_deleted", actor: "user", payload: { uploadEventId: upload.id, filename: "notes.pdf", removedFactCount: 0, preservedFactCount: 0 }, userId: PRIMARY_USER_ID });
+
+    rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+
+    expect(projections.listEntities(PRIMARY_USER_ID).map((e) => e.name)).toContain("Diego");
+  });
+
+  it("an attribute whose sole provenance is a deleted upload is not recreated, while one corroborated by a later message is", () => {
+    const upload = eventLog.append({ type: "file_uploaded", actor: "user", payload: { filename: "notes.pdf", mimeType: "application/pdf", byteLength: 1, path: "x" }, userId: PRIMARY_USER_ID });
+    eventLog.append({
+      type: "extraction_completed",
+      actor: "system",
+      payload: { sourceEventId: upload.id, extractorVersion: "attachment-v1", entities: [{ name: "Diego", type: "person" }], attributes: [{ entityName: "Diego", attribute: "location", value: "Boston", eventDate: null }] },
+      userId: PRIMARY_USER_ID
+    });
+    const msg = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "Diego lives in Boston." }, userId: PRIMARY_USER_ID });
+    eventLog.append({
+      type: "extraction_completed",
+      actor: "system",
+      payload: { sourceEventId: msg.id, extractorVersion: "message-v1", entities: [{ name: "Diego", type: "person" }], attributes: [{ entityName: "Diego", attribute: "occupation", value: "teacher", eventDate: null }] },
+      userId: PRIMARY_USER_ID
+    });
+    eventLog.append({ type: "upload_deleted", actor: "user", payload: { uploadEventId: upload.id, filename: "notes.pdf", removedFactCount: 0, preservedFactCount: 0 }, userId: PRIMARY_USER_ID });
+
+    rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+
+    const attrs = projections.listAllEntityAttributes(PRIMARY_USER_ID);
+    expect(attrs.some((a) => a.attribute === "location" && a.value === "Boston")).toBe(false); // sole provenance was the deleted upload
+    expect(attrs.some((a) => a.attribute === "occupation" && a.value === "teacher")).toBe(true); // from the surviving message
+  });
+
+  it("extractionsConsumed does not count an eclipsed extraction_completed event", () => {
+    const upload = eventLog.append({ type: "file_uploaded", actor: "user", payload: { filename: "notes.pdf", mimeType: "application/pdf", byteLength: 1, path: "x" }, userId: PRIMARY_USER_ID });
+    eventLog.append({ type: "extraction_completed", actor: "system", payload: { sourceEventId: upload.id, extractorVersion: "attachment-v1", entities: [] }, userId: PRIMARY_USER_ID });
+    eventLog.append({ type: "upload_deleted", actor: "user", payload: { uploadEventId: upload.id, filename: "notes.pdf", removedFactCount: 0, preservedFactCount: 0 }, userId: PRIMARY_USER_ID });
+
+    const result = rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+    expect(result.extractionsConsumed).toBe(0);
+  });
+
+  it("rebuild with no upload_deleted events at all is completely unaffected (the common case)", () => {
+    seedScenario();
+    const before = rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+    expect(before.entitiesWritten).toBeGreaterThan(0);
+  });
+});

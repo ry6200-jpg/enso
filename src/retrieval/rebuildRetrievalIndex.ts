@@ -1,6 +1,7 @@
 import { newId } from "../ids.js";
 import type { EventRecord } from "../events/schema.js";
 import type { Embedder } from "../embeddings/embedder.js";
+import { computeEclipsedEventIds } from "../attachments/uploadDeletion.js";
 import { chunkText, DEFAULT_CHUNKING_CONFIG, type ChunkingConfig } from "./chunking.js";
 import type { RetrievalDb } from "./retrievalDb.js";
 
@@ -49,6 +50,13 @@ export async function rebuildRetrievalIndex(
 ): Promise<RetrievalRebuildResult> {
   retrievalDb.clear();
 
+  // EN-065: a document/image extraction_completed event derived from a
+  // deleted upload is skipped below exactly like rebuildProjections skips
+  // it — same shared function, same notion of "eclipsed," so a deleted
+  // attachment's content stops being retrievable in the same rebuild pass
+  // that stops it from producing entities/attributes/atoms/bonds.
+  const eclipsedEventIds = computeEclipsedEventIds(events);
+
   const extractionBySourceId = new Map<string, EventRecord & { payload: ExtractionCompletedPayload }>();
   for (const event of events) {
     if (event.type === "extraction_completed") {
@@ -88,7 +96,7 @@ export async function rebuildRetrievalIndex(
       messagesIndexed++;
     }
 
-    if (event.type === "extraction_completed") {
+    if (event.type === "extraction_completed" && !eclipsedEventIds.has(event.id)) {
       const payload = event.payload as ExtractionCompletedPayload;
 
       if (payload.kind === "document" && typeof payload.fullText === "string") {

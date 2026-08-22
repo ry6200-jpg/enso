@@ -254,4 +254,29 @@ describe("sendMessage — attachment context reaches the reply (item 8)", () => 
     const payload = result.replyEvent.payload as ReplySentPayload;
     expect(payload.attachmentContext).toEqual({ sourceEventId: upload.id, filename: "still-processing.pdf", kind: "document", contentInjected: false });
   });
+
+  it("EN-065 edge case: a stale reference to an already-deleted upload is treated as no attachment at all, never injected", async () => {
+    const uploadId = seedDocumentAttachment("Trip itinerary: Lisbon, Oct 3-10.", "Trip itinerary: Lisbon, Oct 3-10.");
+    eventLog.append({ type: "upload_deleted", actor: "user", payload: { uploadEventId: uploadId, filename: "notes.txt", removedFactCount: 0, preservedFactCount: 0 }, userId: PRIMARY_USER_ID });
+
+    let receivedSystem = "";
+    deps.chatRouter = {
+      async reply(request) {
+        receivedSystem = request.system;
+        return CANNED_REPLY;
+      }
+    };
+
+    const result = await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "what do you think?",
+      recentTurns: [],
+      retrievalOverride: { mode: "recency", query: "what do you think?", n: 10 },
+      attachmentEventId: uploadId
+    });
+
+    expect(receivedSystem).not.toContain("Trip itinerary");
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.attachmentContext).toBeNull();
+  });
 });

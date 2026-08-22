@@ -1,6 +1,7 @@
 import { captureMessage, type MessageSentPayload } from "../capture/messageCapture.js";
 import type { FileUploadedPayload } from "../attachments/attachmentCapture.js";
 import type { DocumentExtractionCompletedPayload, ImageExtractionCompletedPayload } from "../attachments/attachmentContent.js";
+import { computeEclipsedEventIds } from "../attachments/uploadDeletion.js";
 import type { Embedder } from "../embeddings/embedder.js";
 import type { EventLog } from "../events/eventLog.js";
 import type { EventRecord } from "../events/schema.js";
@@ -113,6 +114,14 @@ function resolveAttachmentContext(
 ): { filename: string; kind: "document" | "image"; content: string | null } | null {
   const uploadEvent = eventLog.getById(attachmentEventId);
   if (!uploadEvent || uploadEvent.type !== "file_uploaded") return null;
+
+  // EN-065 edge case: a stale client reference to an upload deleted since
+  // the page loaded (e.g. deleted in another tab/session) must never make
+  // its content reach a reply — treated exactly like "no attachment at
+  // all" rather than an error, since from the chat turn's perspective
+  // that's exactly what it now is.
+  if (computeEclipsedEventIds(eventLog.listForUser(uploadEvent.userId)).has(attachmentEventId)) return null;
+
   const filename = (uploadEvent.payload as FileUploadedPayload).filename;
 
   const extractionEvent = eventLog

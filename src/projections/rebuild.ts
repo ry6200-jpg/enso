@@ -2,6 +2,7 @@ import { newId } from "../ids.js";
 import type { EventRecord } from "../events/schema.js";
 import { UpcasterRegistry } from "../upcasters/registry.js";
 import { assertAttribute } from "../perception/attributes.js";
+import { computeEclipsedEventIds } from "../attachments/uploadDeletion.js";
 import {
   findFuzzyNameMatch,
   findUnambiguousPartialNameMatch,
@@ -127,6 +128,18 @@ export function rebuildProjections(
   // migrations registered, so this is a no-op passthrough — but it's
   // genuinely wired in, not just available to call.
   const events = rawEvents.map((event) => upcasters.apply(event));
+
+  // EN-065 core mechanism: an extraction_completed event derived from a
+  // now-deleted upload is treated as if it doesn't exist for the rest of
+  // this rebuild — no separate sweep-and-delete pass, since this function
+  // already re-derives every projection row from zero on every call
+  // (projections.clearProjections() above). A fact whose sole provenance
+  // was such an event simply never gets recreated; one with provenance
+  // elsewhere too still exists via that other event. See
+  // src/attachments/uploadDeletion.ts for the shared eclipsed-set logic
+  // (the SAME function the deletion-impact preview uses) and its explicit
+  // note on the EN-066 attestation exception this does NOT yet implement.
+  const eclipsedEventIds = computeEclipsedEventIds(events);
 
   const lastOutcomeBySourceId = new Map<string, "completed" | "failed">();
   for (const event of events) {
@@ -287,6 +300,7 @@ export function rebuildProjections(
 
   for (const event of events) {
     if (event.type !== "extraction_completed") continue;
+    if (eclipsedEventIds.has(event.id)) continue; // EN-065: derived from a deleted upload — treated as if it never happened
     extractionsConsumed++;
     const payload = event.payload as ExtractionCompletedPayload;
     const extractorVersion = payload.extractorVersion ?? UNKNOWN_EXTRACTOR_VERSION;
@@ -370,6 +384,7 @@ export function rebuildProjections(
   let attributesApplied = 0;
   for (const event of events) {
     if (event.type !== "extraction_completed") continue;
+    if (eclipsedEventIds.has(event.id)) continue; // EN-065: same exclusion as above, kept consistent across both passes
     const payload = event.payload as ExtractionCompletedPayload;
     const extractorVersion = payload.extractorVersion ?? UNKNOWN_EXTRACTOR_VERSION;
     for (const attr of payload.attributes ?? []) {

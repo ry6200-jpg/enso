@@ -375,6 +375,18 @@ export class ProjectionsDb {
       .all(userId, entityId) as EntityAttributeRow[];
   }
 
+  /**
+   * EN-065 deletion-impact scoping: every attribute row for a user,
+   * regardless of entity — unlike listEntityAttributes above, this also
+   * catches rows on the primary user's own synthetic entity id
+   * (`primary:<userId>`, see rebuild.ts's primaryEntityId), which is never
+   * a row in the `entities` table and so wouldn't be found by iterating
+   * listEntities.
+   */
+  listAllEntityAttributes(userId: string): EntityAttributeRow[] {
+    return this.db.prepare(`SELECT * FROM entity_attributes WHERE user_id = ? ORDER BY id ASC`).all(userId) as EntityAttributeRow[];
+  }
+
   insertPerceptionLog(row: PerceptionLogRow): void {
     this.db
       .prepare(
