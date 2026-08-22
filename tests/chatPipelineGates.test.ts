@@ -241,3 +241,83 @@ describe("sendMessage — retrieval mode from a validated router decision", () =
     expect(result.debug.retrieval.mode).toBe("recency");
   });
 });
+
+describe("sendMessage — EN-047/048 voice mode wiring", () => {
+  function chatRouterCapturingSystem() {
+    let capturedSystem = "";
+    const router: ChatRouter = {
+      async reply(request) {
+        capturedSystem = request.system;
+        return CANNED_REPLY;
+      }
+    };
+    return { router, getCapturedSystem: () => capturedSystem };
+  }
+
+  it("NEGATIVE CASE: ordinary conversation, no router configured, gets the natural voice — zen never injects by default", async () => {
+    const { router, getCapturedSystem } = chatRouterCapturingSystem();
+    deps.chatRouter = router;
+    // No deps.intentRouter set — Part-1 fallback path.
+
+    const result = await sendMessage(deps, { userId: PRIMARY_USER_ID, text: "just a regular update about my day", recentTurns: [] });
+
+    const system = getCapturedSystem();
+    expect(system).toMatch(/THE NATURAL VOICE/);
+    expect(system).not.toMatch(/ZEN MODE —/);
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.voiceMode).toEqual({ mode: "natural", triggeredByPhrase: false });
+  });
+
+  it("NEGATIVE CASE: ordinary conversation with a real (fake) router that itself decides natural", async () => {
+    const { router, getCapturedSystem } = chatRouterCapturingSystem();
+    deps.chatRouter = router;
+    deps.intentRouter = fakeIntentRouter({ decision: decisionWith({ register: { mode: "natural" } }) });
+
+    const result = await sendMessage(deps, { userId: PRIMARY_USER_ID, text: "just a regular update about my day", recentTurns: [] });
+
+    const system = getCapturedSystem();
+    expect(system).toMatch(/THE NATURAL VOICE/);
+    expect(system).not.toMatch(/ZEN MODE —/);
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.voiceMode).toEqual({ mode: "natural", triggeredByPhrase: false });
+  });
+
+  it("a literal trigger phrase in the message injects zen mode even with no router configured", async () => {
+    const { router, getCapturedSystem } = chatRouterCapturingSystem();
+    deps.chatRouter = router;
+
+    const result = await sendMessage(deps, { userId: PRIMARY_USER_ID, text: "I need to step back from all of this", recentTurns: [] });
+
+    const system = getCapturedSystem();
+    expect(system).toMatch(/ZEN MODE —/);
+    expect(system).not.toMatch(/THE NATURAL VOICE/);
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.voiceMode).toEqual({ mode: "zen", triggeredByPhrase: true });
+  });
+
+  it("the router's own register judgment injects zen mode even with no literal trigger phrase present", async () => {
+    const { router, getCapturedSystem } = chatRouterCapturingSystem();
+    deps.chatRouter = router;
+    deps.intentRouter = fakeIntentRouter({ decision: decisionWith({ register: { mode: "zen" } }) });
+
+    const result = await sendMessage(deps, { userId: PRIMARY_USER_ID, text: "I don't even know where to start, everything is falling apart at once", recentTurns: [] });
+
+    const system = getCapturedSystem();
+    expect(system).toMatch(/ZEN MODE —/);
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.voiceMode).toEqual({ mode: "zen", triggeredByPhrase: false });
+  });
+
+  it("a literal trigger phrase wins even when the router itself says natural", async () => {
+    const { router, getCapturedSystem } = chatRouterCapturingSystem();
+    deps.chatRouter = router;
+    deps.intentRouter = fakeIntentRouter({ decision: decisionWith({ register: { mode: "natural" } }) });
+
+    const result = await sendMessage(deps, { userId: PRIMARY_USER_ID, text: "can we zoom out for a second", recentTurns: [] });
+
+    const system = getCapturedSystem();
+    expect(system).toMatch(/ZEN MODE —/);
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.voiceMode).toEqual({ mode: "zen", triggeredByPhrase: true });
+  });
+});

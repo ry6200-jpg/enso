@@ -13,10 +13,11 @@ import { recencyMode } from "../retrieval/recencyMode.js";
 import type { ContentChunkRow, RetrievalDb } from "../retrieval/retrievalDb.js";
 import { assembleContext, DEFAULT_CONTEXT_BUDGETS, type AssembledContext, type ContextBudgets } from "./contextAssembly.js";
 import { decideRetrievalInvocation, type RetrievalInvocation, type RetrievalMode } from "./retrievalInvocation.js";
-import { buildAttachmentContextBlock, type RecentTurnForPrompt } from "../persona/systemPrompt.js";
+import { buildAttachmentContextBlock, type RecentTurnForPrompt, type VoiceMode } from "../persona/systemPrompt.js";
 import { buildCircleBackDirective, findEligibleCircleBackCandidates, verifyCircleBackExecuted } from "./circleBack.js";
 import { buildSelfBirthdateDirective, isSelfBirthdateEligible, verifySelfBirthdateAskExecuted } from "./selfBirthdateGate.js";
 import { recentAttributeClaims, resolveAttestation, type FactConfirmedPayload } from "./attestation.js";
+import { decideVoiceMode, hasZenTriggerPhrase } from "./voiceMode.js";
 import type { IntentRouter, RouterResult } from "./router/intentRouter.js";
 
 export interface ReplySentPayload {
@@ -80,6 +81,14 @@ export interface ReplySentPayload {
    * attachment at all and must never be silently indistinguishable from it.
    */
   attachmentContext: { sourceEventId: string; filename: string; kind: "document" | "image"; contentInjected: boolean } | null;
+  /**
+   * EN-047/048 round-trip survival: which voice register this reply was
+   * generated under, and why — `triggeredByPhrase` distinguishes the cheap
+   * literal-trigger layer from the router's own semantic judgment (or the
+   * natural default when neither fired), so a future reader never has to
+   * guess which layer decided a given turn's register.
+   */
+  voiceMode: { mode: VoiceMode; triggeredByPhrase: boolean };
 }
 
 export interface SendMessageDeps {
@@ -260,13 +269,21 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       ? buildCircleBackDirective(circleBackFireEntity.name, circleBackFireEntity.attemptNumber, circleBackFireEntity.mentionAgeLabel)
       : null;
 
+  // EN-047/048: cheap literal-trigger layer always wins outright; otherwise
+  // the router's own register judgment (already fail-safed to "natural" on
+  // any failure or uncertified tier — SAFE_DEFAULT_DECISION); with no
+  // router configured at all, natural is the default.
+  const triggeredByPhrase = hasZenTriggerPhrase(effectiveText);
+  const voiceMode: VoiceMode = decideVoiceMode(effectiveText, routerResult?.decision.register.mode ?? null);
+
   const assembled = assembleContext(
     candidateChunks,
     { mode: invocation.mode, query: invocation.query },
     input.recentTurns,
     input.budgets ?? DEFAULT_CONTEXT_BUDGETS,
     gateDirective,
-    attachmentBlock
+    attachmentBlock,
+    voiceMode
   );
 
   const callResult = await deps.chatRouter.reply({ system: assembled.systemPrompt, history: [], latestMessage: effectiveText });
@@ -314,7 +331,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     },
     attachmentContext: attachmentInfo
       ? { sourceEventId: input.attachmentEventId!, filename: attachmentInfo.filename, kind: attachmentInfo.kind, contentInjected: attachmentBlock !== null }
-      : null
+      : null,
+    voiceMode: { mode: voiceMode, triggeredByPhrase }
   };
   const replyEvent = deps.eventLog.append({ type: "reply_sent", actor: "enso", payload, userId: input.userId });
 

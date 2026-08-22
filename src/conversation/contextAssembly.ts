@@ -1,5 +1,5 @@
 import type { ContentChunkRow } from "../retrieval/retrievalDb.js";
-import { buildRecentWindowBlock, buildRetrievedMemoryBlock, buildSystemPrompt, type RecentTurnForPrompt } from "../persona/systemPrompt.js";
+import { buildRecentWindowBlock, buildRetrievedMemoryBlock, buildSystemPrompt, type RecentTurnForPrompt, type VoiceMode } from "../persona/systemPrompt.js";
 import type { RetrievalMode } from "./retrievalInvocation.js";
 
 export interface ContextBudgets {
@@ -53,6 +53,10 @@ export interface AssembledContext {
  * which has the event-log access this pure function deliberately doesn't)
  * from a file attached to THIS specific turn — kept a plain string here,
  * same as `gateDirective`, so this function stays I/O-free.
+ *
+ * `voiceMode` (EN-047/048): natural by default, zen only when the caller
+ * (chatPipeline.ts, via src/conversation/voiceMode.ts) decided this turn
+ * calls for it — threaded straight through to buildSystemPrompt.
  */
 export function assembleContext(
   candidateChunks: ContentChunkRow[],
@@ -60,7 +64,8 @@ export function assembleContext(
   recentTurns: RecentTurnForPrompt[],
   budgets: ContextBudgets = DEFAULT_CONTEXT_BUDGETS,
   gateDirective: string | null = null,
-  attachmentBlock: string | null = null
+  attachmentBlock: string | null = null,
+  voiceMode: VoiceMode = "natural"
 ): AssembledContext {
   const countCapped = candidateChunks.slice(0, budgets.maxRetrievedChunks);
   let runningChars = 0;
@@ -79,7 +84,7 @@ export function assembleContext(
     injectedChunks.map((c) => ({ id: c.id, text: c.text, occurredAt: c.occurred_at, recordedAt: c.recorded_at }))
   );
   const recentWindowBlock = buildRecentWindowBlock(injectedTurns);
-  const baseSystemPrompt = buildSystemPrompt(retrievedBlock, recentWindowBlock, attachmentBlock);
+  const baseSystemPrompt = buildSystemPrompt(retrievedBlock, recentWindowBlock, attachmentBlock, voiceMode);
   // EN-071 stage 3: a gate directive, when present, is injected at the END
   // of the system prompt — highest-salience position, named action only.
   const systemPrompt = gateDirective ? `${baseSystemPrompt}\n\n${gateDirective}` : baseSystemPrompt;

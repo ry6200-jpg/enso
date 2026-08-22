@@ -34,18 +34,28 @@ export const ROUTER_JSON_SCHEMA = {
       },
       required: ["isAffirmation", "entityName", "attribute", "value"],
       additionalProperties: false
+    },
+    register: {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["natural", "zen"] }
+      },
+      required: ["mode"],
+      additionalProperties: false
     }
   },
-  required: ["retrieval", "circleBack", "attestation"],
+  required: ["retrieval", "circleBack", "attestation", "register"],
   additionalProperties: false
 } as const;
 
 /**
- * Builds the router's system prompt. All three judgment axes in one call
- * (EN-075: latency/cost over three separate calls) — each section names
- * its own hard constraints so a strict-schema-compliant but semantically
- * wrong answer (e.g. an invented entityId) is still caught by the caller's
- * post-call validation against the candidate lists actually handed in.
+ * Builds the router's system prompt. All four judgment axes in one call
+ * (EN-075: latency/cost over separate calls — EN-048 added the fourth,
+ * register, at zero extra API cost since it's just one more property on
+ * the same structured-output call) — each section names its own hard
+ * constraints so a strict-schema-compliant but semantically wrong answer
+ * (e.g. an invented entityId) is still caught by the caller's post-call
+ * validation against the candidate lists actually handed in.
  */
 export function buildRouterSystemPrompt(request: RouterRequest): string {
   const knownEntitiesBlock =
@@ -67,7 +77,7 @@ export function buildRouterSystemPrompt(request: RouterRequest): string {
       ? request.recentTurns.map((t) => `${t.role === "user" ? "Owner" : "Enso"}: ${t.text}`).join("\n")
       : "(first message of the conversation)";
 
-  return `You are a routing judgment layer for a personal journaling assistant, deciding three things about the CURRENT user message below. Return ONLY the JSON the schema requires — no prose.
+  return `You are a routing judgment layer for a personal journaling assistant, deciding four things about the CURRENT user message below. Return ONLY the JSON the schema requires — no prose.
 
 CURRENT MESSAGE: ${JSON.stringify(request.message)}
 
@@ -92,5 +102,7 @@ ${circleBackBlock}
 
 Recently surfaced claims this turn could affirm:
 ${claimsBlock}
+
+4. REGISTER — should the reply use the quieter, more restrained "zen" register instead of the ordinary conversational one? Default to "natural" — this is the overwhelming majority case. Choose "zen" only when the CURRENT message shows genuine overwhelm, the owner visibly looping on the same problem without new ground being covered across recent turns, or an explicit ask to zoom out or step back — judge this from the actual content and tone of the message and recent conversation, not from whether it contains a specific trigger word: someone genuinely overwhelmed frequently does NOT use that word at all. Do not choose "zen" for an ordinary emotional moment that a warm, plain reply already handles well, and do not choose it for a technical or practical exchange with no emotional weight at all.
 `;
 }

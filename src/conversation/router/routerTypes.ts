@@ -44,6 +44,8 @@ export interface RouterRequest {
 
 export type RetrievalModeDecision = "hybrid" | "entity" | "recency";
 
+export type RegisterMode = "natural" | "zen";
+
 export interface RouterDecision {
   retrieval: {
     mode: RetrievalModeDecision;
@@ -61,6 +63,20 @@ export interface RouterDecision {
     attribute: "birthdate" | "location" | "occupation" | null;
     value: string | null;
   };
+  /**
+   * EN-048's "real layer": the router's own semantic judgment on whether
+   * THIS turn calls for the conditional zen register, independent of the
+   * cheap literal-trigger-phrase check (src/conversation/voiceMode.ts) —
+   * needed because someone genuinely overwhelmed rarely types the literal
+   * word "overwhelmed" (the exact literal-phrase failure class already in
+   * the regression ledger, R9). No new candidate list needed for this
+   * axis — message + recentTurns (already in RouterRequest) are enough for
+   * the model to judge tone, unlike circleBack/attestation which need an
+   * externally-supplied candidate to validate against.
+   */
+  register: {
+    mode: RegisterMode;
+  };
 }
 
 export interface RouterCallResult {
@@ -70,9 +86,10 @@ export interface RouterCallResult {
   usage: { inputTokens: number; outputTokens: number };
 }
 
-/** EN-075's fail-safe: hybrid retrieval, no temporal weighting, no gate actions — used on router error/timeout/malformed JSON, and on EN-083's uncertified-failover-tier bypass. Never blocks the reply either way. */
+/** EN-075's fail-safe: hybrid retrieval, no temporal weighting, no gate actions, natural register (never zen) — used on router error/timeout/malformed JSON, and on EN-083's uncertified-failover-tier bypass. Never blocks the reply either way. */
 export const SAFE_DEFAULT_DECISION: RouterDecision = {
   retrieval: { mode: "hybrid", entityId: null, temporalWeight: 0, n: null },
   circleBack: { fire: false, entityId: null },
-  attestation: { isAffirmation: false, entityName: null, attribute: null, value: null }
+  attestation: { isAffirmation: false, entityName: null, attribute: null, value: null },
+  register: { mode: "natural" }
 };

@@ -185,4 +185,34 @@ describe("createIntentRouter — EN-083 uncertified-tier gate bypass", () => {
     expect(result.certified).toBe(true);
     expect(result.failureReason).toBeNull();
   });
+
+  it("EN-048: forces register.mode from zen back to natural when served by an uncertified provider, same no-action treatment as circleBack/attestation", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => {
+      throw new ProviderAvailabilityError("503", 503);
+    });
+    const fallback = vi.fn<RouterAdapter>(async () => fakeResult("gemini", decisionWith({ register: { mode: "zen" } })));
+    const router = createIntentRouter(primary, fallback, new Set(["openai"]));
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.register).toEqual({ mode: "natural" });
+    expect(result.certified).toBe(false);
+    expect(result.failureReason).toContain("uncertified tier");
+  });
+
+  it("keeps register.mode zen when served by the certified tier", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ register: { mode: "zen" } })));
+    const router = createIntentRouter(primary, primary, new Set(["openai"]));
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.register).toEqual({ mode: "zen" });
+    expect(result.certified).toBe(true);
+  });
+});
+
+describe("SAFE_DEFAULT_DECISION (EN-048)", () => {
+  it("defaults register to natural, never zen", () => {
+    expect(SAFE_DEFAULT_DECISION.register).toEqual({ mode: "natural" });
+  });
 });

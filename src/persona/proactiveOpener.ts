@@ -4,8 +4,20 @@
  * immediately on load for a genuinely new user, rather than waiting for
  * them to speak into an empty page — "Welcome to Mirror. I'd love to get
  * to know you a little before we start journaling together — what should
- * I call you?" This is that behavior restored, adapted to Enso's identity
- * and the shorter En/Zen voice (EN_ZEN_VOICE_INSTRUCTION).
+ * I call you?" This is that behavior restored, adapted to Enso's identity.
+ *
+ * EN-047/048 voice-architecture refactor note: this string is a hardcoded
+ * literal the client renders directly (see below) — it never actually ran
+ * through buildPersonaBlock() or EN_ZEN_VOICE_INSTRUCTION mechanically, an
+ * earlier version of this comment just described its authored STYLE as
+ * "the shorter En/Zen voice," which was accurate to how it read at the
+ * time but always a stylistic label, never a functional dependency. Now
+ * that zen is a conditional mode rather than the conversational baseline,
+ * that framing is stale: read plainly, this text — direct, plain words, no
+ * aphorism, ends when the thought does — actually already matches
+ * NATURAL_VOICE_INSTRUCTION's register more closely than zen's. No change
+ * to the actual string; a genuinely fresh session's first line is a short,
+ * warm, self-identifying, plain question, and that's what this already is.
  *
  * Deliberately NOT an LLM call and NOT a persisted event: it's a literal,
  * unvarying string the client renders directly (see app/page.tsx) — the

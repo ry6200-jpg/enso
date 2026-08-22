@@ -1,26 +1,36 @@
 import {
   ANTI_SYCOPHANCY_INSTRUCTION,
+  buildPersonaInstruction,
   FACT_RECEIPT_AND_REPETITION_INSTRUCTION,
   FIGURATIVE_LANGUAGE_INSTRUCTION,
   IDENTITY_LINE,
   MEMORY_HONESTY_INSTRUCTION,
   MEMORY_HYPERDRIVE_INSTRUCTION,
-  PERSONA_INSTRUCTION,
-  REGISTER_CALIBRATION_INSTRUCTION
+  NATURAL_VOICE_INSTRUCTION,
+  REGISTER_CALIBRATION_INSTRUCTION,
+  ZEN_MODE_INSTRUCTION
 } from "./instructions.js";
 
+export type VoiceMode = "natural" | "zen";
+
 /**
- * Static persona block (EN-040 through EN-046, plus the register-
- * calibration addition from the UI-fixes-and-persona-corrections batch,
- * item 17): identical text, same order, every call — the same
- * prompt-prefix-caching property the old repo's buildStaticPreamble relied
- * on (see instructions.ts's header comment), carried forward for whichever
- * provider ends up serving the reply.
+ * Static persona block (EN-040 through EN-046, the register-calibration
+ * addition from the UI-fixes-and-persona-corrections batch (item 17), and
+ * the EN-047/048 voice split): identical text and order every call EXCEPT
+ * the one interpolated voice instruction, which is now the ONE thing that
+ * varies per turn — natural by default, zen only when
+ * src/conversation/voiceMode.ts decided this specific turn calls for it.
+ * The prompt-prefix-caching property the old repo's buildStaticPreamble
+ * relied on (see instructions.ts's header comment) still holds for every
+ * other line; only this one interpolation point breaks cache-identity
+ * between a natural-voice turn and a zen-mode turn, which is the correct
+ * tradeoff — the two are meant to read differently.
  */
-export function buildPersonaBlock(): string {
+export function buildPersonaBlock(voiceMode: VoiceMode = "natural"): string {
+  const voiceInstruction = voiceMode === "zen" ? ZEN_MODE_INSTRUCTION : NATURAL_VOICE_INSTRUCTION;
   return [
     IDENTITY_LINE,
-    PERSONA_INSTRUCTION,
+    buildPersonaInstruction(voiceInstruction),
     FACT_RECEIPT_AND_REPETITION_INSTRUCTION,
     MEMORY_HYPERDRIVE_INSTRUCTION,
     FIGURATIVE_LANGUAGE_INSTRUCTION,
@@ -86,8 +96,8 @@ export function buildAttachmentContextBlock(filename: string, content: string): 
   return `=== JUST SHARED (begin) ===\nThe owner just attached a file ("${filename}") to this message. Its content:\n${content}\n\nRespond to it conversationally, carrying the discussion forward using what's actually in it — the way a person would if a friend handed them something to read and started talking about it. This is NOT a request for a document summary or report; don't structure the reply as one, and don't recite the file back.\n=== JUST SHARED (end) ===`;
 }
 
-export function buildSystemPrompt(retrievedBlock: string, recentWindowBlock: string, attachmentBlock: string | null = null): string {
-  const parts = [buildPersonaBlock(), retrievedBlock];
+export function buildSystemPrompt(retrievedBlock: string, recentWindowBlock: string, attachmentBlock: string | null = null, voiceMode: VoiceMode = "natural"): string {
+  const parts = [buildPersonaBlock(voiceMode), retrievedBlock];
   if (attachmentBlock) parts.push(attachmentBlock);
   parts.push(recentWindowBlock);
   return parts.join("\n\n");

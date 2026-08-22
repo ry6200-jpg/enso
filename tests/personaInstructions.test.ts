@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { ANTI_SYCOPHANCY_INSTRUCTION, PERSONA_INSTRUCTION } from "../src/persona/instructions.js";
+import { ANTI_SYCOPHANCY_INSTRUCTION, buildPersonaInstruction, NATURAL_VOICE_INSTRUCTION } from "../src/persona/instructions.js";
+
+// EN-047/048: PERSONA_INSTRUCTION is now a function (the voice text used to
+// vary per-turn) — these tests exercise its content with the natural voice,
+// since these assertions are all about the OTHER, voice-independent parts
+// of the instruction (question count, priority, mechanics-disclosure).
+const PERSONA_INSTRUCTION = buildPersonaInstruction(NATURAL_VOICE_INSTRUCTION);
 
 describe("PERSONA_INSTRUCTION (adversarial-test batch, item 1: question cap removed)", () => {
   it("no longer imposes a hard one-question-per-reply ceiling", () => {
