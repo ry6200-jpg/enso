@@ -49,3 +49,27 @@ describe("ANTI_SYCOPHANCY_INSTRUCTION (item 3b: never falsely agree to an undeli
     expect(ANTI_SYCOPHANCY_INSTRUCTION).toMatch(/worse failure than declining it honestly/);
   });
 });
+
+describe("PERSONA_INSTRUCTION (EN-096: unsolicited advice / lecture mode)", () => {
+  it("withholds an unbidden technical or design opinion, same 'didn't ask for it' principle as the coach's own withhold", () => {
+    expect(PERSONA_INSTRUCTION).toMatch(/UNSOLICITED ADVICE \/ LECTURE MODE/);
+    expect(PERSONA_INSTRUCTION).toMatch(/is withheld, exactly like an unbidden coaching question/);
+  });
+
+  it("frames the discriminator as SUBJECT (person vs. artifact), never TOPIC (technical vs. not) — a technical project stays legitimate Invested Curiosity", () => {
+    expect(PERSONA_INSTRUCTION).toMatch(/This is SUBJECT, not TOPIC/);
+    expect(PERSONA_INSTRUCTION).toMatch(/talking about a technical project is completely legitimate curiosity/);
+  });
+
+  it("MANDATORY (the main regression risk): a directly-asked technical question must still be answered, never deflected or swapped for a coaching question", () => {
+    expect(PERSONA_INSTRUCTION).toMatch(/A DIRECTLY asked technical question is answered/);
+    expect(PERSONA_INSTRUCTION).toMatch(/short, plain, genuinely real/);
+    expect(PERSONA_INSTRUCTION).toMatch(/deflecting, playing dumb, or swapping in a coaching question instead of the actual answer is a worse failure than the lecture it replaces/);
+  });
+
+  it("never reproduces the blanket-prohibition capability kill (R3) — no wording bans technical topics outright", () => {
+    expect(PERSONA_INSTRUCTION).not.toMatch(/never (discuss|answer|engage with) technical/i);
+    expect(PERSONA_INSTRUCTION).not.toMatch(/no technical (topics|discussion|help)/i);
+    expect(PERSONA_INSTRUCTION).not.toMatch(/refuse (to answer|any) technical/i);
+  });
+});
