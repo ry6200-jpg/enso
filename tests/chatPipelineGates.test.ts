@@ -200,6 +200,21 @@ describe("sendMessage — circle-back directive injection and EN-073 verificatio
     expect(payload.gateActions.circleBackFired).toBeNull(); // Marcus never got the slot
     expect(payload.gateActions.selfBirthdateAskFired).toBe(true);
   });
+
+  it("EN-097 ordering: self-birthdate establishment ALSO outranks elicitation on a genuinely fresh, first-real-turn user — the two never collide", async () => {
+    // A brand-new user (empty archive) is exactly the scenario where BOTH
+    // selfBirthdateGate and elicitation's Layer 1 would otherwise want the
+    // first move — this is the explicit ordering resolution from
+    // proactiveOpener.ts's own doc comment, verified end to end here.
+    deps.chatRouter = fakeChatRouter("Great to meet you, Richard. When's your birthday?"); // the self-directive should win, not the elicitation one
+    deps.intentRouter = fakeIntentRouter({ decision: decisionWith({ curiosityTurn: { fire: true, kind: "elicitation", entityId: null, attribute: null, probeType: "call2am" } }) });
+
+    const result = await sendMessage(deps, { userId: PRIMARY_USER_ID, text: "Richard", recentTurns: [] });
+
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.gateActions.elicitationFired).toBeNull(); // elicitation never got the slot
+    expect(payload.gateActions.selfBirthdateAskFired).toBe(true);
+  });
 });
 
 describe("sendMessage — attestation gate resolves to a real fact_confirmed event", () => {

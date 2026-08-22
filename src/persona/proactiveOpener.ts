@@ -2,22 +2,41 @@
  * UI-fixes-and-persona-corrections batch, item 13 (confirmed regression):
  * the old repo (/home/yer/gemini_project) sent a fixed first message
  * immediately on load for a genuinely new user, rather than waiting for
- * them to speak into an empty page — "Welcome to Mirror. I'd love to get
- * to know you a little before we start journaling together — what should
- * I call you?" This is that behavior restored, adapted to Enso's identity.
+ * them to speak into an empty page. This is that behavior; the mechanism
+ * (client-side, gated on GET /api/history genuinely holding zero messages
+ * for the user, never rebuilt) is unchanged — only the text changed, and
+ * only once since, for EN-097's first-session-introduction batch below.
  *
- * EN-047/048 voice-architecture refactor note: this string is a hardcoded
- * literal the client renders directly (see below) — it never actually ran
- * through buildPersonaBlock() or EN_ZEN_VOICE_INSTRUCTION mechanically, an
- * earlier version of this comment just described its authored STYLE as
- * "the shorter En/Zen voice," which was accurate to how it read at the
- * time but always a stylistic label, never a functional dependency. Now
- * that zen is a conditional mode rather than the conversational baseline,
- * that framing is stale: read plainly, this text — direct, plain words, no
- * aphorism, ends when the thought does — actually already matches
- * NATURAL_VOICE_INSTRUCTION's register more closely than zen's. No change
- * to the actual string; a genuinely fresh session's first line is a short,
- * warm, self-identifying, plain question, and that's what this already is.
+ * EN-097 revision: the previous text ("Hi, I'm Enso. I'd love to get to
+ * know you a little before we start — what should I call you?") was a
+ * clean, warm question, but said nothing about what a first-time user
+ * would actually GET from using Enso — it read as a friendly generic
+ * greeting, not an introduction to what this specific thing is for. The
+ * explicit brief: convey plainly, in one or two short sentences, that (1)
+ * this is a place to talk about their life and the people in it, (2) it
+ * remembers, so it's still here later, and (3) the more they share, the
+ * more it can hold for them — then a short, warm opening, never a feature
+ * pitch (no naming memory/zodiac/provenance/attachments as capabilities;
+ * a capability list makes a companion read as software) and never a tour
+ * or a bullet list.
+ *
+ * EN-030/097 ordering, resolved explicitly (both selfBirthdateGate and
+ * elicitation's Layer 1 want the first real move once the user answers
+ * this opener — they must not both fire the same turn): selfBirthdateGate
+ * fires FIRST and is left completely untouched, unconditional, exactly as
+ * it already was. Reasoning: it's a single, quick, one-shot fact that
+ * unlocks other features (the zodiac sidebar and Horoscope tab, EN-031/
+ * 032) and costs almost nothing to ask — real housekeeping, not relationship-
+ * building, so getting it out of the way first doesn't cost anything
+ * elicitation would otherwise use. This exact sequence (name, then
+ * birthdate, then open into real conversation) already read naturally in
+ * live use — see the real transcript this session's curiosity-redesign
+ * work was calibrated against. chatPipeline.ts's existing priority chain
+ * (`selfBirthdateEligible ? [] : ...`) already enforces this without any
+ * code change: elicitation candidates are never even computed while
+ * self-birthdate is eligible, exactly like third-party circle-back before
+ * it. Elicitation's Layer 1 (name generators) naturally begins from the
+ * turn after that, once the quick housekeeping is done.
  *
  * Deliberately NOT an LLM call and NOT a persisted event: it's a literal,
  * unvarying string the client renders directly (see app/page.tsx) — the
@@ -33,4 +52,5 @@
  * was answering, since this string is never itself in the event log for
  * that lookup to find.
  */
-export const PROACTIVE_OPENER_MESSAGE = "Hi, I'm Enso. I'd love to get to know you a little before we start — what should I call you?";
+export const PROACTIVE_OPENER_MESSAGE =
+  "Hi, I'm Enso. This is a place to talk about your life and the people in it. I remember, so it's still here later — the more you share, the more I can hold onto. What should I call you?";
