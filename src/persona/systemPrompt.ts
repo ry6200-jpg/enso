@@ -5,14 +5,17 @@ import {
   IDENTITY_LINE,
   MEMORY_HONESTY_INSTRUCTION,
   MEMORY_HYPERDRIVE_INSTRUCTION,
-  PERSONA_INSTRUCTION
+  PERSONA_INSTRUCTION,
+  REGISTER_CALIBRATION_INSTRUCTION
 } from "./instructions.js";
 
 /**
- * Static persona block (EN-040 through EN-046): identical text, same order,
- * every call — the same prompt-prefix-caching property the old repo's
- * buildStaticPreamble relied on (see instructions.ts's header comment),
- * carried forward for whichever provider ends up serving the reply.
+ * Static persona block (EN-040 through EN-046, plus the register-
+ * calibration addition from the UI-fixes-and-persona-corrections batch,
+ * item 17): identical text, same order, every call — the same
+ * prompt-prefix-caching property the old repo's buildStaticPreamble relied
+ * on (see instructions.ts's header comment), carried forward for whichever
+ * provider ends up serving the reply.
  */
 export function buildPersonaBlock(): string {
   return [
@@ -22,7 +25,8 @@ export function buildPersonaBlock(): string {
     MEMORY_HYPERDRIVE_INSTRUCTION,
     FIGURATIVE_LANGUAGE_INSTRUCTION,
     ANTI_SYCOPHANCY_INSTRUCTION,
-    MEMORY_HONESTY_INSTRUCTION
+    MEMORY_HONESTY_INSTRUCTION,
+    REGISTER_CALIBRATION_INSTRUCTION
   ].join("\n\n");
 }
 
