@@ -11,7 +11,9 @@ const BASE_REQUEST: RouterRequest = {
   knownEntities: [{ entityId: "e1", name: "Elena" }],
   curiosityTurnEligible: true,
   curiosityCandidates: [{ kind: "thirdParty", candidate: { entityId: "c1", name: "Marcus", attemptNumber: 1, mentionAgeLabel: "earlier today", stableKey: "stable-c1" } }],
-  recentAttributeClaims: [{ entityName: "Elena", attribute: "location", value: "Seattle", extractionEventId: "ext1" }]
+  recentAttributeClaims: [{ entityName: "Elena", attribute: "location", value: "Seattle", extractionEventId: "ext1" }],
+  ambientLocationCandidates: [{ entityId: "e1", name: "Elena", location: "Seattle" }],
+  ownLocationAvailable: true
 };
 
 function fakeResult(provider: "openai" | "gemini", decision: RouterDecision): RouterCallResult {
@@ -182,6 +184,84 @@ describe("createIntentRouter — per-axis validation against candidate lists", (
 
     expect(result.decision.attestation).toEqual({ isAffirmation: true, entityName: "Elena", attribute: "location", value: "Seattle" });
   });
+
+  it("ambient context batch, item 1: suppresses thirdPartyEntityId when the model invents one not in ambientLocationCandidates", async () => {
+    const primary = vi.fn<RouterAdapter>(async () =>
+      fakeResult("openai", decisionWith({ ambientContext: { relevant: true, ownSituation: false, thirdPartyEntityId: "not-a-candidate", namedPlaceForDistance: null } }))
+    );
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.ambientContext).toEqual({ relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null });
+  });
+
+  it("keeps thirdPartyEntityId when it IS in ambientLocationCandidates", async () => {
+    const primary = vi.fn<RouterAdapter>(async () =>
+      fakeResult("openai", decisionWith({ ambientContext: { relevant: true, ownSituation: false, thirdPartyEntityId: "e1", namedPlaceForDistance: null } }))
+    );
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.ambientContext).toEqual({ relevant: true, ownSituation: false, thirdPartyEntityId: "e1", namedPlaceForDistance: null });
+  });
+
+  it("suppresses ownSituation when ownLocationAvailable was false this turn, regardless of the model's own judgment", async () => {
+    const primary = vi.fn<RouterAdapter>(async () =>
+      fakeResult("openai", decisionWith({ ambientContext: { relevant: true, ownSituation: true, thirdPartyEntityId: null, namedPlaceForDistance: null } }))
+    );
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route({ ...BASE_REQUEST, ownLocationAvailable: false });
+
+    expect(result.decision.ambientContext).toEqual({ relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null });
+  });
+
+  it("keeps ownSituation when ownLocationAvailable was true", async () => {
+    const primary = vi.fn<RouterAdapter>(async () =>
+      fakeResult("openai", decisionWith({ ambientContext: { relevant: true, ownSituation: true, thirdPartyEntityId: null, namedPlaceForDistance: null } }))
+    );
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(BASE_REQUEST); // ownLocationAvailable: true
+
+    expect(result.decision.ambientContext.ownSituation).toBe(true);
+  });
+
+  it("keeps namedPlaceForDistance as free text — never validated against a candidate list, unlike entity ids", async () => {
+    const primary = vi.fn<RouterAdapter>(async () =>
+      fakeResult("openai", decisionWith({ ambientContext: { relevant: true, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: "the pharmacy she mentioned" } }))
+    );
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.ambientContext.namedPlaceForDistance).toBe("the pharmacy she mentioned");
+  });
+
+  it("suppresses ambientContext entirely when relevant=false but a sub-field was set anyway — a malformed-but-schema-valid decision", async () => {
+    const primary = vi.fn<RouterAdapter>(async () =>
+      fakeResult("openai", decisionWith({ ambientContext: { relevant: false, ownSituation: true, thirdPartyEntityId: null, namedPlaceForDistance: "somewhere" } }))
+    );
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.ambientContext).toEqual({ relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null });
+  });
+
+  it("downgrades relevant=true to false when every sub-field ends up cleared after validation — nothing left to fetch", async () => {
+    const primary = vi.fn<RouterAdapter>(async () =>
+      fakeResult("openai", decisionWith({ ambientContext: { relevant: true, ownSituation: true, thirdPartyEntityId: null, namedPlaceForDistance: null } }))
+    );
+    const router = createIntentRouter(primary, primary);
+
+    // ownLocationAvailable false clears the only true field (ownSituation), leaving nothing relevant.
+    const result = await router.route({ ...BASE_REQUEST, ownLocationAvailable: false });
+
+    expect(result.decision.ambientContext.relevant).toBe(false);
+  });
 });
 
 describe("createIntentRouter — EN-083 uncertified-tier gate bypass", () => {
@@ -246,6 +326,33 @@ describe("createIntentRouter — EN-083 uncertified-tier gate bypass", () => {
     const result = await router.route(BASE_REQUEST);
 
     expect(result.decision.register).toEqual({ mode: "zen" });
+    expect(result.certified).toBe(true);
+  });
+
+  it("ambient context batch, item 1: forces ambientContext to no-action when served by an uncertified provider — real, billed API calls are exactly the consequence EN-083 exists to gate", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => {
+      throw new ProviderAvailabilityError("503", 503);
+    });
+    const fallback = vi.fn<RouterAdapter>(async () =>
+      fakeResult("gemini", decisionWith({ ambientContext: { relevant: true, ownSituation: true, thirdPartyEntityId: null, namedPlaceForDistance: null } }))
+    );
+    const router = createIntentRouter(primary, fallback, new Set(["openai"]));
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.ambientContext).toEqual({ relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null });
+    expect(result.certified).toBe(false);
+  });
+
+  it("keeps ambientContext.relevant when served by the certified tier", async () => {
+    const primary = vi.fn<RouterAdapter>(async () =>
+      fakeResult("openai", decisionWith({ ambientContext: { relevant: true, ownSituation: true, thirdPartyEntityId: null, namedPlaceForDistance: null } }))
+    );
+    const router = createIntentRouter(primary, primary, new Set(["openai"]));
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.ambientContext.relevant).toBe(true);
     expect(result.certified).toBe(true);
   });
 });

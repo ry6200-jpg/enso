@@ -7,6 +7,21 @@ import { formatPlaceName } from "./reverseGeocode.js";
  * residence, never an event, never entity_attributes, never extraction
  * input. Resolved fresh per turn from whatever the client + request
  * happen to carry — nothing here is ever persisted.
+ *
+ * SAME EXCLUSION, EXPLICITLY EXTENDED (ambient context batch, item 1):
+ * weather, walking distance, nearby places, and local time (own or a
+ * third party's — src/conversation/ambientContextFetch.ts, src/location/
+ * weather.ts, walkingRoute.ts, placesSearch.ts, timeZoneLookup.ts) are
+ * ALL the same class of data as this file's own placeName/timezone —
+ * true for one turn only, delivered via their own prompt block
+ * (buildAmbientContextBlock, systemPrompt.ts), and structurally excluded
+ * from extraction the identical way: extraction (refreshMemoryAfterTurn,
+ * turnMemoryRefresh.ts) only ever reads the raw message_sent event text,
+ * never the assembled system prompt, so anything delivered as a context
+ * block — this one included — is never in extraction's view at all. None
+ * of it is ever stored, logged, or given a rebuildable identity; a
+ * rebuild must stay deterministic from the event log alone, and Enso must
+ * never claim next spring that it was hot at the owner's mother's place.
  */
 export interface CurrentLocationContext {
   /** From Tier 1 (client-geocoded) or Tier 2 (server IP lookup) — null when only Tier 3 (timezone) resolved, or nothing did. */

@@ -88,6 +88,30 @@ function validateDecision(raw: RouterDecision, request: RouterRequest): { decisi
     }
   }
 
+  const NO_ACTION_AMBIENT_CONTEXT = { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null } as const;
+
+  if (decision.ambientContext.relevant) {
+    if (decision.ambientContext.ownSituation && !request.ownLocationAvailable) {
+      reasons.push("ambientContext.ownSituation=true but ownLocationAvailable was false this turn — suppressed, nothing to fetch");
+      decision.ambientContext = { ...decision.ambientContext, ownSituation: false };
+    }
+    if (decision.ambientContext.thirdPartyEntityId !== null) {
+      const known = request.ambientLocationCandidates.some((c) => c.entityId === decision.ambientContext.thirdPartyEntityId);
+      if (!known) {
+        reasons.push(`ambientContext.thirdPartyEntityId ${JSON.stringify(decision.ambientContext.thirdPartyEntityId)} is not an eligible ambient-location candidate — suppressed`);
+        decision.ambientContext = { ...decision.ambientContext, thirdPartyEntityId: null };
+      }
+    }
+    // Downgrade relevant=true to false if, after the checks above, nothing is actually left to fetch — an
+    // uninformative "relevant" flag with every sub-field cleared is functionally the same as never having fired.
+    if (!decision.ambientContext.ownSituation && decision.ambientContext.thirdPartyEntityId === null && decision.ambientContext.namedPlaceForDistance === null) {
+      decision.ambientContext = NO_ACTION_AMBIENT_CONTEXT;
+    }
+  } else if (decision.ambientContext.ownSituation || decision.ambientContext.thirdPartyEntityId !== null || decision.ambientContext.namedPlaceForDistance !== null) {
+    reasons.push("ambientContext had a sub-field set while relevant=false — suppressed entirely");
+    decision.ambientContext = NO_ACTION_AMBIENT_CONTEXT;
+  }
+
   return { decision, reasons };
 }
 
@@ -99,12 +123,14 @@ function validateDecision(raw: RouterDecision, request: RouterRequest): { decisi
  * certifiedProviders: which provider(s) this phase's N=20 bank (EN-074/075)
  * has actually validated for gate judgment — only openai/gpt-5.6-terra by
  * default. A decision served by any other provider gets its gates
- * (curiosityTurn, attestation, and EN-048's register — zen forced back to
- * natural, the same no-action treatment as the other two) forced to
- * no-action (EN-083); retrieval mode is not a gate in this sense (it has
- * its own safe fallback already, and a wrong retrieval mode degrades
- * search quality, never fabricates an
- * authoritative event) and is used as decided either way.
+ * (curiosityTurn, attestation, EN-048's register — zen forced back to
+ * natural, and this batch's ambientContext — real, billed API calls are
+ * exactly the kind of consequence an uncertified tier's judgment
+ * shouldn't authorize) forced to no-action (EN-083); retrieval mode is
+ * not a gate in this sense (it has its own safe fallback already, and a
+ * wrong retrieval mode degrades search quality, never fabricates an
+ * authoritative event or spends real money) and is used as decided
+ * either way.
  */
 export function createIntentRouter(
   primary: RouterAdapter,
@@ -143,13 +169,14 @@ export function createIntentRouter(
       }
 
       const isCertified = certifiedProviders.has(raw.provider);
-      if (!isCertified && (decision.curiosityTurn.fire || decision.attestation.isAffirmation || decision.register.mode === "zen")) {
+      if (!isCertified && (decision.curiosityTurn.fire || decision.attestation.isAffirmation || decision.register.mode === "zen" || decision.ambientContext.relevant)) {
         reasons.push(`gates bypassed to no-action: decision served by uncertified tier "${raw.provider}" (EN-083)`);
         decision = {
           ...decision,
           curiosityTurn: { fire: false, kind: null, entityId: null, attribute: null, probeType: null },
           attestation: { isAffirmation: false, entityName: null, attribute: null, value: null },
-          register: { mode: "natural" }
+          register: { mode: "natural" },
+          ambientContext: { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null }
         };
       }
 

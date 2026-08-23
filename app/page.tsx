@@ -195,6 +195,14 @@ export default function Page() {
   // context, resent with every /api/chat call, never stored beyond state.
   const [locationContext, setLocationContext] = useState<LocationContextState>({ placeName: null, timezone: null });
   const [locationBlocked, setLocationBlocked] = useState(false);
+  // Ambient context batch, item 1: supersedes the earlier "reverse-geocode
+  // then discard coordinates" decision — raw coordinates are now RETAINED
+  // in memory (never persisted, never written anywhere) so every /api/chat
+  // call can send them, for whatever the server-side ambient relevance
+  // gate decides is worth a real Weather/Time Zone/Routes/Places lookup
+  // this specific turn. Still resolved the exact same way (attemptGeolocation,
+  // below) — this only changes what happens to the value AFTER that.
+  const [coordinates, setCoordinates] = useState<{ latitude: number; longitude: number } | null>(null);
   // Confirmed live: this ref only guards ONE attempt per PAGE LOAD, not per
   // browser-permission-lifetime — a tab left open across a server restart
   // that newly enabled Tier 1 (e.g. GOOGLE_MAPS_API_KEY added) will NOT
@@ -600,7 +608,11 @@ export default function Page() {
         // since reversed in the browser's own site settings.
         setLocationBlocked(false);
         logLocationPermissionDecision("granted");
-        const { latitude, longitude } = position.coords; // read once, never stored — discarded the instant this callback returns
+        const { latitude, longitude } = position.coords;
+        // Item 1: retained in state now (superseding the old "discarded the
+        // instant this callback returns" behavior) — never persisted beyond
+        // this in-memory value, sent fresh with every /api/chat call below.
+        setCoordinates({ latitude, longitude });
         fetch("/api/location", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ latitude, longitude }) })
           .then((res) => res.json())
           .then((json: { placeName: string | null }) => {
@@ -666,7 +678,7 @@ export default function Page() {
       // message state was never guaranteed to reflect what the server
       // actually held, and hardcoding "last 6" here was the reason Enso
       // used to be blind past 6 turns within a single long session.
-      const res = await authFetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, attachmentEventId, locationContext }) });
+      const res = await authFetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, attachmentEventId, locationContext, coordinates }) });
       const json = await res.json();
       if (!res.ok) {
         setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "enso", text: `(reply failed — your message was still saved: ${json.error})` }]);

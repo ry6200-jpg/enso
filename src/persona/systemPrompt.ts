@@ -14,6 +14,7 @@ import {
   ZEN_MODE_INSTRUCTION
 } from "./instructions.js";
 import type { EntityDossier, SelfProfile } from "../projections/peopleView.js";
+import { formatLocalTime } from "../location/timeZoneLookup.js";
 
 export type VoiceMode = "natural" | "zen";
 
@@ -121,14 +122,6 @@ const LOCATION_TIER_LABEL: Record<"geolocation" | "ip", string> = {
   ip: "via approximate network location"
 };
 
-function formatLocalTime(timezone: string): string | null {
-  try {
-    return new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit", hour12: true }).format(new Date());
-  } catch {
-    return null; // an unrecognized/invalid IANA timezone string — never crash the reply over it
-  }
-}
-
 /**
  * Ambient current-location block — WHERE THE OWNER IS RIGHT NOW, never
  * their residence (see CURRENT_LOCATION_INSTRUCTION, instructions.ts, for
@@ -189,6 +182,38 @@ export function buildLocationContextBlock(context: { placeName: string | null; t
 export function buildCurrentDateContextBlock(referenceDate: Date, maxChars: number): string | null {
   const dateLine = new Intl.DateTimeFormat("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" }).format(referenceDate);
   const block = `=== CURRENT DATE (begin) ===\nToday's date: ${dateLine}\n=== CURRENT DATE (end) ===`;
+  return block.length <= maxChars ? block : null;
+}
+
+/**
+ * Ambient context batch, item 1: renders whatever src/conversation/
+ * ambientContextFetch.ts's fetchAmbientContext actually resolved this
+ * turn — never what the router merely judged relevant (a failed API call
+ * for something the router flagged as relevant simply isn't here, per the
+ * same honesty discipline as memory: no data point is ever guessed).
+ * Plain labeled data, no directive language for Enso to recite back if
+ * asked what it was told (THE ANTI-ROBOT RULE) — see the ambient-context
+ * persona instruction (instructions.ts) for how this actually gets USED,
+ * which is deliberately NOT "recite these facts" (see its own governing
+ * rule and two-facts-max discipline).
+ */
+export function buildAmbientContextBlock(
+  data: {
+    own?: { weather: { temperatureCelsius: number; feelsLikeCelsius: number; description: string } | null; localTime: string | null };
+    thirdParty?: { name: string; weather: { temperatureCelsius: number; feelsLikeCelsius: number; description: string } | null; localTime: string | null };
+    distance?: { placeName: string; durationMinutes: number; distanceMeters: number };
+  },
+  maxChars: number
+): string | null {
+  const lines: string[] = [];
+  if (data.own?.weather) lines.push(`Owner's own weather right now: ${Math.round(data.own.weather.temperatureCelsius)}°C (feels like ${Math.round(data.own.weather.feelsLikeCelsius)}°C), ${data.own.weather.description}`);
+  if (data.own?.localTime) lines.push(`Owner's own local time: ${data.own.localTime}`);
+  if (data.thirdParty?.weather) lines.push(`${data.thirdParty.name}'s weather right now: ${Math.round(data.thirdParty.weather.temperatureCelsius)}°C (feels like ${Math.round(data.thirdParty.weather.feelsLikeCelsius)}°C), ${data.thirdParty.weather.description}`);
+  if (data.thirdParty?.localTime) lines.push(`${data.thirdParty.name}'s local time: ${data.thirdParty.localTime}`);
+  if (data.distance) lines.push(`Walking distance to ${data.distance.placeName}: about ${data.distance.durationMinutes} minutes (${Math.round(data.distance.distanceMeters)}m)`);
+  if (lines.length === 0) return null;
+
+  const block = `=== AMBIENT CONTEXT (begin) ===\n${lines.join("\n")}\n=== AMBIENT CONTEXT (end) ===`;
   return block.length <= maxChars ? block : null;
 }
 
@@ -310,12 +335,14 @@ export function buildSystemPrompt(
   selfProfileBlock: string | null = null,
   entityDossierBlock: string | null = null,
   locationContextBlock: string | null = null,
-  dateContextBlock: string | null = null
+  dateContextBlock: string | null = null,
+  ambientContextBlock: string | null = null
 ): string {
   const parts = [buildPersonaBlock(voiceMode)];
   if (dateContextBlock) parts.push(dateContextBlock);
   if (selfProfileBlock) parts.push(selfProfileBlock);
   if (locationContextBlock) parts.push(locationContextBlock);
+  if (ambientContextBlock) parts.push(ambientContextBlock);
   if (entityDossierBlock) parts.push(entityDossierBlock);
   parts.push(retrievedBlock);
   if (attachmentBlock) parts.push(attachmentBlock);

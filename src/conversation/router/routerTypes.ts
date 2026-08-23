@@ -8,6 +8,10 @@
  * candidate lists after the call returns, never trusted blindly).
  */
 
+/** Ambient context batch, item 1: canonical definition lives in ambientCandidates.ts (which builds this pool from ProjectionsDb) — imported and re-exported here rather than duplicated, so there is exactly one definition. */
+import type { AmbientLocationCandidate } from "../ambientCandidates.js";
+export type { AmbientLocationCandidate };
+
 export interface CircleBackCandidate {
   /** The entity's CURRENT projection id — valid for this turn's router selection only. Never persisted for cross-turn matching (see stableKey): entity ids are reassigned on every rebuild (EN-054), a real bug found live in Phase 7 when attempt-tracking briefly keyed off this instead. */
   entityId: string;
@@ -74,6 +78,7 @@ export interface RecentAttributeClaim {
   extractionEventId: string;
 }
 
+
 export interface RouterRequest {
   /** The user's current message, verbatim. */
   message: string;
@@ -95,6 +100,10 @@ export interface RouterRequest {
   curiosityCandidates: CuriosityAskCandidate[];
   /** Attribute claims recently on the table that this turn could be affirming — the router may only ever confirm one already in this list. */
   recentAttributeClaims: RecentAttributeClaim[];
+  /** Ambient context batch, item 1: third parties with a known location, eligible for weather/local-time context this turn — see ambientCandidates.ts. */
+  ambientLocationCandidates: AmbientLocationCandidate[];
+  /** Whether the owner's own coordinates are actually available this turn (client sent them). When false, ownSituation must come back false regardless of what the router might otherwise judge relevant — there's nothing to fetch. */
+  ownLocationAvailable: boolean;
 }
 
 export type RetrievalModeDecision = "hybrid" | "entity" | "recency";
@@ -149,6 +158,24 @@ export interface RouterDecision {
   register: {
     mode: RegisterMode;
   };
+  /**
+   * Ambient context batch, item 1: the relevance gate, folded into this
+   * same call rather than a new one (EN-075's own pattern — see
+   * attestation.ts). GOVERNING RULE: relevant is true only when a live
+   * decision or concern is already on the table — never "location is
+   * known, so mention it." When relevant is false, every other field
+   * here must be false/null and NO ambient API call happens at all this
+   * turn, not even for the owner's own situation.
+   */
+  ambientContext: {
+    relevant: boolean;
+    /** The owner's own weather/local time — silent calibration (case a) or something they can't know about their own situation from where they are. Must be false whenever RouterRequest.ownLocationAvailable was false. */
+    ownSituation: boolean;
+    /** A third party's weather/local time (case b) — must match an ambientLocationCandidates entry's entityId, or null. */
+    thirdPartyEntityId: string | null;
+    /** A place the owner named this turn that a walking-distance/nearby lookup would resolve (case c) — free text (e.g. "the pharmacy she mentioned", "the Pantages"), never validated against a candidate list the way entity ids are: this is resolved via Places lookup, never stored, never treated as a fact in its own right, so an unresolvable or slightly-off name just yields no distance data this turn rather than any real corruption. */
+    namedPlaceForDistance: string | null;
+  };
 }
 
 export interface RouterCallResult {
@@ -163,5 +190,6 @@ export const SAFE_DEFAULT_DECISION: RouterDecision = {
   retrieval: { mode: "hybrid", entityId: null, temporalWeight: 0, n: null },
   curiosityTurn: { fire: false, kind: null, entityId: null, attribute: null, probeType: null },
   attestation: { isAffirmation: false, entityName: null, attribute: null, value: null },
-  register: { mode: "natural" }
+  register: { mode: "natural" },
+  ambientContext: { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null }
 };

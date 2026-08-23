@@ -45,20 +45,32 @@ export const ROUTER_JSON_SCHEMA = {
       },
       required: ["mode"],
       additionalProperties: false
+    },
+    ambientContext: {
+      type: "object",
+      properties: {
+        relevant: { type: "boolean" },
+        ownSituation: { type: "boolean" },
+        thirdPartyEntityId: { type: ["string", "null"] },
+        namedPlaceForDistance: { type: ["string", "null"] }
+      },
+      required: ["relevant", "ownSituation", "thirdPartyEntityId", "namedPlaceForDistance"],
+      additionalProperties: false
     }
   },
-  required: ["retrieval", "curiosityTurn", "attestation", "register"],
+  required: ["retrieval", "curiosityTurn", "attestation", "register", "ambientContext"],
   additionalProperties: false
 } as const;
 
 /**
- * Builds the router's system prompt. All four judgment axes in one call
+ * Builds the router's system prompt. All five judgment axes in one call
  * (EN-075: latency/cost over separate calls — EN-048 added the fourth,
- * register, at zero extra API cost since it's just one more property on
- * the same structured-output call) — each section names its own hard
- * constraints so a strict-schema-compliant but semantically wrong answer
- * (e.g. an invented entityId) is still caught by the caller's post-call
- * validation against the candidate lists actually handed in.
+ * register, and this batch added the fifth, ambientContext, at zero extra
+ * API cost since each is just one more property on the same structured-
+ * output call) — each section names its own hard constraints so a
+ * strict-schema-compliant but semantically wrong answer (e.g. an invented
+ * entityId) is still caught by the caller's post-call validation against
+ * the candidate lists actually handed in.
  */
 export function buildRouterSystemPrompt(request: RouterRequest): string {
   const knownEntitiesBlock =
@@ -87,6 +99,10 @@ export function buildRouterSystemPrompt(request: RouterRequest): string {
     request.recentTurns.length > 0
       ? request.recentTurns.map((t) => `${t.role === "user" ? "Owner" : "Enso"}: ${t.text}`).join("\n")
       : "(first message of the conversation)";
+  const ambientCandidatesBlock =
+    request.ambientLocationCandidates.length > 0
+      ? request.ambientLocationCandidates.map((c) => `- ${c.name} (id: ${c.entityId}) — location on record: ${c.location}`).join("\n")
+      : "(no one on record has a known location)";
 
   return `You are a routing judgment layer for a personal journaling assistant, deciding four things about the CURRENT user message below. Return ONLY the JSON the schema requires — no prose.
 
@@ -124,5 +140,19 @@ Recently surfaced claims this turn could affirm:
 ${claimsBlock}
 
 4. REGISTER — should the reply use the quieter, more restrained "zen" register instead of the ordinary conversational one? Default to "natural" — this is the overwhelming majority case. Choose "zen" only when the CURRENT message shows genuine overwhelm, the owner visibly looping on the same problem without new ground being covered across recent turns, or an explicit ask to zoom out or step back — judge this from the actual content and tone of the message and recent conversation, not from whether it contains a specific trigger word: someone genuinely overwhelmed frequently does NOT use that word at all. Do not choose "zen" for an ordinary emotional moment that a warm, plain reply already handles well, and do not choose it for a technical or practical exchange with no emotional weight at all.
+
+5. AMBIENT CONTEXT — is a real weather/local-time/walking-distance lookup worth making for THIS turn? Default to relevant=false — this is the overwhelming majority case, and it costs real API calls, so only fire it when there's real value. GOVERNING RULE, the ONLY question that matters: is there a live decision or concern already on the table that this data would actually inform? Location being merely KNOWN is never enough on its own — that produces an assistant appending a helpful fact to every turn, which is exactly the failure this gate exists to prevent.
+
+Owner's own coordinates available this turn: ${request.ownLocationAvailable ? "yes" : "no"}. If "no", ownSituation MUST be false no matter what — there is nothing to fetch.
+
+- ownSituation: true when the OWNER's own weather or local time would shape how you read what they're telling you (silent calibration — e.g. they mention being tired at an odd hour, or something that only makes sense knowing it's the middle of the night for them) or when they've asked something that needs it directly. This is rarely worth reciting as a fact back to them — see the ambient-context persona instruction for how it actually gets used once fetched.
+- thirdPartyEntityId: set ONLY when a specific person or place already on record below is relevant to a live concern this turn (e.g. the owner mentions their mother and something about her situation) — MUST exactly match one entry below, never invented, null otherwise.
+
+People/places on record with a known location:
+${ambientCandidatesBlock}
+
+- namedPlaceForDistance: set ONLY when the owner has raised something that a real walking-distance or nearby-place lookup would concretely resolve (e.g. deciding whether to go somewhere, wondering if a specific place is close) — free text naming the place AS THE OWNER DESCRIBED IT (e.g. "the pharmacy she mentioned," "the show tonight"), never a made-up business name; null when nothing like that came up. This is resolved by a real place lookup afterward, not validated against a list the way entity ids are — an unresolvable name just means no distance data surfaces this turn, so there is no harm in leaving it null when you're not sure it will resolve to something real.
+
+If none of the above genuinely applies, relevant MUST be false and every other field null/false — do not set relevant=true "just in case" one of the fields might end up useful.
 `;
 }

@@ -60,3 +60,37 @@ export async function reverseGeocode(latitude: number, longitude: number, apiKey
     return null;
   }
 }
+
+/**
+ * Ambient context batch, item 1: FORWARD geocoding — a stored location
+ * STRING (e.g. an entity_attributes "location" value like "Taman Mutiara
+ * Rini") into coordinates, needed before weather.ts/timeZoneLookup.ts can
+ * look anything up for a third party. Real API shape verified directly
+ * (one live forward-geocode call, "Taman Mutiara Rini, Johor Bahru")
+ * before this was written: `results[0].geometry.location.{lat,lng}` —
+ * confirmed real coordinates for a real Malaysian address, not just a
+ * documented shape.
+ */
+export interface GeocodedCoordinates {
+  latitude: number;
+  longitude: number;
+}
+
+export async function geocodePlaceName(placeName: string, apiKey: string | undefined): Promise<GeocodedCoordinates | null> {
+  if (!apiKey) return null;
+  try {
+    const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(placeName)}&key=${apiKey}`, {
+      signal: AbortSignal.timeout(GEOCODE_TIMEOUT_MS)
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { status?: string; results?: { geometry?: { location?: { lat?: number; lng?: number } } }[] };
+    const result = data.results?.[0];
+    if (data.status !== "OK" || !result) return null;
+    const lat = result.geometry?.location?.lat;
+    const lng = result.geometry?.location?.lng;
+    if (lat === undefined || lng === undefined) return null;
+    return { latitude: lat, longitude: lng };
+  } catch {
+    return null;
+  }
+}

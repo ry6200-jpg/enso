@@ -13,7 +13,7 @@ import { recencyMode } from "../retrieval/recencyMode.js";
 import type { ContentChunkRow, RetrievalDb } from "../retrieval/retrievalDb.js";
 import { assembleContext, DEFAULT_CONTEXT_BUDGETS, type AssembledContext, type ContextBudgets } from "./contextAssembly.js";
 import { decideRetrievalInvocation, findAllMentionedEntityIds, type RetrievalInvocation, type RetrievalMode } from "./retrievalInvocation.js";
-import { buildAttachmentContextBlock, buildCurrentDateContextBlock, buildEntityDossierBlock, buildLocationContextBlock, buildSelfProfileBlock, type RecentTurnForPrompt, type VoiceMode } from "../persona/systemPrompt.js";
+import { buildAmbientContextBlock, buildAttachmentContextBlock, buildCurrentDateContextBlock, buildEntityDossierBlock, buildLocationContextBlock, buildSelfProfileBlock, type RecentTurnForPrompt, type VoiceMode } from "../persona/systemPrompt.js";
 import { buildEntityDossier, buildSelfProfile, MAX_ENTITY_DOSSIERS_PER_TURN } from "../projections/peopleView.js";
 import type { CurrentLocationContext } from "../location/currentLocation.js";
 import { getSessionTurnsForPrompt } from "./conversationHistory.js";
@@ -23,6 +23,8 @@ import { buildSelfBirthdateDirective, isSelfBirthdateEligible, verifySelfBirthda
 import { recentAttributeClaims, resolveAttestation, type FactConfirmedPayload } from "./attestation.js";
 import { decideVoiceMode, hasZenTriggerPhrase } from "./voiceMode.js";
 import type { IntentRouter, RouterResult } from "./router/intentRouter.js";
+import { ambientLocationCandidates } from "./ambientCandidates.js";
+import { fetchAmbientContext } from "./ambientContextFetch.js";
 
 export interface ReplySentPayload {
   text: string;
@@ -82,6 +84,16 @@ export interface ReplySentPayload {
      * own tiny budget, which in practice never happens.
      */
     currentDateContext?: string | null;
+    /**
+     * Ambient context batch, item 1: what actually resolved and was shown
+     * to the model this turn — never a fact about the user, same
+     * debuggability discipline as locationContext above. Null when the
+     * router decided nothing was relevant, OR when relevant fetches were
+     * attempted but every one of them failed (HONESTY: this is
+     * indistinguishable from "nothing relevant" in this field on purpose —
+     * a failed fetch means silence, exactly like never having asked).
+     */
+    ambientContext?: { ownWeatherKnown: boolean; ownLocalTimeKnown: boolean; thirdPartyName: string | null; distancePlaceName: string | null } | null;
   };
   /**
    * Phase 6 round-trip survival: the router's own decision shaped this
@@ -172,6 +184,17 @@ export interface SendMessageDeps {
   chatRouter: ChatRouter;
   /** Optional (Phase 6): when absent, sendMessage falls back to Part 1's local-heuristic-only retrieval decision with no gates — preserves every pre-Phase-6 caller unchanged. */
   intentRouter?: IntentRouter;
+  /**
+   * Ambient context batch, item 1: the same Google Maps Platform key
+   * already used for reverse-geocoding (GOOGLE_MAPS_API_KEY) — Weather,
+   * Time Zone, Routes, and Places (New) are all enabled on that same
+   * project. Optional so every pre-existing caller (tests, the REPL
+   * without ambient wired up) keeps working unchanged; every ambient
+   * fetch function already degrades to null on a missing key, so omitting
+   * this simply means ambientContext never resolves anything, never a
+   * thrown error.
+   */
+  googleMapsApiKey?: string;
 }
 
 export interface SendMessageInput {
@@ -214,6 +237,19 @@ export interface SendMessageInput {
    * only as provenance of what the model saw this one turn.
    */
   locationContext?: CurrentLocationContext | null;
+  /**
+   * Ambient context batch, item 1: raw device coordinates for THIS TURN
+   * ONLY — supersedes the earlier "reverse-geocode then discard
+   * coordinates" decision. Sent by the client with every chat turn (app/
+   * page.tsx), passed straight through by app/api/chat/route.ts with no
+   * geocoding step (Weather/Time Zone take coordinates directly). Used
+   * ONLY here, for whatever ambientContext.ownSituation/namedPlaceForDistance
+   * the router decides is relevant THIS turn — never stored, never an
+   * event, never entity_attributes, never given to extraction
+   * (refreshMemoryAfterTurn is a completely separate call this is never
+   * passed to), same discipline as locationContext above.
+   */
+  ownCoordinates?: { latitude: number; longitude: number } | null;
 }
 
 /**
@@ -362,6 +398,7 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   let curiosityCandidates: CuriosityAskCandidate[] = [];
   let curiosityTurnEligible = false;
   let selfBirthdateEligible = false;
+  let ambientCandidates: ReturnType<typeof ambientLocationCandidates> = [];
 
   if (input.retrievalOverride) {
     // Test/override hook (Part 1): bypasses the router entirely, no gates.
@@ -379,6 +416,7 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     curiosityCandidates = curiosityTurnEligible ? findCuriosityAskCandidates(deps.eventLog, deps.projectionsDb, input.userId, effectiveText) : [];
     const knownEntities = deps.projectionsDb.listEntities(input.userId).map((e) => ({ entityId: e.id, name: e.name }));
     claims = recentAttributeClaims(deps.eventLog, deps.projectionsDb, input.userId);
+    ambientCandidates = ambientLocationCandidates(deps.projectionsDb, input.userId);
 
     routerResult = await deps.intentRouter.route({
       message: effectiveText,
@@ -392,7 +430,9 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       knownEntities,
       curiosityTurnEligible,
       curiosityCandidates,
-      recentAttributeClaims: claims
+      recentAttributeClaims: claims,
+      ambientLocationCandidates: ambientCandidates,
+      ownLocationAvailable: input.ownCoordinates != null
     });
 
     const r = routerResult.decision.retrieval;
@@ -407,7 +447,23 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     invocation = decideRetrievalInvocation(effectiveText, deps.projectionsDb, input.userId);
   }
 
-  const candidateChunks = await runRetrieval(deps, input.userId, invocation);
+  // Ambient context batch, item 1: the real API calls, made ONLY for
+  // whatever the router just decided was relevant (already validated
+  // against ambientCandidates by intentRouter.ts) — run in parallel with
+  // retrieval below since neither depends on the other. Below the gate
+  // (routerResult null, or ambientContext.relevant false) this makes
+  // zero calls of any kind, including the owner's own — fetchAmbientContext
+  // itself short-circuits on `!decision.relevant` before touching anything.
+  const ambientContextDecision = routerResult?.decision.ambientContext ?? { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null };
+  const [candidateChunks, ambientData] = await Promise.all([
+    runRetrieval(deps, input.userId, invocation),
+    fetchAmbientContext({
+      decision: ambientContextDecision,
+      ownCoordinates: input.ownCoordinates ?? null,
+      candidates: ambientCandidates,
+      apiKey: deps.googleMapsApiKey
+    })
+  ]);
 
   const curiosityDecision = routerResult?.decision.curiosityTurn;
   const curiosityAskCandidate: CuriosityAskCandidate | null =
@@ -437,6 +493,12 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   const triggeredByPhrase = hasZenTriggerPhrase(effectiveText);
   const voiceMode: VoiceMode = decideVoiceMode(effectiveText, routerResult?.decision.register.mode ?? null);
 
+  // Ambient context batch, item 1: own budget (maxAmbientContextChars),
+  // never the recent-window budget — same discipline as locationContextBlock/
+  // dateContextBlock above. Deliberately NOT passed anywhere near
+  // extraction below, same as those two.
+  const ambientContextBlock = buildAmbientContextBlock(ambientData, (input.budgets ?? DEFAULT_CONTEXT_BUDGETS).maxAmbientContextChars);
+
   const assembled = assembleContext(
     candidateChunks,
     { mode: invocation.mode, query: invocation.query },
@@ -448,7 +510,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     selfProfileResult.block,
     entityDossierBlock,
     locationContextBlock,
-    dateContextBlock
+    dateContextBlock,
+    ambientContextBlock
   );
 
   const callResult = await deps.chatRouter.reply({ system: assembled.systemPrompt, history: [], latestMessage: effectiveText });
@@ -497,7 +560,17 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       locationContext: locationContextBlock ? input.locationContext! : null,
       // Same "reflects what the model actually saw" discipline as locationContext above — null only if the
       // budget was somehow exceeded (never permission-gated, so this is non-null on effectively every turn).
-      currentDateContext: dateContextBlock ? dateContextBlock : null
+      currentDateContext: dateContextBlock ? dateContextBlock : null,
+      // Reflects what actually resolved and reached the block, not what the router merely judged relevant —
+      // same "what the model actually saw" discipline as locationContext/currentDateContext above.
+      ambientContext: ambientContextBlock
+        ? {
+            ownWeatherKnown: ambientData.own?.weather != null,
+            ownLocalTimeKnown: ambientData.own?.localTime != null,
+            thirdPartyName: ambientData.thirdParty?.name ?? null,
+            distancePlaceName: ambientData.distance?.placeName ?? null
+          }
+        : null
     },
     router: {
       used: routerResult !== null,

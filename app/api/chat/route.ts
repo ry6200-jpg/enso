@@ -37,7 +37,12 @@ export async function POST(request: Request): Promise<Response> {
     return authErrorResponse(err) ?? NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
 
-  const body = (await request.json()) as { text: string; attachmentEventId?: string; locationContext?: { placeName: string | null; timezone: string | null } };
+  const body = (await request.json()) as {
+    text: string;
+    attachmentEventId?: string;
+    locationContext?: { placeName: string | null; timezone: string | null };
+    coordinates?: { latitude: number; longitude: number } | null;
+  };
   const hasText = typeof body.text === "string" && body.text.trim() !== "";
   const hasAttachment = typeof body.attachmentEventId === "string" && body.attachmentEventId.length > 0;
   // Item 8: text alone was required before, which made "attach a file and
@@ -62,6 +67,20 @@ export async function POST(request: Request): Promise<Response> {
     getRequestIp(request)
   );
 
+  // Ambient context batch, item 1: raw coordinates for THIS TURN ONLY,
+  // sent by the client with every chat turn (app/page.tsx) — supersedes
+  // the earlier "reverse-geocode then discard coordinates" decision.
+  // Passed straight through, no geocoding step here (chatPipeline.ts's
+  // own ambient-fetch step uses them directly for Weather/Time Zone).
+  // Same GOOGLE_MAPS_API_KEY already used for reverse-geocoding above —
+  // Weather/Time Zone/Routes/Places (New) are all enabled on that same
+  // project (confirmed via real calls before this was built — see the
+  // batch report).
+  const ownCoordinates =
+    body.coordinates && typeof body.coordinates.latitude === "number" && typeof body.coordinates.longitude === "number"
+      ? { latitude: body.coordinates.latitude, longitude: body.coordinates.longitude }
+      : null;
+
   // Cloud Storage batch: the whole turn — sendMessage AND
   // refreshMemoryAfterTurn — runs inside one checkout/checkin cycle
   // (lib/serverPipeline.ts's runUserSession), so extraction's writes are
@@ -71,8 +90,8 @@ export async function POST(request: Request): Promise<Response> {
     let result;
     try {
       result = await sendMessage(
-        { eventLog, projectionsDb, retrievalDb, embedder, chatRouter, intentRouter },
-        { userId, text: body.text ?? "", attachmentEventId: body.attachmentEventId, locationContext }
+        { eventLog, projectionsDb, retrievalDb, embedder, chatRouter, intentRouter, googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY },
+        { userId, text: body.text ?? "", attachmentEventId: body.attachmentEventId, locationContext, ownCoordinates }
       );
     } catch (err) {
       return { status: 502 as const, body: { error: err instanceof Error ? err.message : String(err) } };

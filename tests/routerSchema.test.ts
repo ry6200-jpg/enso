@@ -8,7 +8,9 @@ const BASE_REQUEST: RouterRequest = {
   knownEntities: [],
   curiosityTurnEligible: true,
   curiosityCandidates: [],
-  recentAttributeClaims: []
+  recentAttributeClaims: [],
+  ambientLocationCandidates: [],
+  ownLocationAvailable: false
 };
 
 describe("ROUTER_JSON_SCHEMA (EN-048's register axis)", () => {
