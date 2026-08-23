@@ -198,3 +198,92 @@ describe("assertAttribute — write-time tier (item 5b), deliberately different 
     expect(result!.value).toBe("4/24/1970");
   });
 });
+
+describe("fact_corrected attribute-value correction, via full rebuild (item 4 #2)", () => {
+  let eventLog: EventLog;
+  let projections: ProjectionsDb;
+
+  beforeEach(() => {
+    eventLog = new EventLog(freshTestDbPath(import.meta.url, "events"));
+    projections = new ProjectionsDb(freshTestDbPath(import.meta.url, "projections"));
+  });
+
+  // Deliberately NOT "Richard" here: item 5's write-time validation
+  // already rejects that at the source on every rebuild (rebuild
+  // reprocesses the whole event log from scratch every call — there is
+  // no longer a scenario where a bare-name birthdate ever reaches
+  // storage to correct in the first place). fact_corrected/#2 exists for
+  // a case write-time validation structurally CANNOT catch: a FULLY
+  // valid-format date that's simply the wrong one. For an immutable
+  // attribute, "oldest valid wins" — so even an ordinary LATER, correct
+  // assertion can never override the first (wrong) one; only a
+  // deliberate, explicit correction can.
+  it("overrides 'oldest valid wins' for an immutable attribute — an ordinary later assertion can't, only an explicit correction can", () => {
+    const msg = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "1975-01-01", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    const extraction = eventLog.append({
+      type: "extraction_completed",
+      actor: "system",
+      payload: { sourceEventId: msg.id, extractorVersion: "message-v1", entities: [], structuralAtoms: [], socialBonds: [], attributes: [{ entityName: "me", attribute: "birthdate", value: "1975-01-01", eventDate: null }] },
+      userId: PRIMARY_USER_ID
+    });
+
+    // Before the correction: the wrong-but-fully-valid date is the ONLY row, so it wins outright.
+    const before = rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+    expect(getPrimaryUserBirthdate(projections, PRIMARY_USER_ID)).toBe("1975-01-01");
+    expect(before.attributeCorrectionsApplied).toBe(0);
+
+    eventLog.append({
+      type: "fact_corrected",
+      actor: "user",
+      payload: { targetEventId: extraction.id, entityName: "me", attribute: "birthdate", correctedValue: "1970-04-24" },
+      userId: PRIMARY_USER_ID
+    });
+
+    const after = rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+    expect(after.attributeCorrectionsApplied).toBe(1);
+    expect(getPrimaryUserBirthdate(projections, PRIMARY_USER_ID)).toBe("1970-04-24");
+
+    // The wrong row is genuinely GONE, not merely outranked — only one row remains, and it's the corrected value.
+    const history = projections.listEntityAttributeHistory(PRIMARY_USER_ID, primaryEntityId(PRIMARY_USER_ID), "birthdate");
+    expect(history.map((r) => r.value)).toEqual(["1970-04-24"]);
+  });
+
+  it("a correction that resolves to an implausible value is rejected at write time (item 5), and the old row survives untouched", () => {
+    const msg = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "1975-01-01", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    const extraction = eventLog.append({
+      type: "extraction_completed",
+      actor: "system",
+      payload: { sourceEventId: msg.id, extractorVersion: "message-v1", entities: [], structuralAtoms: [], socialBonds: [], attributes: [{ entityName: "me", attribute: "birthdate", value: "1975-01-01", eventDate: null }] },
+      userId: PRIMARY_USER_ID
+    });
+    eventLog.append({
+      type: "fact_corrected",
+      actor: "user",
+      payload: { targetEventId: extraction.id, entityName: "me", attribute: "birthdate", correctedValue: "Bob" },
+      userId: PRIMARY_USER_ID
+    });
+
+    const result = rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+
+    expect(result.attributeCorrectionsApplied).toBe(0);
+    // The rejected correction must never destroy the old row — it's still the best available value.
+    expect(getPrimaryUserBirthdate(projections, PRIMARY_USER_ID)).toBe("1975-01-01");
+    const history = projections.listEntityAttributeHistory(PRIMARY_USER_ID, primaryEntityId(PRIMARY_USER_ID), "birthdate");
+    expect(history.map((r) => r.value)).toEqual(["1975-01-01"]);
+  });
+
+  it("a correction targeting an event that produced no such attribute is a no-op, never a search or a guess", () => {
+    const msg = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "hello", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    eventLog.append({
+      type: "fact_corrected",
+      actor: "user",
+      payload: { targetEventId: msg.id, entityName: "me", attribute: "birthdate", correctedValue: "1970-04-24" },
+      userId: PRIMARY_USER_ID
+    });
+
+    const result = rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+
+    expect(result.attributeCorrectionsApplied).toBe(0);
+    expect(getPrimaryUserBirthdate(projections, PRIMARY_USER_ID)).toBeNull();
+  });
+});

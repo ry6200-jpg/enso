@@ -362,6 +362,21 @@ export class ProjectionsDb {
       .run(row);
   }
 
+  /**
+   * Item 4 #2: removes one entity_attributes row by id — used ONLY when
+   * rebuild.ts applies a fact_corrected attribute-value correction,
+   * replacing the corrected-away row with a freshly write-time-validated
+   * one (assertAttribute). Safe against the "never edited in place"
+   * architecture invariant: that rule binds the EVENT LOG, which this
+   * never touches — entity_attributes is a derived projection, fully
+   * cleared and rebuilt from the event log on every rebuildProjections
+   * call (see clearProjections), so removing a row here just means "this
+   * rebuild pass decided not to keep it," never a mutation of history.
+   */
+  deleteEntityAttribute(id: string): void {
+    this.db.prepare(`DELETE FROM entity_attributes WHERE id = ?`).run(id);
+  }
+
   /** All versions, oldest first (created_at ascending — ULID ids sort the same way). */
   listEntityAttributeHistory(userId: string, entityId: string, attribute: EntityAttributeRow["attribute"]): EntityAttributeRow[] {
     return this.db

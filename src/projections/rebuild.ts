@@ -37,7 +37,11 @@ interface ExtractionFailedPayload {
 interface FactCorrectedPayload {
   targetEventId: string; // the extraction_completed event ULID being corrected (EN-055)
   entityName: string;
-  correctedName: string;
+  /** Entity-NAME correction (original use). Exactly one of correctedName / (attribute + correctedValue) is ever present on a real fact_corrected event — never both, see rebuild's processing below. */
+  correctedName?: string;
+  /** Attribute-VALUE correction (item 4 #2, new) — see src/conversation/correction.ts's resolveCorrection for how this gets produced. */
+  attribute?: "birthdate" | "location" | "occupation";
+  correctedValue?: string;
 }
 interface FactConfirmedPayload {
   targetEventId: string; // the extraction_completed event ULID being confirmed
@@ -61,6 +65,8 @@ export interface RebuildResult {
   extractionsConsumed: number;
   messagesCurrentlyFailed: number;
   correctionsApplied: number;
+  /** Item 4 #2: fact_corrected events that replaced an entity_attributes VALUE, distinct from correctionsApplied (entity-NAME corrections). */
+  attributeCorrectionsApplied: number;
   confirmationsApplied: number;
   structuralAtomsApplied: number;
   socialBondsApplied: number;
@@ -406,27 +412,94 @@ export function rebuildProjections(
     }
   }
 
+  /**
+   * Ambient/register/zodiac batch, item 4 #2: a pre-existing bug found
+   * (not introduced) while wiring attribute-value corrections through
+   * this exact lookup — resolveName's own "me" special case (above:
+   * `if (lower === "me") return primaryEntityId(userId);`) returns
+   * immediately WITHOUT ever populating mentionResolution, since the
+   * primary user's own entity id needs no cache-and-search machinery at
+   * all. That means a bare `mentionResolution.get(...)` lookup for
+   * entityName "me" always misses — silently breaking correction/
+   * confirmation of the OWNER's OWN facts specifically, exactly the case
+   * this item's birthdate fix is about. Fixed once, here, shared by all
+   * three fact_corrected/fact_confirmed lookups below (name correction,
+   * attribute correction, confirmation) rather than three separate places
+   * inconsistently reimplementing the "me" special case.
+   */
+  function resolveCorrectionTargetEntity(targetEventId: string, entityName: string): string | undefined {
+    if (normalize(entityName.trim()) === "me") return primaryEntityId(userId);
+    return mentionResolution.get(`${targetEventId}|${normalize(entityName)}`);
+  }
+
   // Corrections take precedence over extraction output (EN-055), binding
   // to the extraction_completed event ULID + the original mention name —
   // mentionResolution already maps exactly that pair to the entity it
   // resolved to, so no search is needed.
   let correctionsApplied = 0;
+  // Item 4 #2: a SECOND kind of fact_corrected, alongside the original
+  // entity-name one above — an attribute-VALUE correction. Same
+  // targetEventId+entityName binding, then: delete the specific,
+  // now-superseded entity_attributes row (found by matching BOTH the
+  // attribute type and the targetEventId inside that row's own
+  // source_event_ids — a single extraction_completed event can carry
+  // several different attributes for the same entity, so matching on
+  // targetEventId alone isn't precise enough), then write the corrected
+  // value through assertAttribute exactly like a fresh assertion —
+  // item 5's write-time validation applies here too, a correction to an
+  // implausible value is rejected the same as any other write. This is
+  // what makes resolveAttribute treat the correction as authoritative
+  // for an immutable attribute: the wrong row is genuinely gone from
+  // this rebuild's projection, not merely outranked by "oldest valid
+  // wins" the way an ordinary new assertion would be.
+  let attributeCorrectionsApplied = 0;
   for (const event of events) {
     if (event.type !== "fact_corrected") continue;
     const payload = event.payload as FactCorrectedPayload;
-    const entityId = mentionResolution.get(`${payload.targetEventId}|${normalize(payload.entityName)}`);
+    const entityId = resolveCorrectionTargetEntity(payload.targetEventId, payload.entityName);
     if (!entityId) continue; // nothing to correct — the target produced no entity under that name
-    projections.updateEntityName(entityId, payload.correctedName);
-    registerAlias(entityId, payload.correctedName, [event.id]);
-    projections.touchEntity(entityId, [event.id], projections.getEntityById(entityId)!.extractor_version);
-    correctionsApplied++;
+
+    if (payload.correctedName !== undefined) {
+      projections.updateEntityName(entityId, payload.correctedName);
+      registerAlias(entityId, payload.correctedName, [event.id]);
+      projections.touchEntity(entityId, [event.id], projections.getEntityById(entityId)!.extractor_version);
+      correctionsApplied++;
+      continue;
+    }
+
+    if (payload.attribute !== undefined && payload.correctedValue !== undefined) {
+      // Require the target row to actually exist FIRST — resolveName's
+      // "me" special case (see resolveCorrectionTargetEntity above) means
+      // entityId always resolves for "me" regardless of what targetEventId
+      // actually produced, unlike third-party entities where a missing
+      // mentionResolution entry already enforces this. Checking for the
+      // real row explicitly, here, keeps that same "must bind to a real
+      // prior claim" discipline for "me" too — this is not a new
+      // assertion wearing a correction's clothing; a correction with
+      // nothing real to correct is a no-op, not a fresh claim.
+      const existing = projections
+        .listEntityAttributeHistory(userId, entityId, payload.attribute)
+        .find((r) => (JSON.parse(r.source_event_ids) as string[]).includes(payload.targetEventId));
+      if (!existing) continue;
+
+      // Validate-then-delete, deliberately in this order, never the
+      // reverse: if the corrected value itself fails write-time
+      // validation (item 5) it must never be written, and the OLD row
+      // must survive that rejection untouched — deleting first would
+      // leave NEITHER the old nor the new value on record for a rejected
+      // correction, a strictly worse outcome than doing nothing.
+      const row = assertAttribute(projections, userId, entityId, payload.attribute, payload.correctedValue, [event.id, payload.targetEventId]);
+      if (!row) continue; // rejected at write time (assertAttribute already logged loudly) — old row left exactly as it was
+      projections.deleteEntityAttribute(existing.id);
+      attributeCorrectionsApplied++;
+    }
   }
 
   let confirmationsApplied = 0;
   for (const event of events) {
     if (event.type !== "fact_confirmed") continue;
     const payload = event.payload as FactConfirmedPayload;
-    const entityId = mentionResolution.get(`${payload.targetEventId}|${normalize(payload.entityName)}`);
+    const entityId = resolveCorrectionTargetEntity(payload.targetEventId, payload.entityName);
     if (!entityId) continue;
     projections.setEntityConfirmed(entityId);
     projections.touchEntity(entityId, [event.id], projections.getEntityById(entityId)!.extractor_version);
@@ -443,6 +516,7 @@ export function rebuildProjections(
     extractionsConsumed,
     messagesCurrentlyFailed,
     correctionsApplied,
+    attributeCorrectionsApplied,
     confirmationsApplied,
     structuralAtomsApplied,
     socialBondsApplied,
