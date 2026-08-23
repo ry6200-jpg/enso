@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ANTI_SYCOPHANCY_INSTRUCTION, buildPersonaInstruction, NATURAL_VOICE_INSTRUCTION } from "../src/persona/instructions.js";
+import { ANTI_SYCOPHANCY_INSTRUCTION, buildPersonaInstruction, CURRENT_LOCATION_INSTRUCTION, NATURAL_VOICE_INSTRUCTION } from "../src/persona/instructions.js";
 
 // EN-047/048: PERSONA_INSTRUCTION is now a function (the voice text used to
 // vary per-turn) — these tests exercise its content with the natural voice,
@@ -98,5 +98,33 @@ describe("PERSONA_INSTRUCTION (EN-097: elicitation stance)", () => {
   it("points back toward the person's own people, not only inward", () => {
     expect(PERSONA_INSTRUCTION).toMatch(/POINT BACK TOWARD THEIR OWN PEOPLE, NOT ONLY INWARD/);
     expect(PERSONA_INSTRUCTION).toMatch(/not a replacement for the people who already care about them/);
+  });
+});
+
+describe("CURRENT_LOCATION_INSTRUCTION (ambient current-location)", () => {
+  it("never asserts current location as a fact about the owner's life, distinct from residence", () => {
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/NEVER STATE IT AS A FACT ABOUT WHO THEY ARE/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/current location is not where the owner lives/);
+  });
+
+  it("never guesses location from timezone/language/content when nothing resolved", () => {
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/NEVER GUESS WHEN NOTHING RESOLVED/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/Never infer a location from their timezone, their language, a mentioned place/);
+  });
+
+  it("a directly-asked location question still gets answered — this is SUBJECT not TOPIC, never a blanket prohibition (the fixture the spec explicitly asked for)", () => {
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/a DIRECTLY asked location-adjacent question .* gets a short, plain, genuinely real answer/);
+    // Must NOT read as a topic ban — no refusal/redirect-away language for the direct-question case.
+    expect(CURRENT_LOCATION_INSTRUCTION).not.toMatch(/never answer|refuse to answer|decline to answer|won't answer/i);
+  });
+
+  it("does not become a local-recommendations assistant for UNPROMPTED lookups, without banning the topic itself", () => {
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/NOT A LOCAL-RECOMMENDATIONS ASSISTANT/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/doesn't volunteer directions, nearby businesses, or place lookups unprompted/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/never a ban on the topic itself/);
+  });
+
+  it("references the same capability-denial regression this project has already been burned by", () => {
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/capability-denial trap this project has been burned by before/);
   });
 });

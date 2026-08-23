@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { sendMessage, type ReplySentPayload, type SendMessageDeps } from "../src/conversation/chatPipeline.js";
+import { refreshMemoryAfterTurn } from "../src/conversation/turnMemoryRefresh.js";
 import { EventLog } from "../src/events/eventLog.js";
 import { ProjectionsDb } from "../src/projections/db.js";
 import { primaryEntityId } from "../src/projections/rebuild.js";
@@ -7,6 +8,9 @@ import { EMBEDDING_DIMENSIONS, type Embedder } from "../src/embeddings/embedder.
 import { RetrievalDb } from "../src/retrieval/retrievalDb.js";
 import type { ChatRouter } from "../src/providers/chatRouter.js";
 import type { ChatCallResult } from "../src/providers/chatTypes.js";
+import type { ExtractionRouter } from "../src/providers/router.js";
+import type { CurrentLocationContext } from "../src/location/currentLocation.js";
+import { getPrimaryUserAttribute } from "../src/projections/peopleView.js";
 import { newId } from "../src/ids.js";
 import { freshTestDbPath } from "../src/test/dbPath.js";
 import { PRIMARY_USER_ID } from "../src/test/seed.js";
@@ -464,5 +468,122 @@ describe("sendMessage — entity dossier reaches the prompt on direct name match
     expect(receivedSystem).not.toContain("=== NAMED PEOPLE (begin)");
     const payload = result.replyEvent.payload as ReplySentPayload;
     expect(payload.contextProvenance.entityDossier).toEqual({ mentionedEntityIds: [], includedEntityCount: 0 });
+  });
+});
+
+describe("sendMessage — ambient current-location (CORE DISTINCTION: never a fact about the owner's life)", () => {
+  const GEO_CONTEXT: CurrentLocationContext = { placeName: "Nowhereville, Neverland", tier: "geolocation", timezone: "Pacific/Auckland" };
+
+  it("a resolved location reaches the real prompt and round-trips through contextProvenance", async () => {
+    let receivedSystem = "";
+    deps.chatRouter = {
+      async reply(request) {
+        receivedSystem = request.system;
+        return CANNED_REPLY;
+      }
+    };
+
+    const result = await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "just checking in",
+      recentTurns: [],
+      retrievalOverride: { mode: "recency", query: "checking in", n: 0 },
+      locationContext: GEO_CONTEXT
+    });
+
+    expect(receivedSystem).toContain("=== CURRENT CONTEXT (begin) ===");
+    expect(receivedSystem).toContain("Location: Nowhereville, Neverland (via device GPS)");
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.contextProvenance.locationContext).toEqual(GEO_CONTEXT);
+  });
+
+  it("no location context supplied: no CURRENT CONTEXT block, provenance is null", async () => {
+    let receivedSystem = "";
+    deps.chatRouter = {
+      async reply(request) {
+        receivedSystem = request.system;
+        return CANNED_REPLY;
+      }
+    };
+
+    const result = await sendMessage(deps, { userId: PRIMARY_USER_ID, text: "hello", recentTurns: [], retrievalOverride: { mode: "recency", query: "hello", n: 0 } });
+
+    expect(receivedSystem).not.toContain("CURRENT CONTEXT");
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.contextProvenance.locationContext).toBeNull();
+  });
+
+  it("EXTRACTION EXCLUSION: a distinctive current-location value never reaches the extraction request — round-trip-survival maxim, since location is ephemeral and would differ on rebuild", async () => {
+    const result = await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "just an ordinary message",
+      recentTurns: [],
+      retrievalOverride: { mode: "recency", query: "ordinary", n: 0 },
+      locationContext: GEO_CONTEXT
+    });
+
+    let receivedRequest: unknown;
+    const extractionRouter: ExtractionRouter = {
+      extract: async (request) => {
+        receivedRequest = request;
+        return { provider: "openai", model: "gpt-5.6-terra", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] }, usage: { inputTokens: 1, outputTokens: 1 } };
+      }
+    };
+
+    await refreshMemoryAfterTurn({ eventLog, projectionsDb, retrievalDb, embedder: deps.embedder, extractionRouter }, PRIMARY_USER_ID, result.messageEvent.id);
+
+    expect(receivedRequest).toBeDefined();
+    const serialized = JSON.stringify(receivedRequest);
+    expect(serialized).not.toContain("Nowhereville");
+    expect(serialized).not.toContain("Neverland");
+    expect(serialized).not.toContain("Pacific/Auckland");
+  });
+
+  it("OWN BUDGET: a tight recent-window budget that forces truncation does not shrink or drop the location block — separate pools", async () => {
+    let receivedSystem = "";
+    deps.chatRouter = {
+      async reply(request) {
+        receivedSystem = request.system;
+        return CANNED_REPLY;
+      }
+    };
+
+    await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "hello",
+      recentTurns: [{ role: "user", text: "a".repeat(500) }],
+      retrievalOverride: { mode: "recency", query: "hello", n: 0 },
+      locationContext: GEO_CONTEXT,
+      budgets: { maxRetrievedChunks: 8, maxRetrievedChars: 6000, maxRecentWindowChars: 10, maxSelfProfileChars: 1000, maxLocationContextChars: 200 }
+    });
+
+    // Recent window got truncated to nothing (budget of 10 vs. 500 chars)...
+    expect(receivedSystem).toContain("aren't shown above");
+    // ...but the location block, with its own separate 200-char budget, is fully intact regardless.
+    expect(receivedSystem).toContain("Location: Nowhereville, Neverland (via device GPS)");
+  });
+
+  it("RESIDENCE SEPARATION: current-location context never touches entity_attributes.location (residence) — completely independent systems", async () => {
+    // Residence stated explicitly beforehand, exactly as circleBack.ts's self-fact flow would leave it.
+    projectionsDb.insertEntityAttribute({
+      id: newId(),
+      user_id: PRIMARY_USER_ID,
+      entity_id: primaryEntityId(PRIMARY_USER_ID),
+      attribute: "location",
+      value: "Los Angeles",
+      source_event_ids: "[]",
+      created_at: new Date().toISOString()
+    });
+
+    await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "hello from far away",
+      recentTurns: [],
+      retrievalOverride: { mode: "recency", query: "hello", n: 0 },
+      locationContext: GEO_CONTEXT // "Nowhereville, Neverland" — nothing like the stated residence
+    });
+
+    // Residence is completely unaffected by an ambient current-location reading, in either direction.
+    expect(getPrimaryUserAttribute(projectionsDb, PRIMARY_USER_ID, "location")).toBe("Los Angeles");
   });
 });

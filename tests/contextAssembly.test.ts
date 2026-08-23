@@ -138,6 +138,14 @@ describe("assembleContext — recent-window budget is a character budget, not a 
     expect(result.recentWindow).toEqual({ availableTurns: 1, injectedTurns: 0, truncated: true });
   });
 
+  it("found while building ambient location: when the single-oversized-turn case leaves ZERO injected turns, the prompt must still disclose truncation — never falsely claim 'this is the first message' when a real prior turn just got trimmed", () => {
+    const budgets: ContextBudgets = { ...DEFAULT_CONTEXT_BUDGETS, maxRecentWindowChars: 5 };
+    const turns: RecentTurnForPrompt[] = [{ role: "user", text: "this text is way over five characters" }];
+    const result = assembleContext([], RETRIEVAL_META, turns, budgets);
+    expect(result.systemPrompt).not.toContain("This is the first message of the conversation");
+    expect(result.systemPrompt).toMatch(/aren't shown above|beyond what's visible/i);
+  });
+
   it("truncation is disclosed explicitly in the prompt text itself (memory-honesty principle applied to the window, not just retrieval)", () => {
     const budgets: ContextBudgets = { ...DEFAULT_CONTEXT_BUDGETS, maxRecentWindowChars: 20 };
     const turns: RecentTurnForPrompt[] = [

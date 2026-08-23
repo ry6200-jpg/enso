@@ -13,8 +13,9 @@ import { recencyMode } from "../retrieval/recencyMode.js";
 import type { ContentChunkRow, RetrievalDb } from "../retrieval/retrievalDb.js";
 import { assembleContext, DEFAULT_CONTEXT_BUDGETS, type AssembledContext, type ContextBudgets } from "./contextAssembly.js";
 import { decideRetrievalInvocation, findAllMentionedEntityIds, type RetrievalInvocation, type RetrievalMode } from "./retrievalInvocation.js";
-import { buildAttachmentContextBlock, buildEntityDossierBlock, buildSelfProfileBlock, type RecentTurnForPrompt, type VoiceMode } from "../persona/systemPrompt.js";
+import { buildAttachmentContextBlock, buildEntityDossierBlock, buildLocationContextBlock, buildSelfProfileBlock, type RecentTurnForPrompt, type VoiceMode } from "../persona/systemPrompt.js";
 import { buildEntityDossier, buildSelfProfile, MAX_ENTITY_DOSSIERS_PER_TURN } from "../projections/peopleView.js";
+import type { CurrentLocationContext } from "../location/currentLocation.js";
 import { getSessionTurnsForPrompt } from "./conversationHistory.js";
 import { buildConnectDotDirective, buildCuriosityAskDirective, findCuriosityAskCandidates, isCuriosityTurnEligible, verifyCuriosityAskExecuted } from "./circleBack.js";
 import type { CuriosityAskCandidate } from "./router/routerTypes.js";
@@ -63,6 +64,16 @@ export interface ReplySentPayload {
      * the same pre-existing-events reason.
      */
     entityDossier?: { mentionedEntityIds: string[]; includedEntityCount: number };
+    /**
+     * Ambient current-location: a record of what the model SAW this turn,
+     * never a fact about the user — this is what makes a transcript
+     * debuggable ("why did it say 'still up late'?") without implying the
+     * reading itself is durable data. Null when no location context was
+     * available at all this turn (nothing resolved, or the caller never
+     * supplied one). Optional for the same pre-existing-events reason as
+     * the other three.
+     */
+    locationContext?: { placeName: string | null; tier: "geolocation" | "ip" | "timezone" | null; timezone: string | null } | null;
   };
   /**
    * Phase 6 round-trip survival: the router's own decision shaped this
@@ -177,6 +188,19 @@ export interface SendMessageInput {
    * empty when this is set (R1/EN-064's attachment-only placeholder).
    */
   attachmentEventId?: string;
+  /**
+   * Ambient current-location (see enso-rebuild-requirements.md's CORE
+   * DISTINCTION): resolved by the CALLER (app/api/chat/route.ts, via
+   * src/location/currentLocation.ts's resolveCurrentLocationContext, which
+   * needs the raw HTTP request for the IP tier — chatPipeline.ts itself
+   * has no business touching that) BEFORE calling sendMessage. Threaded
+   * only into context assembly for the reply — NEVER passed to extraction
+   * (refreshMemoryAfterTurn, turnMemoryRefresh.ts, is a completely
+   * separate call this field is never given to). Never an event, never
+   * entity_attributes, never persisted anywhere — recorded on reply_sent
+   * only as provenance of what the model saw this one turn.
+   */
+  locationContext?: CurrentLocationContext | null;
 }
 
 /**
@@ -301,6 +325,15 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   const entityDossiers = mentionedEntityIds.map((id) => buildEntityDossier(deps.projectionsDb, input.userId, id)).filter((d): d is NonNullable<typeof d> => d !== null);
   const entityDossierBlock = buildEntityDossierBlock(entityDossiers);
 
+  // Ambient current-location: already fully resolved by the caller (see
+  // SendMessageInput.locationContext's doc comment) — this is pure
+  // formatting, same as the self-profile/entity-dossier blocks above, and
+  // uses its OWN budget (maxLocationContextChars), never the recent-
+  // window budget. Deliberately NOT passed anywhere near extraction below.
+  const locationContextBlock = input.locationContext
+    ? buildLocationContextBlock(input.locationContext, (input.budgets ?? DEFAULT_CONTEXT_BUDGETS).maxLocationContextChars)
+    : null;
+
   let invocation: RetrievalInvocation;
   let routerResult: RouterResult | null = null;
   let claims: ReturnType<typeof recentAttributeClaims> = [];
@@ -391,7 +424,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     attachmentBlock,
     voiceMode,
     selfProfileResult.block,
-    entityDossierBlock
+    entityDossierBlock,
+    locationContextBlock
   );
 
   const callResult = await deps.chatRouter.reply({ system: assembled.systemPrompt, history: [], latestMessage: effectiveText });
@@ -434,7 +468,10 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       entityDossier: {
         mentionedEntityIds,
         includedEntityCount: entityDossiers.length
-      }
+      },
+      // Reflects what the model actually SAW (locationContextBlock !== null), not merely what the caller
+      // supplied — a reading that got dropped for exceeding its own budget was never in the prompt at all.
+      locationContext: locationContextBlock ? input.locationContext! : null
     },
     router: {
       used: routerResult !== null,

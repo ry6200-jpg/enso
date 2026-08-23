@@ -1,6 +1,7 @@
 import {
   ANTI_SYCOPHANCY_INSTRUCTION,
   buildPersonaInstruction,
+  CURRENT_LOCATION_INSTRUCTION,
   FACT_RECEIPT_AND_REPETITION_INSTRUCTION,
   FIGURATIVE_LANGUAGE_INSTRUCTION,
   IDENTITY_LINE,
@@ -37,6 +38,7 @@ export function buildPersonaBlock(voiceMode: VoiceMode = "natural"): string {
     FIGURATIVE_LANGUAGE_INSTRUCTION,
     ANTI_SYCOPHANCY_INSTRUCTION,
     MEMORY_HONESTY_INSTRUCTION,
+    CURRENT_LOCATION_INSTRUCTION,
     REGISTER_CALIBRATION_INSTRUCTION
   ].join("\n\n");
 }
@@ -108,6 +110,55 @@ export function buildSelfProfileBlock(profile: SelfProfile, maxChars: number): S
   if (block.length > maxChars) truncated = true; // attributes alone still over budget — kept anyway, a resolved fact is never dropped, only flagged
 
   return { block, attributeCount: attributeLines.length, bondCount, truncated };
+}
+
+const LOCATION_TIER_LABEL: Record<"geolocation" | "ip", string> = {
+  geolocation: "via device GPS",
+  ip: "via approximate network location"
+};
+
+function formatLocalTime(timezone: string): string | null {
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit", hour12: true }).format(new Date());
+  } catch {
+    return null; // an unrecognized/invalid IANA timezone string — never crash the reply over it
+  }
+}
+
+/**
+ * Ambient current-location block — WHERE THE OWNER IS RIGHT NOW, never
+ * their residence (see CURRENT_LOCATION_INSTRUCTION, instructions.ts, for
+ * the behavioral rules governing how this may be used; this function is
+ * pure data formatting, same discipline as buildSelfProfileBlock/
+ * buildEntityDossierBlock — no directive language belongs here either,
+ * that all lives in the instruction). Deliberately its own block, never
+ * folded into the self-profile block: that block holds durable, resolved
+ * facts (R37/R38); this is ephemeral and would read differently on every
+ * single turn.
+ *
+ * Returns null (omitted entirely, never a placeholder line) when nothing
+ * resolved at all — same honest-emptiness pattern as every other block —
+ * and also when the whole block would exceed `maxChars`: this content is
+ * inherently tiny and fixed-shape (at most two short lines), so unlike
+ * the self-profile/entity-dossier blocks there's nothing sensible to trim
+ * — a budget this tight means something is misconfigured, and the honest
+ * response is omission, not a mangled partial render.
+ */
+export function buildLocationContextBlock(context: { placeName: string | null; tier: "geolocation" | "ip" | "timezone" | null; timezone: string | null }, maxChars: number): string | null {
+  if (context.tier === null) return null;
+
+  const lines: string[] = [];
+  if (context.placeName && (context.tier === "geolocation" || context.tier === "ip")) {
+    lines.push(`Location: ${context.placeName} (${LOCATION_TIER_LABEL[context.tier]})`);
+  }
+  if (context.timezone) {
+    const localTime = formatLocalTime(context.timezone);
+    if (localTime) lines.push(context.tier === "timezone" ? `Local time: ${localTime} (timezone only — location not available)` : `Local time: ${localTime}`);
+  }
+  if (lines.length === 0) return null;
+
+  const block = `=== CURRENT CONTEXT (begin) ===\n${lines.join("\n")}\n=== CURRENT CONTEXT (end) ===`;
+  return block.length <= maxChars ? block : null;
 }
 
 /**
@@ -192,7 +243,14 @@ export interface RecentTurnForPrompt {
  */
 export function buildRecentWindowBlock(turns: RecentTurnForPrompt[], truncated: boolean = false): string {
   if (turns.length === 0) {
-    return "=== RECENT CONVERSATION (begin) ===\n(This is the first message of the conversation.)\n=== RECENT CONVERSATION (end) ===";
+    // Found while testing Part B-0's budget: a single most-recent turn that alone exceeds the budget
+    // is dropped entirely (contextAssembly.ts's own documented precedent), leaving turns.length === 0
+    // even though real prior turns exist — the "first message" line would have been an active lie in
+    // that case, exactly the memory-honesty failure this whole disclosure mechanism exists to prevent.
+    const emptyNote = truncated
+      ? "(Earlier turns from this session exist but aren't shown above — they've been trimmed to fit. If asked about something from further back, say plainly that it's beyond what's visible right now rather than implying it never happened.)"
+      : "(This is the first message of the conversation.)";
+    return `=== RECENT CONVERSATION (begin) ===\n${emptyNote}\n=== RECENT CONVERSATION (end) ===`;
   }
   const lines = turns.map((t) => `${t.role === "user" ? "Owner" : "Enso"}: ${t.text}`);
   const truncationNote = truncated ? "\n(Earlier turns from this same session exist but aren't shown above — they've been trimmed to fit. If asked about something from further back, say plainly that it's beyond what's visible right now rather than implying it never happened.)" : "";
@@ -219,10 +277,12 @@ export function buildSystemPrompt(
   attachmentBlock: string | null = null,
   voiceMode: VoiceMode = "natural",
   selfProfileBlock: string | null = null,
-  entityDossierBlock: string | null = null
+  entityDossierBlock: string | null = null,
+  locationContextBlock: string | null = null
 ): string {
   const parts = [buildPersonaBlock(voiceMode)];
   if (selfProfileBlock) parts.push(selfProfileBlock);
+  if (locationContextBlock) parts.push(locationContextBlock);
   if (entityDossierBlock) parts.push(entityDossierBlock);
   parts.push(retrievedBlock);
   if (attachmentBlock) parts.push(attachmentBlock);

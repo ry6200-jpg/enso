@@ -16,6 +16,11 @@ interface AttachmentStatus {
   extractionError: string | null;
 }
 
+interface LocationContextState {
+  placeName: string | null;
+  timezone: string | null;
+}
+
 /**
  * EN-036 UI shell: pinned input (this page is `flex-1 overflow-y-auto` for
  * the message list, `shrink-0` for the input bar, inside layout.tsx's
@@ -113,6 +118,14 @@ export default function Page() {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [sidebarRefreshSignal, setSidebarRefreshSignal] = useState(0);
   const [refocusInputSignal, setRefocusInputSignal] = useState(0);
+  // Ambient current-location (see enso-rebuild-requirements.md's CORE
+  // DISTINCTION) — timezone is computed once on mount (zero permission
+  // cost); placeName stays null until/unless geolocation resolves. Neither
+  // field is ever the user's residence — this is ephemeral per-turn
+  // context, resent with every /api/chat call, never stored beyond state.
+  const [locationContext, setLocationContext] = useState<LocationContextState>({ placeName: null, timezone: null });
+  const [locationBlocked, setLocationBlocked] = useState(false);
+  const geolocationAttemptedRef = useRef(false);
   const listRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -130,6 +143,18 @@ export default function Page() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // Timezone alone (Tier 3): zero permission cost, always collected — safe
+  // to grab on mount, unlike geolocation below which is gated behind an
+  // explicit, in-context ask (never on first page load).
+  useEffect(() => {
+    try {
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      setLocationContext((prev) => ({ ...prev, timezone }));
+    } catch {
+      // Unsupported/unavailable — location context simply stays timezone-less; never blocks anything.
+    }
   }, []);
 
   useEffect(() => {
@@ -157,10 +182,49 @@ export default function Page() {
     textareaRef.current?.focus();
   }, [refocusInputSignal]);
 
+  // Tier 1 (browser geolocation -> server-side reverse geocode -> place
+  // name). Fire-and-forget: never blocks a send, never awaited by the
+  // caller — the very first message of a session simply goes out without
+  // it, and every later one carries it once this resolves (usually well
+  // under a second). Denial is PERMANENT and SILENT (never re-prompt,
+  // never mention it, never degrade the conversation) — the browser's own
+  // permission memory already enforces "never re-prompt" for us; this
+  // function's only additional state is locationBlocked, purely to steer
+  // the "grant later" button's own label, never surfaced to Enso.
+  function attemptGeolocation() {
+    if (!("geolocation" in navigator)) return;
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords; // read once, never stored — discarded the instant this callback returns
+        fetch("/api/location", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ latitude, longitude }) })
+          .then((res) => res.json())
+          .then((json: { placeName: string | null }) => {
+            if (json.placeName) setLocationContext((prev) => ({ ...prev, placeName: json.placeName }));
+          })
+          .catch(() => {}); // Tier 2/3 take over server-side regardless
+      },
+      (error) => {
+        if (error.code === error.PERMISSION_DENIED) setLocationBlocked(true);
+        // POSITION_UNAVAILABLE / TIMEOUT: transient, not a denial — locationBlocked stays false so a later click (or session) can retry.
+      },
+      { timeout: 5000, maximumAge: 300000 }
+    );
+  }
+
   async function sendMessage() {
     const text = input.trim();
     const file = pendingFile;
     if ((!text && !file) || sending) return; // duplicate-send guard; text OR a file is enough (item 8)
+
+    // Ask once, in context — the first time the owner actually sends
+    // something, never on page load, and never again after this session's
+    // one attempt (the browser's own permission memory handles "never
+    // re-prompt" for an actual denial; this ref just stops us calling
+    // getCurrentPosition again this session once we already have).
+    if (!geolocationAttemptedRef.current) {
+      geolocationAttemptedRef.current = true;
+      attemptGeolocation();
+    }
 
     setSending(true);
     setInput("");
@@ -188,7 +252,7 @@ export default function Page() {
       // message state was never guaranteed to reflect what the server
       // actually held, and hardcoding "last 6" here was the reason Enso
       // used to be blind past 6 turns within a single long session.
-      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, attachmentEventId }) });
+      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, attachmentEventId, locationContext }) });
       const json = await res.json();
       if (!res.ok) {
         setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "enso", text: `(reply failed — your message was still saved: ${json.error})` }]);
@@ -232,6 +296,15 @@ export default function Page() {
         <span className="text-4xl font-bold tracking-wide" style={{ color: "var(--enso-ink)" }}>
           Enso
         </span>
+        {/* "Provide a way to grant it later" — Enso itself never asks; this is the ONLY other trigger besides the one-time first-send attempt. */}
+        <button
+          type="button"
+          onClick={attemptGeolocation}
+          title={locationBlocked ? "Location access is blocked — check your browser's site settings to allow it" : locationContext.placeName ? `Location: ${locationContext.placeName}` : "Share your current location"}
+          className="ml-auto text-sm text-stone-400 hover:text-stone-600"
+        >
+          📍{locationContext.placeName ? ` ${locationContext.placeName}` : ""}
+        </button>
       </header>
 
       <div className="flex-1 flex min-h-0">

@@ -32,13 +32,26 @@ export interface ContextBudgets {
   maxRecentWindowChars: number;
   /** Part B (R38): max characters of the always-on self-profile block (src/persona/systemPrompt.ts's buildSelfProfileBlock, called by chatPipeline.ts before assembleContext). Deliberately generous relative to actual content — the profile is bounded by construction (3 attributes, direct bonds only) — but still an explicit, documented cap, never an unbounded block. */
   maxSelfProfileChars: number;
+  /**
+   * Ambient current-location: its own SEPARATE small allocation — never
+   * shared with maxRecentWindowChars (B-0's budget), by explicit
+   * requirement, since the two govern completely different content. 200
+   * chars is deliberately tight: the location block is at most two short
+   * lines ("Location: X (via Y)" / "Local time: Z") with nothing
+   * meaningful to trim if it somehow grew, so a real content bug should
+   * show up as the block being OMITTED (buildLocationContextBlock returns
+   * null over budget, never a mangled partial render) rather than quietly
+   * ballooning the prompt.
+   */
+  maxLocationContextChars: number;
 }
 
 export const DEFAULT_CONTEXT_BUDGETS: ContextBudgets = {
   maxRetrievedChunks: 8,
   maxRetrievedChars: 6000,
   maxRecentWindowChars: 40000,
-  maxSelfProfileChars: 1000
+  maxSelfProfileChars: 1000,
+  maxLocationContextChars: 200
 };
 
 export interface RetrievalProvenance {
@@ -133,6 +146,12 @@ function truncateRecentTurnsToCharBudget(recentTurns: RecentTurnForPrompt[], max
  * (MAX_ENTITY_DOSSIERS_PER_TURN, MAX_RELATIONSHIPS_PER_ENTITY_DOSSIER) by
  * the time it reaches here, so no budget logic for it lives in this
  * function either.
+ *
+ * `locationContextBlock` (ambient current-location): pre-built by the
+ * caller via buildLocationContextBlock, using its own SEPARATE
+ * `maxLocationContextChars` budget — never the recent-window budget above,
+ * by explicit requirement, since it's ephemeral per-turn context, not
+ * conversation history.
  */
 export function assembleContext(
   candidateChunks: ContentChunkRow[],
@@ -143,7 +162,8 @@ export function assembleContext(
   attachmentBlock: string | null = null,
   voiceMode: VoiceMode = "natural",
   selfProfileBlock: string | null = null,
-  entityDossierBlock: string | null = null
+  entityDossierBlock: string | null = null,
+  locationContextBlock: string | null = null
 ): AssembledContext {
   const { injectedTurns, truncated: recentTruncated } = truncateRecentTurnsToCharBudget(recentTurns, budgets.maxRecentWindowChars);
 
@@ -165,7 +185,7 @@ export function assembleContext(
     injectedChunks.map((c) => ({ id: c.id, text: c.text, occurredAt: c.occurred_at, recordedAt: c.recorded_at }))
   );
   const recentWindowBlock = buildRecentWindowBlock(injectedTurns, recentTruncated);
-  const baseSystemPrompt = buildSystemPrompt(retrievedBlock, recentWindowBlock, attachmentBlock, voiceMode, selfProfileBlock, entityDossierBlock);
+  const baseSystemPrompt = buildSystemPrompt(retrievedBlock, recentWindowBlock, attachmentBlock, voiceMode, selfProfileBlock, entityDossierBlock, locationContextBlock);
   // EN-071 stage 3: a gate directive, when present, is injected at the END
   // of the system prompt — highest-salience position, named action only.
   const systemPrompt = gateDirective ? `${baseSystemPrompt}\n\n${gateDirective}` : baseSystemPrompt;

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { sendMessage } from "../../../src/conversation/chatPipeline.js";
 import { refreshMemoryAfterTurn } from "../../../src/conversation/turnMemoryRefresh.js";
+import { resolveCurrentLocationContext } from "../../../src/location/currentLocation.js";
 import { getChatRouter, getDevUserId, getEmbedder, getExtractionRouter, getIntentRouter, getStores } from "../../../lib/serverPipeline.js";
 
 /**
@@ -19,8 +20,16 @@ import { getChatRouter, getDevUserId, getEmbedder, getExtractionRouter, getInten
  * omits it (getSessionTurnsForPrompt), so the client only ever needs to
  * say what was just typed — the event log is the one source of truth.
  */
+function getRequestIp(request: Request): string | null {
+  // Standard proxy header, first entry is the original client — App Router's
+  // Request has no built-in `.ip` (that was a Pages-Router-only convenience).
+  const forwarded = request.headers.get("x-forwarded-for");
+  if (forwarded) return forwarded.split(",")[0]!.trim();
+  return request.headers.get("x-real-ip");
+}
+
 export async function POST(request: Request): Promise<Response> {
-  const body = (await request.json()) as { text: string; attachmentEventId?: string };
+  const body = (await request.json()) as { text: string; attachmentEventId?: string; locationContext?: { placeName: string | null; timezone: string | null } };
   const hasText = typeof body.text === "string" && body.text.trim() !== "";
   const hasAttachment = typeof body.attachmentEventId === "string" && body.attachmentEventId.length > 0;
   // Item 8: text alone was required before, which made "attach a file and
@@ -38,11 +47,20 @@ export async function POST(request: Request): Promise<Response> {
   const intentRouter = getIntentRouter();
   const extractionRouter = getExtractionRouter();
 
+  // Ambient current-location: Tier 1 (place name) comes pre-geocoded from
+  // the client (POST /api/location, called once per session — see app/
+  // page.tsx); Tier 2 (IP city) and the tier-priority decision happen here,
+  // server-side, since only this route has the raw request for the IP.
+  const locationContext = await resolveCurrentLocationContext(
+    { placeName: body.locationContext?.placeName ?? null, timezone: body.locationContext?.timezone ?? null },
+    getRequestIp(request)
+  );
+
   let result;
   try {
     result = await sendMessage(
       { eventLog, projectionsDb, retrievalDb, embedder, chatRouter, intentRouter },
-      { userId, text: body.text ?? "", attachmentEventId: body.attachmentEventId }
+      { userId, text: body.text ?? "", attachmentEventId: body.attachmentEventId, locationContext }
     );
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 502 });
