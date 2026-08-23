@@ -136,12 +136,16 @@ interface LocationContextState {
  * input (item 3) is a layout.tsx change (`interactiveWidget:
  * "resizes-content"` + `h-dvh`), not anything here — this page's existing
  * flex-1/shrink-0 pinning (EN-036, above) already does the right thing
- * once the viewport itself resizes correctly under the keyboard. autoFocus
- * (below, item 4) needed no change: since the keyboard-safe fix is pure
- * CSS/viewport behavior with no JS state toggling on keyboard-open, there
- * is nothing for autofocus to fight regardless of what triggers the
- * keyboard. isNarrowScreen (item 5) swaps the placeholder text only — a
- * plain string prop can't respond to a CSS media query on its own.
+ * once the viewport itself resizes correctly under the keyboard.
+ * isNarrowScreen (item 5) swaps the placeholder text only — a plain
+ * string prop can't respond to a CSS media query on its own.
+ *
+ * Scroll/history/focus/zodiac batch: the native `autoFocus` prop this
+ * mobile batch left alone turned out to never reliably work at all — see
+ * the item-4 effect's own comment below for why (the textarea's actual
+ * first mount is gated behind async auth resolution, well past this
+ * component's real first commit, which native autoFocus doesn't account
+ * for) — replaced with an explicit effect-driven focus call.
  */
 export default function Page() {
   // Cloud migration prerequisite batch, item 1: real user identity via
@@ -219,6 +223,11 @@ export default function Page() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
+  // Item 4 (composer focus on load): guards the one-time initial focus
+  // attempt below so it never re-fires on a later authStatus change (e.g.
+  // a token refresh re-delivering "signedIn") — see that effect's own
+  // comment for why this exists instead of the native autoFocus prop.
+  const initialFocusDoneRef = useRef(false);
 
   useEffect(() => {
     return watchAuthState((u) => {
@@ -507,13 +516,47 @@ export default function Page() {
     return () => clearTimeout(timer);
   }, [attachmentStatus]);
 
+  // Scroll/history/focus/zodiac batch, item 4: composer focus on load.
+  // Used to rely on the textarea's native `autoFocus` prop, which is
+  // unreliable here for the same structural reason items 1/3's
+  // ResizeObserver was: the textarea only mounts once authStatus flips to
+  // "signedIn" — well after the page's actual FIRST commit (the
+  // auth-checking screen) — and some browsers additionally suppress a
+  // freshly-inserted element's native autofocus once the user has already
+  // interacted with the page at all (e.g. the "Sign in with Google" click
+  // on the signed-out screen, which is real user interaction with THIS
+  // page, on THIS load), which is exactly the path anyone without an
+  // already-persisted Firebase session takes. An explicit effect-driven
+  // `.focus()` call, tied to the same authStatus transition the
+  // ResizeObserver fix above depends on, sidesteps both problems the same
+  // way the send-focus effect right below already does.
+  //
+  // Mobile: deliberately NOT autofocused on load. Focusing a text input
+  // from JS can force the on-screen keyboard open on Android Chrome even
+  // without a real tap (iOS Safari tends to be more conservative here,
+  // but this isn't a guarantee to build on across browsers/OS versions) —
+  // opening the keyboard the instant the app loads would cover the
+  // conversation the user came here to read, which the requirement
+  // explicitly forbids. Checked directly via matchMedia at the moment
+  // this fires, not the isNarrowScreen state (set by its own separate
+  // mount effect, not guaranteed to have settled before this one runs).
+  // The send-focus effect right below is intentionally NOT gated the same
+  // way — by the time a send completes, the user was just typing with the
+  // keyboard already open, so refocusing there never newly summons it.
+  useEffect(() => {
+    if (authStatus !== "signedIn" || initialFocusDoneRef.current) return;
+    initialFocusDoneRef.current = true;
+    if (window.matchMedia("(max-width: 767px)").matches) return;
+    textareaRef.current?.focus();
+  }, [authStatus]);
+
   // Fires ONLY when refocusInputSignal is explicitly bumped (after a send
   // completes, after a file is selected) — never on every render. Runs
   // inside an effect, not inline, specifically so it executes AFTER React
   // has committed the DOM change that re-enables the textarea (see the
   // focus-retention fix note above the component).
   useEffect(() => {
-    if (refocusInputSignal === 0) return; // skip the initial mount call — autoFocus already owns first paint
+    if (refocusInputSignal === 0) return; // skip the initial mount call — the item-4 effect above owns first focus
     const selection = window.getSelection();
     if (selection && selection.toString().length > 0) return; // never yank focus out of an active transcript selection
     const active = document.activeElement;
@@ -893,7 +936,6 @@ export default function Page() {
               </label>
               <textarea
                 ref={textareaRef}
-                autoFocus
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
