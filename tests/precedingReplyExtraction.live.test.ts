@@ -58,3 +58,54 @@ describe("message extraction with precedingReplyText (item 10 fix, real API)", (
     expect(result.taxonomy.entities).toEqual([]);
   }, 30000);
 });
+
+/**
+ * Part C (R37/R38 investigation follow-up). taxonomySchema.ts's
+ * precedingReplyBlock used to hard-code the example "a bare date answering
+ * a question about a birthday" on EVERY extraction call, regardless of
+ * what the actual preceding question was about — a standing anchor toward
+ * exactly this misreading. This reproduces the exact real failure with the
+ * exact real text (confirmed via dev-data query, no live call needed for
+ * the reproduction itself: the extractor tagged "1983" — answering "what
+ * year did you turn 13?" — as a `birthdate` for "me") against the FIXED
+ * prompt, plus a genuine birthday-answer control to confirm the fix didn't
+ * regress the original item-7 case above. 3 runs each per the scope this
+ * verification was asked for — a lighter bar than EN-075's N=20 router-flag
+ * doctrine, deliberate: this is one extraction-prompt wording change, not a
+ * new stochastic router decision.
+ */
+describe("precedingReplyBlock anchor fix — the real failing case (R37/R38, real API, 3 runs)", () => {
+  it.each([1, 2, 3])("run %i: 'What year did you turn 13?' -> '1983' extracts NO birthdate for 'me'", async () => {
+    const router = createDefaultRouter({ openai: requireEnv("OPENAI_API_KEY"), gemini: requireEnv("GEMINI_API_KEY") });
+
+    const result = await router.extract({
+      kind: "message",
+      text: "1983",
+      referenceDate: "2026-08-21",
+      knownPeopleNames: [],
+      precedingReplyText:
+        "Since you mentioned SRP and SPM, at 13 you were probably entering Form 1 in Malaysia's national secondary-school system. What year did you turn 13? That matters because Malaysia's curriculum, exam names, and language policies changed quite a bit over time."
+    });
+
+    const meBirthdate = result.taxonomy.attributes.find((a) => a.entityName.toLowerCase() === "me" && a.attribute === "birthdate");
+    expect(meBirthdate).toBeUndefined();
+  }, 30000);
+});
+
+describe("precedingReplyBlock anchor fix — control: a genuine birthday answer still extracts correctly (R37/R38, real API, 3 runs)", () => {
+  it.each([1, 2, 3])("run %i: 'When's your birthday?' -> '4/24/1970' still extracts a birthdate for 'me'", async () => {
+    const router = createDefaultRouter({ openai: requireEnv("OPENAI_API_KEY"), gemini: requireEnv("GEMINI_API_KEY") });
+
+    const result = await router.extract({
+      kind: "message",
+      text: "4/24/1970",
+      referenceDate: "2026-08-21",
+      knownPeopleNames: [],
+      precedingReplyText: "Glad you're here, Richard. When's your birthday?"
+    });
+
+    const meBirthdate = result.taxonomy.attributes.find((a) => a.entityName.toLowerCase() === "me" && a.attribute === "birthdate");
+    expect(meBirthdate).toBeDefined();
+    expect(meBirthdate?.value).toContain("1970");
+  }, 30000);
+});
