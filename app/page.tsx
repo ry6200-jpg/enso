@@ -36,12 +36,20 @@ interface LocationContextState {
  * a simpler pattern than an in-page tab switch, and consistent with how
  * People already worked as its own route before this change.
  *
- * The input is a fixed-height (not auto-growing) textarea specifically so
- * the overall layout never shifts as you type (item 8) while still
- * comfortably fitting multi-line messages (item 6) — Enter sends,
- * Shift+Enter inserts a newline, matching standard chat-input behavior.
- * The attachment status notice is an overlay (fixed position, own stacking
- * context), not inline flow, for the same static-layout reason.
+ * Enter sends, Shift+Enter inserts a newline, matching standard chat-input
+ * behavior. The attachment status notice is an overlay (fixed position,
+ * own stacking context), not inline flow, so it never affects composer
+ * layout regardless of the composer's own height.
+ *
+ * Mobile layout and scroll fixes batch superseded this input's original
+ * fixed-height design: the textarea now auto-grows with its content (up
+ * to ~6 lines, then scrolls internally — see the effect keyed on `input`
+ * below) specifically BECAUSE a fixed height was the wrong call once
+ * real-device feedback showed the opposite problem — a long message
+ * pushed the latest reply out of view with nowhere to see it growing. The
+ * message list shrinking to accommodate, and the newest message staying
+ * visible throughout, is the scroll-pinning system further down this
+ * file, not a layout property of the composer itself.
  *
  * Item 13: on a genuinely fresh session Enso proactively opens with a
  * fixed line rather than waiting for the user to speak first. That opener
@@ -251,6 +259,25 @@ export default function Page() {
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages]);
+
+  // Composer growth batch: the textarea grows with its content instead of
+  // staying a fixed height. `height: auto` first, THEN read scrollHeight —
+  // skipping the reset would let scrollHeight only ever grow (it reflects
+  // whatever height was last set, never shrinks itself), which is exactly
+  // why deleting text back down wouldn't un-grow the box without this.
+  // CSS alone (max-h-[156px] + overflow-y-auto on the element, ~6 lines)
+  // caps how tall this can actually render and switches to internal
+  // scrolling past that — this effect never needs to know that cap itself,
+  // it can request any height and the box just won't grow past it.
+  // Keyed on `input`, not wired into onChange directly: this also handles
+  // the non-typing case where input is cleared programmatically after
+  // send, correctly shrinking the box back down.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [input]);
 
   // Closes the ⋮ menu on an outside click or Escape — standard disclosure
   // behavior; only wired up while the menu is actually open.
@@ -615,7 +642,7 @@ export default function Page() {
                 disabled={sending}
                 placeholder={isNarrowScreen ? "Message Enso..." : "Tell Enso what's on your mind... (Enter to send, Shift+Enter for a new line)"}
                 rows={1}
-                className="flex-1 min-w-0 min-h-11 resize-none rounded-xl px-3 py-2.5 text-base leading-[1.4] bg-white border border-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-300 disabled:opacity-50 overflow-y-auto"
+                className="flex-1 min-w-0 min-h-11 max-h-[156px] resize-none rounded-xl px-3 py-2.5 text-base leading-[1.4] bg-white border border-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-300 disabled:opacity-50 overflow-y-auto"
               />
               <button
                 type="submit"
