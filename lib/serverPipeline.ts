@@ -54,6 +54,7 @@
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { configureLocalOnlyEmbeddings, createEmbedder, type Embedder } from "../src/embeddings/embedder.js";
 import { CostTracker } from "../src/providers/costTracker.js";
@@ -63,7 +64,7 @@ import { createDefaultIntentRouter, type IntentRouter } from "../src/conversatio
 import { createDocumentRouter, createImageRouter } from "../src/providers/attachmentRouter.js";
 import type { DocumentContentAdapter, ImageContentAdapter } from "../src/providers/attachmentTypes.js";
 import { DailyContentCache } from "../src/zodiac/dailyContentCache.js";
-import { getUserDataPaths, wipeUserDirectory } from "../src/storage/userDataPaths.js";
+import { getUserDataPaths } from "../src/storage/userDataPaths.js";
 import { withUserSession, type UserSessionStores } from "../src/storage/userSession.js";
 import { LocalStorageBackend } from "../src/storage/localStorageBackend.js";
 import { GcsStorageBackend } from "../src/storage/gcsStorageBackend.js";
@@ -77,28 +78,67 @@ export const REPO_ROOT = process.cwd();
 export const DEV_DATA_DIR = path.join(REPO_ROOT, "dev-data");
 const README_FILE = path.join(DEV_DATA_DIR, "README.txt");
 
-// This Cloud Run instance's ephemeral local disk, standing in for real
-// ephemeral disk before deployment adds it for real. Every checkout writes
-// here; every checkin uploads from here and leaves the copy in place
-// (harmless — the next checkout for that uid wipes-then-refetches, so a
-// stale leftover between requests is never re-uploaded by accident, see
-// LocalStorageBackend.download). Gitignored, same as dev-data itself.
-export const LOCAL_INSTANCE_DIR = path.join(REPO_ROOT, ".local-instance-disk");
+/**
+ * Live-caught incident (deployment batch, post-Stage-3): every route 500'd
+ * from the very first sign-in with `EACCES: permission denied, mkdir
+ * '/app/dev-data'`. Root cause: DEV_DATA_DIR is REPO_ROOT-relative
+ * (process.cwd()), which resolves to /app in the container — writable by
+ * root at image-build time, but the runtime process runs as the non-root
+ * `nextjs` user (Dockerfile), which owns only the specific paths the build
+ * explicitly chowned. `ensureDevDataDir()` and `getDailyContentCache()`
+ * were calling `mkdirSync` under DEV_DATA_DIR unconditionally — including
+ * in cloud mode, where DEV_DATA_DIR isn't even the storage backend in use
+ * (GcsStorageBackend is) — so the mkdir failed on literally the first
+ * request, before checkout/checkin ever ran.
+ *
+ * isCloudMode() is the one place that distinction is made now — every
+ * function below that touches a local path checks it, rather than each
+ * silently assuming DEV_DATA_DIR is always safe to write.
+ */
+function isCloudMode(): boolean {
+  return Boolean(process.env.GCS_BUCKET_NAME);
+}
+
+// This Cloud Run instance's OWN ephemeral local disk — genuinely writable
+// by the runtime user in every environment, unlike REPO_ROOT-relative
+// paths in the deployed container (see isCloudMode's comment above: this
+// is exactly the path class that incident was about). os.tmpdir() resolves
+// to /tmp in the container (world-writable, tmpfs-backed on Cloud Run —
+// worth knowing: checked-out files here count against the instance's
+// memory budget, not separate disk) and to the OS temp dir locally, always
+// writable by whoever is running the process. Used for BOTH modes now,
+// deliberately — one code path, not an environment-conditional one, for
+// exactly the class of path this incident showed can't be assumed correct
+// just because it works locally by accident.
+//
+// Every checkout writes here; every checkin uploads from here and leaves
+// the copy in place (harmless — the next checkout for that uid
+// wipes-then-refetches, so a stale leftover between requests is never
+// re-uploaded by accident, see LocalStorageBackend.download).
+export const LOCAL_INSTANCE_DIR = path.join(os.tmpdir(), "enso-instance-disk");
+
+// The daily-content cache's own writable home (see getDailyContentCache
+// below) — deliberately NOT inside LOCAL_INSTANCE_DIR, which is per-user
+// checkout scratch space that gets wiped-and-refetched on every checkout;
+// this cache is global/cross-user and must never be swept up in that.
+const SHARED_CACHE_DIR = path.join(os.tmpdir(), "enso-shared-cache");
 
 const README_TEXT = `This directory holds REAL, PERSISTENT data from interactively feel-testing
 Enso via the web app (npm run dev). It is gitignored.
 
 Each authenticated user's data lives in its own subdirectory under
 users/<uid>/ (events.db, projections.db, retrieval.db, blobs/) — see
-src/storage/userDataPaths.ts. dailyContent.db at this top level is the one
-deliberately-shared cache (AI-generated daily zodiac content, no user_id
-column at all).
+src/storage/userDataPaths.ts.
 
 Cloud Storage checkout/checkin batch: this directory is now also the
-LOCAL backend's "remote" root (src/storage/localStorageBackend.ts) — every
-request checks a user's files out to .local-instance-disk/ and back in
-here, exactly as it will check them out of and into a real GCS bucket at
-deployment. Still local, still dev data.
+LOCAL backend's "remote" root (src/storage/localStorageBackend.ts, used
+whenever GCS_BUCKET_NAME is unset) — every request checks a user's files
+out to the OS temp dir and back in here, exactly as it will check them out
+of and into a real GCS bucket in cloud mode. Still local, still dev data.
+The daily-content cache (AI-generated zodiac content, no user_id column at
+all, deliberately shared across users) no longer lives in this directory —
+it's always under the OS temp dir now too, in both modes (see
+lib/serverPipeline.ts's SHARED_CACHE_DIR).
 
 This is pre-cutover test/dev data, not production journaling data — see
 enso-rebuild-requirements.md Section 12 ("Data migration — RESOLVED: start
@@ -119,20 +159,52 @@ function ensureDevDataDir(): void {
 }
 
 /**
- * Deployment seam: GCS_BUCKET_NAME set (Cloud Run, Stage 2/3 of the
- * deployment batch) switches to GcsStorageBackend against that bucket;
- * unset (local dev, every test) keeps LocalStorageBackend against
- * DEV_DATA_DIR. Everything above this function (runUserSession, every
- * route) is written against the UserStorageBackend interface, not either
- * concrete class, so nothing else needs to change either way. Not cached
- * on globalThis — construction is cheap (no network call happens until a
- * caller actually downloads/uploads/locks), matching LocalStorageBackend's
- * existing per-call construction rather than adding a new cached field's
- * worth of HMR-staleness surface for no real benefit.
+ * Fail-loud writability check — same discipline as EN-091's test-DB-path
+ * rule ("must FAIL LOUDLY if the test DB path is unset or misresolved...
+ * never fall back to a real database path"), applied to the production
+ * data paths: a misconfigured/unwritable path must never surface as a raw
+ * EACCES three stack frames deep on whatever route a user happens to hit
+ * first. Runs lazily, on first real use (see ensureDataPathsWritable
+ * below), not at module top-level — this file is imported by every route,
+ * which `next build`'s page-data/tracing step also imports, and a
+ * top-level throw risks firing during the build rather than only at
+ * request time. Memoized so it's a one-time probe per process, not a
+ * per-request filesystem round-trip.
+ */
+function assertWritable(dir: string, label: string): void {
+  const probe = path.join(dir, `.enso-writability-probe-${process.pid}`);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(probe, "");
+    fs.unlinkSync(probe);
+  } catch (err) {
+    throw new Error(`${label} (${dir}) is not writable by this process — refusing to proceed. Underlying error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+let dataPathsWritabilityChecked = false;
+function ensureDataPathsWritable(): void {
+  if (dataPathsWritabilityChecked) return;
+  dataPathsWritabilityChecked = true;
+  if (!isCloudMode()) assertWritable(DEV_DATA_DIR, "Local dev/remote data root (DEV_DATA_DIR)");
+  assertWritable(LOCAL_INSTANCE_DIR, "This instance's ephemeral checkout disk (LOCAL_INSTANCE_DIR)");
+  assertWritable(SHARED_CACHE_DIR, "The shared daily-content cache directory (SHARED_CACHE_DIR)");
+}
+
+/**
+ * Deployment seam: GCS_BUCKET_NAME set (Cloud Run) switches to
+ * GcsStorageBackend against that bucket; unset (local dev, every test)
+ * keeps LocalStorageBackend against DEV_DATA_DIR. Everything above this
+ * function (runUserSession, every route) is written against the
+ * UserStorageBackend interface, not either concrete class, so nothing else
+ * needs to change either way. Not cached on globalThis — construction is
+ * cheap (no network call happens until a caller actually
+ * downloads/uploads/locks), matching LocalStorageBackend's existing
+ * per-call construction rather than adding a new cached field's worth of
+ * HMR-staleness surface for no real benefit.
  */
 function getStorageBackend(): UserStorageBackend {
-  const bucketName = process.env.GCS_BUCKET_NAME;
-  if (bucketName) return new GcsStorageBackend(bucketName);
+  if (isCloudMode()) return new GcsStorageBackend(process.env.GCS_BUCKET_NAME!);
   return new LocalStorageBackend(DEV_DATA_DIR);
 }
 
@@ -236,12 +308,13 @@ function invalidateIfStale(): void {
  * for why they couldn't coexist with checkout/checkin). Every caller must
  * have already gone through src/auth/verifyRequest.ts's getVerifiedUserId
  * — this function does not itself verify anything, it only trusts the uid
- * it's given and scopes storage to it. `ensureDevDataDir` still runs here
- * because DEV_DATA_DIR is also LocalStorageBackend's remote root — its
- * README needs to exist regardless of which backend is in play.
+ * it's given and scopes storage to it. `ensureDevDataDir` runs ONLY in
+ * local mode — DEV_DATA_DIR is LocalStorageBackend's remote root there,
+ * but is not touched at all (and must not be) once GCS_BUCKET_NAME is set.
  */
 export function runUserSession<T>(uid: string, work: (stores: UserSessionStores) => Promise<T>): Promise<T> {
-  ensureDevDataDir();
+  ensureDataPathsWritable();
+  if (!isCloudMode()) ensureDevDataDir();
   return withUserSession(getStorageBackend(), LOCAL_INSTANCE_DIR, uid, USER_SESSION_LOCK_TTL_MS, work);
 }
 
@@ -290,11 +363,19 @@ export function getImageRouter(): { extract: ImageContentAdapter } {
   return cache.imageRouter;
 }
 
-/** Deliberately global, not per-user — see this file's header comment and src/storage/userDataPaths.ts for why. */
+/**
+ * Deliberately global, not per-user — see this file's header comment and
+ * src/storage/userDataPaths.ts for why. Lives under SHARED_CACHE_DIR (OS
+ * temp dir), not DEV_DATA_DIR — this cache was one of the two paths that
+ * crashed with EACCES in cloud mode before this fix (see isCloudMode's
+ * comment): it's local-only in EITHER mode, but DEV_DATA_DIR is only ever
+ * safe to write in local mode.
+ */
 export function getDailyContentCache(): DailyContentCache {
   invalidateIfStale();
-  ensureDevDataDir();
-  if (!cache.dailyContentCache) cache.dailyContentCache = new DailyContentCache(path.join(DEV_DATA_DIR, "dailyContent.db"));
+  ensureDataPathsWritable();
+  fs.mkdirSync(SHARED_CACHE_DIR, { recursive: true });
+  if (!cache.dailyContentCache) cache.dailyContentCache = new DailyContentCache(path.join(SHARED_CACHE_DIR, "dailyContent.db"));
   return cache.dailyContentCache;
 }
 
@@ -306,20 +387,34 @@ export function getDailyContentCache(): DailyContentCache {
  * bug class is gone now that no per-user connection is ever cached across
  * requests (runUserSession above) — there's nothing left to orphan.
  *
- * Still goes through the per-user lock, though: without it, a wipe could
- * race an in-flight checkin from a concurrent request for the same user
- * and have the checkin's upload silently recreate the "wiped" directory
- * right after this deletes it. Scoped strictly to one uid's subdirectory
- * (src/storage/userDataPaths.ts) — never the shared dev-data root, never
- * another user's directory. Also clears any local ephemeral checkout this
- * instance is holding for the user, so a stale local copy can never be
- * re-uploaded on a later checkin and resurrect what was just wiped.
+ * Backend-agnostic by construction, not by an if/else per backend: wiping
+ * is "upload an empty directory" — both LocalStorageBackend.upload and
+ * GcsStorageBackend.upload already delete whatever exists remotely for
+ * this uid before copying from localDir, so pointing that at a directory
+ * with nothing in it is a real, already-tested wipe on either backend, not
+ * a new code path. (The old version of this function wrote directly to
+ * DEV_DATA_DIR, which — like ensureDevDataDir and the old
+ * getDailyContentCache — only makes sense for LocalStorageBackend; it
+ * would have hit the exact EACCES this batch's incident was about the
+ * first time anyone wiped in cloud mode.)
+ *
+ * Still goes through the per-user lock: without it, a wipe could race an
+ * in-flight checkin from a concurrent request for the same user and have
+ * the checkin's upload silently recreate the "wiped" directory right after
+ * this deletes it. Also clears any local ephemeral checkout this instance
+ * is holding for the user, so a stale local copy can never be re-uploaded
+ * on a later checkin and resurrect what was just wiped.
  */
 export async function resetUserData(uid: string): Promise<void> {
   const backend = getStorageBackend();
   const handle = await backend.acquireLock(uid, USER_SESSION_LOCK_TTL_MS);
   try {
-    wipeUserDirectory(getUserDataPaths(DEV_DATA_DIR, uid), []);
+    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "enso-wipe-"));
+    try {
+      await backend.upload(uid, emptyDir);
+    } finally {
+      fs.rmSync(emptyDir, { recursive: true, force: true });
+    }
     const localPaths = getUserDataPaths(LOCAL_INSTANCE_DIR, uid);
     fs.rmSync(localPaths.dir, { recursive: true, force: true });
   } finally {
