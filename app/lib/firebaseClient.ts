@@ -79,11 +79,32 @@ export function watchAuthState(onChange: (user: User | null) => void): () => voi
  * client SDK handles refresh internally — this always returns a
  * currently-valid token, never a cached-and-possibly-expired one, per the
  * SDK's own getIdToken() contract.
+ *
+ * Scroll/history/focus/zodiac batch, item 2: real production logs showed
+ * genuine 401s on GET /api/history — this request WAS made, with a
+ * missing or invalid token, even though the client believed it was
+ * signed in. Root cause: this used to read `auth.currentUser` directly
+ * and synchronously — but `onIdTokenChanged` firing (which is what sets
+ * this page's own `user` React state, see watchAuthState above) does not
+ * guarantee `auth.currentUser` is the SDK's own fully-settled snapshot
+ * yet, on a cold navigation specifically. watchAuthState's own
+ * AUTH_STATE_TIMEOUT_MS comment already documents this exact
+ * authDomain's cross-origin iframe handshake as a known source of timing
+ * uncertainty; `auth.authStateReady()` is the SDK's own documented
+ * primitive for exactly this — "resolves when the initial auth state is
+ * settled" — so this now waits on it before ever reading `currentUser`,
+ * instead of only reading a callback-delivered `user` object that could
+ * be ahead of the SDK's own internal state. Safe against hanging forever
+ * the same way the settled onIdTokenChanged callback that got the caller
+ * here already proves the "initial auth state" milestone has been
+ * reached — this call resolves promptly in that case, not a fresh wait
+ * from zero.
  */
-export function getCurrentIdToken(): Promise<string | null> {
+export async function getCurrentIdToken(): Promise<string | null> {
   const auth = getAuth(getFirebaseApp());
+  await auth.authStateReady();
   const user = auth.currentUser;
-  if (!user) return Promise.resolve(null);
+  if (!user) return null;
   return user.getIdToken();
 }
 

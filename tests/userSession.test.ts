@@ -330,4 +330,34 @@ describe("withReadOnlyUserSession (refresh-blank-chat batch)", () => {
       expect(eventLog.listForUser(uid).map((e) => (e.payload as { text: string }).text)).toEqual(["written after a read"]);
     });
   });
+
+  /**
+   * Scroll/history/focus/zodiac batch, item 2 follow-up: real production
+   * logs showed GET /api/history and GET /api/zodiac-sidebar — both
+   * read-only sessions for the SAME user, both firing on the same page
+   * load — still genuinely colliding at the lock even after the fix
+   * above shrank the window. Neither one writes anything, so there is
+   * nothing for them to actually conflict over; the bounded retry in
+   * acquireReadOnlyLockWithRetry (userSession.ts) exists specifically so
+   * two read-only sessions overlapping this briefly both succeed instead
+   * of one 500ing.
+   */
+  it("two read-only sessions for the same user, started concurrently, both succeed instead of one throwing", async () => {
+    const remoteRoot = freshRoot("remote");
+    const backend = new LocalStorageBackend(remoteRoot);
+    const uid = "user-a";
+
+    // Seed real data first so both sessions have something to read.
+    await withUserSession(backend, freshRoot("local-seed"), uid, 30_000, async ({ eventLog }) => {
+      eventLog.append({ type: "message_sent", actor: "user", payload: { text: "hi", attachmentOnly: false }, userId: uid });
+    });
+
+    const [a, b] = await Promise.all([
+      withReadOnlyUserSession(backend, freshRoot("local-a"), uid, 30_000, async ({ eventLog }) => eventLog.listForUser(uid).length),
+      withReadOnlyUserSession(backend, freshRoot("local-b"), uid, 30_000, async ({ eventLog }) => eventLog.listForUser(uid).length)
+    ]);
+
+    expect(a).toBe(1);
+    expect(b).toBe(1);
+  });
 });

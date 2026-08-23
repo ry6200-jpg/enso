@@ -4,7 +4,7 @@ import { ProjectionsDb } from "../projections/db.js";
 import { RetrievalDb } from "../retrieval/retrievalDb.js";
 import { BlobStore } from "../blobs/blobStore.js";
 import { getUserDataPaths } from "./userDataPaths.js";
-import type { UserStorageBackend } from "./userStorageBackend.js";
+import { LockAcquisitionError, type LockHandle, type UserStorageBackend } from "./userStorageBackend.js";
 
 export interface UserSessionStores {
   eventLog: EventLog;
@@ -122,7 +122,48 @@ export async function withUserSession<T>(
  * error, not a warning, a SILENT loss of exactly the kind EN-061 forbids
  * elsewhere in this project. If a route's `work` needs to write, even
  * conditionally, use withUserSession instead.
+ *
+ * Scroll/history/focus/zodiac batch, item 2 follow-up: shrinking the
+ * window (above) reduced collisions but did NOT eliminate them — real
+ * Cloud Run logs, checked after that fix had been live for hours, still
+ * showed genuine LockAcquisitionError 500s on GET /api/history at the
+ * same ~200-270ms fast-fail latency as before. Root cause: the lock is
+ * still fully EXCLUSIVE, so two READ-ONLY sessions for the same user
+ * (e.g. history and zodiac-sidebar firing on the same page load) still
+ * exclude each other even though neither one writes anything and there is
+ * nothing for them to actually conflict over. A real reader/writer lock
+ * (shared for reads, exclusive for writes) is the correct long-term fix
+ * and is a bigger change than this batch's scope; the retry below is the
+ * bounded, evidence-based interim mitigation — NOT a blind timer papering
+ * over an unknown cause. It only retries the one specific, diagnosed,
+ * inherently-transient error class (another read-only session — never a
+ * writer, which still fails fast via plain withUserSession above — briefly
+ * holding the same lock), retries a small fixed number of times with a
+ * short delay, and gives up loudly (the original LockAcquisitionError)
+ * if the contention genuinely doesn't clear.
  */
+const READ_ONLY_LOCK_RETRY_ATTEMPTS = 3;
+const READ_ONLY_LOCK_RETRY_DELAY_MS = 150;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function acquireReadOnlyLockWithRetry(backend: UserStorageBackend, uid: string, ttlMs: number): Promise<LockHandle> {
+  for (let attempt = 1; attempt <= READ_ONLY_LOCK_RETRY_ATTEMPTS; attempt++) {
+    try {
+      return await backend.acquireLock(uid, ttlMs);
+    } catch (err) {
+      if (!(err instanceof LockAcquisitionError) || attempt === READ_ONLY_LOCK_RETRY_ATTEMPTS) throw err;
+      await delay(READ_ONLY_LOCK_RETRY_DELAY_MS);
+    }
+  }
+  // Unreachable — the loop above always returns or throws — but TypeScript
+  // can't see that from a for-loop, and this function must still type as
+  // returning Promise<LockHandle>, not Promise<LockHandle | undefined>.
+  throw new Error("acquireReadOnlyLockWithRetry: unreachable");
+}
+
 export async function withReadOnlyUserSession<T>(
   backend: UserStorageBackend,
   localRoot: string,
@@ -130,7 +171,7 @@ export async function withReadOnlyUserSession<T>(
   lockTtlMs: number,
   work: (stores: UserSessionStores) => Promise<T>
 ): Promise<T> {
-  const handle = await backend.acquireLock(uid, lockTtlMs);
+  const handle = await acquireReadOnlyLockWithRetry(backend, uid, lockTtlMs);
   try {
     const paths = getUserDataPaths(localRoot, uid);
     await backend.download(uid, paths.dir);
