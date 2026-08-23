@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { uploadAndExtract } from "../../../src/attachments/uploadAndExtract.js";
 import { UploadTooLargeError } from "../../../src/attachments/attachmentCapture.js";
 import { listUploads } from "../../../src/attachments/uploadDeletion.js";
-import { getBlobStore, getDevUserId, getDocumentRouter, getImageRouter, getStores } from "../../../lib/serverPipeline.js";
+import { getBlobStore, getDocumentRouter, getImageRouter, getStores } from "../../../lib/serverPipeline.js";
+import { authErrorResponse, requireUserId } from "../../../lib/requireUser.js";
 
 /**
  * EN-065's uploads-list surface: didn't exist at all before this — there
@@ -10,9 +11,15 @@ import { getBlobStore, getDevUserId, getDocumentRouter, getImageRouter, getStore
  * Deleted uploads are excluded (listUploads already filters them via the
  * same eclipsed-set logic deletion itself uses).
  */
-export async function GET(): Promise<Response> {
-  const userId = getDevUserId();
-  const { eventLog } = getStores();
+export async function GET(request: Request): Promise<Response> {
+  let userId: string;
+  try {
+    userId = await requireUserId(request);
+  } catch (err) {
+    return authErrorResponse(err) ?? NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+  }
+
+  const { eventLog } = getStores(userId);
   return NextResponse.json({ uploads: listUploads(eventLog, userId) });
 }
 
@@ -24,15 +31,21 @@ export async function GET(): Promise<Response> {
  * surface would use — no upload logic duplicated here.
  */
 export async function POST(request: Request): Promise<Response> {
+  let userId: string;
+  try {
+    userId = await requireUserId(request);
+  } catch (err) {
+    return authErrorResponse(err) ?? NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+  }
+
   const formData = await request.formData();
   const file = formData.get("file");
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "file is required" }, { status: 400 });
   }
 
-  const userId = getDevUserId();
-  const { eventLog } = getStores();
-  const blobStore = getBlobStore();
+  const { eventLog } = getStores(userId);
+  const blobStore = getBlobStore(userId);
   const documentRouter = getDocumentRouter();
   const imageRouter = getImageRouter();
 

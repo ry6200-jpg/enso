@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { authFetch } from "../lib/firebaseClient";
 
 /**
  * Batch 2, item 6: the standalone /horoscope and /people pages (and the
@@ -48,7 +49,7 @@ export default function ZodiacSidebar({ refreshSignal = 0 }: { refreshSignal?: n
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/zodiac-sidebar")
+    authFetch("/api/zodiac-sidebar")
       .then((r) => r.json())
       .then((json: ZodiacSidebarData) => {
         if (!cancelled) setData(json);

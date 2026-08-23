@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { getChineseZodiacSign, getWesternZodiacSign } from "../../../../src/zodiac/zodiac.js";
 import { getSynastryReading } from "../../../../src/zodiac/zodiacContent.js";
 import { getPeopleView, getPrimaryUserBirthdate } from "../../../../src/projections/peopleView.js";
-import { getChatRouter, getDailyContentCache, getDevUserId, getStores } from "../../../../lib/serverPipeline.js";
+import { getChatRouter, getDailyContentCache, getStores } from "../../../../lib/serverPipeline.js";
+import { authErrorResponse, requireUserId } from "../../../../lib/requireUser.js";
 
 /**
  * EN-032, part 1: Synastry Chart against a chosen entity. The entity's
@@ -16,8 +17,14 @@ export async function GET(request: Request): Promise<Response> {
   const entityId = new URL(request.url).searchParams.get("entityId");
   if (!entityId) return NextResponse.json({ error: "entityId is required" }, { status: 400 });
 
-  const userId = getDevUserId();
-  const { eventLog, projectionsDb } = getStores();
+  let userId: string;
+  try {
+    userId = await requireUserId(request);
+  } catch (err) {
+    return authErrorResponse(err) ?? NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+  }
+
+  const { eventLog, projectionsDb } = getStores(userId);
 
   const userBirthdate = getPrimaryUserBirthdate(projectionsDb, userId);
   const userChineseSign = userBirthdate ? getChineseZodiacSign(userBirthdate) : null;

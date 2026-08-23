@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { getChineseZodiacSign, getCurrentChineseYearSign, getWesternZodiacSign, zodiacIconUrl } from "../../../src/zodiac/zodiac.js";
 import { getZodiacSidebarReflection } from "../../../src/zodiac/zodiacContent.js";
 import { getPrimaryUserBirthdate } from "../../../src/projections/peopleView.js";
-import { getChatRouter, getDailyContentCache, getDevUserId, getStores } from "../../../lib/serverPipeline.js";
+import { getChatRouter, getDailyContentCache, getStores } from "../../../lib/serverPipeline.js";
+import { authErrorResponse, requireUserId } from "../../../lib/requireUser.js";
 
 const RECENT_CONTEXT_MESSAGE_COUNT = 8;
 
@@ -16,9 +17,15 @@ function recentUserMessageTexts(eventLog: ReturnType<typeof getStores>["eventLog
 }
 
 /** EN-031: Western zodiac + Chinese zodiac, both derived from the user's own stated birthdate, each with its own Enso-generated (never scraped) daily reflection, cached once per day. */
-export async function GET(): Promise<Response> {
-  const userId = getDevUserId();
-  const { eventLog, projectionsDb } = getStores();
+export async function GET(request: Request): Promise<Response> {
+  let userId: string;
+  try {
+    userId = await requireUserId(request);
+  } catch (err) {
+    return authErrorResponse(err) ?? NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+  }
+
+  const { eventLog, projectionsDb } = getStores(userId);
   const birthdate = getPrimaryUserBirthdate(projectionsDb, userId);
   if (!birthdate) return NextResponse.json({ available: false });
 

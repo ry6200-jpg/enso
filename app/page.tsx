@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import type { User } from "firebase/auth";
 import ZodiacSidebar from "./components/ZodiacSidebar";
+import { authFetch, signInWithGoogle, signOut, watchAuthState } from "./lib/firebaseClient";
 
 interface ChatMessage {
   id: string;
@@ -111,6 +113,17 @@ interface LocationContextState {
  * action," not decoration.
  */
 export default function Page() {
+  // Cloud migration prerequisite batch, item 1: real user identity via
+  // Firebase Auth (Google sign-in). `authStatus` distinguishes "still
+  // checking" from "confirmed signed out" so the sign-in screen never
+  // flashes for an already-authenticated returning user. The allowlist
+  // itself is enforced server-side only (lib/requireUser.ts on every
+  // route) — this page never checks it directly; it just notices a 403
+  // from the first real authenticated call and signs back out with an
+  // honest message, so a rejected account never gets a confusing hang.
+  const [user, setUser] = useState<User | null>(null);
+  const [authStatus, setAuthStatus] = useState<"checking" | "signedOut" | "signedIn">("checking");
+  const [authError, setAuthError] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -140,18 +153,44 @@ export default function Page() {
   const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
+    return watchAuthState((u) => {
+      setUser(u);
+      setAuthStatus(u ? "signedIn" : "signedOut");
+    });
+  }, []);
+
+  // History only ever fetches once a real signed-in user is present — an
+  // unauthenticated request would just 401 anyway, and this is also where
+  // a non-allowlisted account gets caught: the server enforces the
+  // allowlist on every route (lib/requireUser.ts), never this page, so a
+  // 403 here is the first real signal that sign-in succeeded but the
+  // account isn't permitted for this closed test — sign back out
+  // immediately with an honest message rather than leaving a rejected
+  // account looking at a silently-stuck blank chat.
+  useEffect(() => {
+    if (!user) return;
     let cancelled = false;
-    fetch("/api/history")
-      .then((r) => r.json())
-      .then((json: { messages: ChatMessage[] }) => {
-        if (cancelled) return;
+    authFetch("/api/history")
+      .then(async (r) => {
+        if (r.status === 403) {
+          const json = await r.json().catch(() => ({}));
+          if (!cancelled) {
+            setAuthError(json.error ?? "This account is not authorized for this closed test.");
+            await signOut();
+          }
+          return null;
+        }
+        return r.json();
+      })
+      .then((json: { messages: ChatMessage[] } | null) => {
+        if (cancelled || !json) return;
         setMessages(json.messages);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [user]);
 
   // Timezone alone (Tier 3): zero permission cost, always collected — safe
   // to grab on mount, unlike geolocation below which is gated behind an
@@ -269,7 +308,7 @@ export default function Page() {
       if (file) {
         const formData = new FormData();
         formData.append("file", file);
-        const uploadRes = await fetch("/api/attachments", { method: "POST", body: formData });
+        const uploadRes = await authFetch("/api/attachments", { method: "POST", body: formData });
         const uploadJson = await uploadRes.json();
         if (!uploadRes.ok) {
           setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "enso", text: `(couldn't attach ${file.name}: ${uploadJson.error})` }]);
@@ -285,7 +324,7 @@ export default function Page() {
       // message state was never guaranteed to reflect what the server
       // actually held, and hardcoding "last 6" here was the reason Enso
       // used to be blind past 6 turns within a single long session.
-      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, attachmentEventId, locationContext }) });
+      const res = await authFetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, attachmentEventId, locationContext }) });
       const json = await res.json();
       if (!res.ok) {
         setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "enso", text: `(reply failed — your message was still saved: ${json.error})` }]);
@@ -321,6 +360,36 @@ export default function Page() {
     setRefocusInputSignal((n) => n + 1);
   }
 
+  if (authStatus !== "signedIn") {
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-4 px-6">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/assets/enso-mark.png" alt="" className="w-16 h-16" />
+        <span className="text-2xl font-bold tracking-wide" style={{ color: "var(--enso-ink)" }}>
+          Enso
+        </span>
+        {authStatus === "checking" ? (
+          <p className="text-stone-500 text-sm">Checking sign-in...</p>
+        ) : (
+          <>
+            {authError && <p className="text-sm text-red-600 max-w-sm text-center">{authError}</p>}
+            <button
+              type="button"
+              onClick={() => {
+                setAuthError(null);
+                void signInWithGoogle().catch((err) => setAuthError(err instanceof Error ? err.message : String(err)));
+              }}
+              className="rounded-xl text-white px-6 py-3 text-base font-medium hover:opacity-90"
+              style={{ backgroundColor: "var(--enso-red)" }}
+            >
+              Sign in with Google
+            </button>
+          </>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="h-full flex flex-col">
       <header className="shrink-0 flex items-center gap-4 px-6 py-4 border-b border-stone-200">
@@ -329,6 +398,9 @@ export default function Page() {
         <span className="text-4xl font-bold tracking-wide" style={{ color: "var(--enso-ink)" }}>
           Enso
         </span>
+        <button type="button" onClick={() => void signOut()} className="ml-2 text-xs text-stone-400 hover:text-stone-600" title="Sign out">
+          Sign out
+        </button>
         {/*
           "Provide a way to grant it later," scoped precisely: visible ONLY
           when permission was explicitly denied — never on a fresh/prompt

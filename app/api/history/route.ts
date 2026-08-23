@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getConversationHistory } from "../../../src/conversation/conversationHistory.js";
-import { getDevUserId, getStores } from "../../../lib/serverPipeline.js";
+import { getStores } from "../../../lib/serverPipeline.js";
+import { authErrorResponse, requireUserId } from "../../../lib/requireUser.js";
 import { PROACTIVE_OPENER_MESSAGE } from "../../../src/persona/proactiveOpener.js";
 
 /**
@@ -19,9 +20,15 @@ import { PROACTIVE_OPENER_MESSAGE } from "../../../src/persona/proactiveOpener.j
  * the client (see next.config.ts). The substituted message is still never
  * written to the event log — see proactiveOpener.ts for why.
  */
-export async function GET(): Promise<Response> {
-  const userId = getDevUserId();
-  const { eventLog } = getStores();
+export async function GET(request: Request): Promise<Response> {
+  let userId: string;
+  try {
+    userId = await requireUserId(request);
+  } catch (err) {
+    return authErrorResponse(err) ?? NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+  }
+
+  const { eventLog } = getStores(userId);
   const messages = getConversationHistory(eventLog, userId);
   return NextResponse.json({
     messages: messages.length > 0 ? messages : [{ id: "proactive-opener", role: "enso" as const, text: PROACTIVE_OPENER_MESSAGE }]

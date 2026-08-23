@@ -1,11 +1,7 @@
 /**
- * Phase 7 Part 1: the ONE place the web app constructs the pipeline —
- * every API route imports from here, never re-implements capture,
- * retrieval, extraction, or the router. This is the same dev-data (same
- * paths, same user id file) that scripts/chat.ts (the REPL) reads and
- * writes, so a message sent through either surface is visible from the
- * other — verified live for this phase's report by sending in the UI and
- * reading it back in the REPL.
+ * Phase 7 Part 1 / Cloud migration prerequisite batch: the ONE place the
+ * web app constructs the pipeline — every API route imports from here,
+ * never re-implements capture, retrieval, extraction, or the router.
  *
  * Node-runtime only (better-sqlite3, local ONNX embeddings) — never
  * import this from a client component or the edge runtime.
@@ -13,11 +9,29 @@
  * Cached on `globalThis` because Next.js dev mode re-executes module
  * top-level code on hot reload; without this, every HMR cycle would open
  * a fresh set of SQLite connections to the same files.
+ *
+ * Per-user data (Cloud migration prerequisite batch, item 2): eventLog,
+ * projectionsDb, retrievalDb, and blobStore are now keyed by uid, one set
+ * of connections per authenticated user, one directory per user on disk
+ * (src/storage/userDataPaths.ts). dailyContentCache stays a SINGLE global
+ * cache deliberately — its own schema has no user_id column at all (it
+ * caches AI-generated daily zodiac content keyed only by sign and date,
+ * genuinely the same content for every user sharing a sign on a given
+ * day) — sharing it is correct, not an oversight. Every other cached
+ * field (embedder, cost tracker, chat/extraction/intent/document/image
+ * routers) is a stateless API-client singleton with no per-user state at
+ * all and is unchanged.
+ *
+ * getDevUserId() no longer exists. There is no fallback identity anymore
+ * — every route derives userId from a verified request (src/auth/
+ * verifyRequest.ts's getVerifiedUserId), and a missing or invalid token
+ * fails loudly rather than ever minting or reusing an anonymous user, the
+ * same discipline this project already applies to the test DB path
+ * (EN-091).
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { newId } from "../src/ids.js";
 import { EventLog } from "../src/events/eventLog.js";
 import { ProjectionsDb } from "../src/projections/db.js";
 import { RetrievalDb } from "../src/retrieval/retrievalDb.js";
@@ -30,6 +44,7 @@ import { createDocumentRouter, createImageRouter } from "../src/providers/attach
 import type { DocumentContentAdapter, ImageContentAdapter } from "../src/providers/attachmentTypes.js";
 import { BlobStore } from "../src/blobs/blobStore.js";
 import { DailyContentCache } from "../src/zodiac/dailyContentCache.js";
+import { getUserDataPaths, sanitizeUidForPath, wipeUserDirectory } from "../src/storage/userDataPaths.js";
 
 // Not import.meta.dirname: webpack's bundling of API routes doesn't
 // support it (confirmed live — undefined at runtime under `next dev
@@ -37,21 +52,22 @@ import { DailyContentCache } from "../src/zodiac/dailyContentCache.js";
 // simpler and portable across both bundlers anyway.
 export const REPO_ROOT = process.cwd();
 export const DEV_DATA_DIR = path.join(REPO_ROOT, "dev-data");
-const EVENTS_DB = path.join(DEV_DATA_DIR, "events.db");
-const PROJECTIONS_DB = path.join(DEV_DATA_DIR, "projections.db");
-const RETRIEVAL_DB = path.join(DEV_DATA_DIR, "retrieval.db");
-const BLOBS_DIR = path.join(DEV_DATA_DIR, "blobs");
-const USER_ID_FILE = path.join(DEV_DATA_DIR, "user-id.txt");
 const README_FILE = path.join(DEV_DATA_DIR, "README.txt");
 
 const README_TEXT = `This directory holds REAL, PERSISTENT data from interactively feel-testing
-Enso via the REPL (npm run chat) and the web app (npm run dev). It is
-gitignored.
+Enso via the web app (npm run dev). It is gitignored.
+
+Each authenticated user's data lives in its own subdirectory under
+users/<uid>/ (events.db, projections.db, retrieval.db, blobs/) — see
+src/storage/userDataPaths.ts. dailyContent.db at this top level is the one
+deliberately-shared cache (AI-generated daily zodiac content, no user_id
+column at all).
 
 This is pre-cutover test/dev data, not production journaling data — see
 enso-rebuild-requirements.md Section 12 ("Data migration — RESOLVED: start
-clean... nothing is imported"). Delete it anytime with the REPL's /wipe
-command, or by removing this directory directly.
+clean... nothing is imported"). Delete a single user's data via the web
+app's own POST /api/wipe (authenticated, scoped to that user only), or by
+removing this directory directly.
 `;
 
 function requireEnv(name: string): string {
@@ -65,19 +81,11 @@ function ensureDevDataDir(): void {
   if (!fs.existsSync(README_FILE)) fs.writeFileSync(README_FILE, README_TEXT);
 }
 
-export function getDevUserId(): string {
-  ensureDevDataDir();
-  if (fs.existsSync(USER_ID_FILE)) return fs.readFileSync(USER_ID_FILE, "utf8").trim();
-  const id = newId();
-  fs.writeFileSync(USER_ID_FILE, id);
-  return id;
-}
-
 interface PipelineGlobals {
-  eventLog?: EventLog;
-  projectionsDb?: ProjectionsDb;
-  retrievalDb?: RetrievalDb;
-  blobStore?: BlobStore;
+  eventLogByUser?: Map<string, EventLog>;
+  projectionsDbByUser?: Map<string, ProjectionsDb>;
+  retrievalDbByUser?: Map<string, RetrievalDb>;
+  blobStoreByUser?: Map<string, BlobStore>;
   embedderPromise?: Promise<Embedder>;
   costTracker?: CostTracker;
   chatRouter?: ChatRouter;
@@ -93,6 +101,23 @@ const g = globalThis as unknown as { __ensoPipeline?: PipelineGlobals };
 if (!g.__ensoPipeline) g.__ensoPipeline = {};
 const cache = g.__ensoPipeline;
 
+function eventLogMap(): Map<string, EventLog> {
+  if (!cache.eventLogByUser) cache.eventLogByUser = new Map();
+  return cache.eventLogByUser;
+}
+function projectionsDbMap(): Map<string, ProjectionsDb> {
+  if (!cache.projectionsDbByUser) cache.projectionsDbByUser = new Map();
+  return cache.projectionsDbByUser;
+}
+function retrievalDbMap(): Map<string, RetrievalDb> {
+  if (!cache.retrievalDbByUser) cache.retrievalDbByUser = new Map();
+  return cache.retrievalDbByUser;
+}
+function blobStoreMap(): Map<string, BlobStore> {
+  if (!cache.blobStoreByUser) cache.blobStoreByUser = new Map();
+  return cache.blobStoreByUser;
+}
+
 /**
  * Dev-only staleness safeguard. `globalThis` caching survives every HMR
  * cycle by design (see the class doc comment above), but that means any
@@ -104,19 +129,21 @@ const cache = g.__ensoPipeline;
  * ProjectionsDb missing a newly-added method, the intent router still
  * returning decisions shaped for the pre-refactor schema (crashing on
  * `decision.register.mode`), and the /wipe orphaned-connections bug this
- * file's `resetDevData` already exists to fix. All three were "restart
+ * file's `resetUserData` already exists to fix. All three were "restart
  * the dev server and it's fine" — this makes that automatic instead of
  * something to remember.
  *
  * Fingerprints every .ts file under src/ and lib/ by path+mtime+size (not
  * content — hashing bytes is needless work for a debounced per-request
  * check) and, if it differs from the fingerprint recorded when the cache
- * was last populated, closes and drops every cached entry so the next
- * getter call rebuilds it from the current code. Debounced to at most
- * once per second so an active dev session doesn't pay a directory walk
- * on every request. Never runs in production: a deployed process's code
- * cannot change without an actual restart, which already clears
- * `globalThis` by definition, so this check would be pure overhead there.
+ * was last populated, closes and drops every cached entry — now across
+ * every user's connections in each per-user map, not just a single field
+ * — so the next getter call rebuilds from the current code. Debounced to
+ * at most once per second so an active dev session doesn't pay a
+ * directory walk on every request. Never runs in production: a deployed
+ * process's code cannot change without an actual restart, which already
+ * clears `globalThis` by definition, so this check would be pure overhead
+ * there.
  */
 function computeSourceFingerprint(): string {
   const parts: string[] = [];
@@ -154,9 +181,9 @@ function invalidateIfStale(): void {
   if (cache.sourceFingerprint === current) return;
   const isFirstRun = cache.sourceFingerprint === undefined;
   if (!isFirstRun) {
-    cache.eventLog?.close();
-    cache.projectionsDb?.close();
-    cache.retrievalDb?.close();
+    for (const eventLog of eventLogMap().values()) eventLog.close();
+    for (const projectionsDb of projectionsDbMap().values()) projectionsDb.close();
+    for (const retrievalDb of retrievalDbMap().values()) retrievalDb.close();
     cache.dailyContentCache?.close();
     for (const key of Object.keys(cache) as (keyof PipelineGlobals)[]) {
       if (key !== "sourceFingerprint") delete cache[key];
@@ -167,20 +194,32 @@ function invalidateIfStale(): void {
   cache.sourceFingerprint = current;
 }
 
-export function getStores(): { eventLog: EventLog; projectionsDb: ProjectionsDb; retrievalDb: RetrievalDb } {
+/** Every caller must have already gone through src/auth/verifyRequest.ts's getVerifiedUserId — this function does not itself verify anything, it only trusts the uid it's given and scopes storage to it. */
+export function getStores(uid: string): { eventLog: EventLog; projectionsDb: ProjectionsDb; retrievalDb: RetrievalDb } {
   invalidateIfStale();
+  const paths = getUserDataPaths(DEV_DATA_DIR, uid);
+  fs.mkdirSync(paths.dir, { recursive: true });
   ensureDevDataDir();
-  if (!cache.eventLog) cache.eventLog = new EventLog(EVENTS_DB);
-  if (!cache.projectionsDb) cache.projectionsDb = new ProjectionsDb(PROJECTIONS_DB);
-  if (!cache.retrievalDb) cache.retrievalDb = new RetrievalDb(RETRIEVAL_DB);
-  return { eventLog: cache.eventLog, projectionsDb: cache.projectionsDb, retrievalDb: cache.retrievalDb };
+
+  const eventLogs = eventLogMap();
+  if (!eventLogs.has(uid)) eventLogs.set(uid, new EventLog(paths.eventsDb));
+  const projectionsDbs = projectionsDbMap();
+  if (!projectionsDbs.has(uid)) projectionsDbs.set(uid, new ProjectionsDb(paths.projectionsDb));
+  const retrievalDbs = retrievalDbMap();
+  if (!retrievalDbs.has(uid)) retrievalDbs.set(uid, new RetrievalDb(paths.retrievalDb));
+
+  return { eventLog: eventLogs.get(uid)!, projectionsDb: projectionsDbs.get(uid)!, retrievalDb: retrievalDbs.get(uid)! };
 }
 
-export function getBlobStore(): BlobStore {
+export function getBlobStore(uid: string): BlobStore {
   invalidateIfStale();
+  const paths = getUserDataPaths(DEV_DATA_DIR, uid);
+  fs.mkdirSync(paths.dir, { recursive: true });
   ensureDevDataDir();
-  if (!cache.blobStore) cache.blobStore = new BlobStore(BLOBS_DIR);
-  return cache.blobStore;
+
+  const blobStores = blobStoreMap();
+  if (!blobStores.has(uid)) blobStores.set(uid, new BlobStore(paths.blobsDir));
+  return blobStores.get(uid)!;
 }
 
 export function getEmbedder(): Promise<Embedder> {
@@ -228,47 +267,42 @@ export function getImageRouter(): { extract: ImageContentAdapter } {
   return cache.imageRouter;
 }
 
+/** Deliberately global, not per-user — see this file's header comment and src/storage/userDataPaths.ts for why. */
 export function getDailyContentCache(): DailyContentCache {
   invalidateIfStale();
+  ensureDevDataDir();
   if (!cache.dailyContentCache) cache.dailyContentCache = new DailyContentCache(path.join(DEV_DATA_DIR, "dailyContent.db"));
   return cache.dailyContentCache;
 }
 
 /**
- * The gap that made /wipe (correctly, at the file level — see
- * scripts/chat.ts's performWipe) look broken through the web app: this
- * module caches EventLog/ProjectionsDb/RetrievalDb/DailyContentCache
- * connections on globalThis so Next.js dev-mode hot reload doesn't reopen
- * them every HMR cycle. But an EXTERNAL wipe (the REPL, a separate OS
- * process, deleting and recreating ./dev-data) has no way to touch this
- * process's already-open file descriptors — they silently become bound
- * to the deleted (but still-readable/writable-via-fd) old files. Reads
- * through the web app after that point return whatever was last cached;
- * writes go into those orphaned files, invisible to any fresh connection
- * at the real path (the REPL, a direct query, or this same process after
- * a restart) — reproduced live and confirmed: a message sent through the
- * web app after an external wipe never appeared in a subsequent direct
- * query of events.db.
+ * The gap that made /wipe (correctly, at the file level) look broken
+ * through the web app: this module caches EventLog/ProjectionsDb/
+ * RetrievalDb connections on globalThis so Next.js dev-mode hot reload
+ * doesn't reopen them every HMR cycle. But an EXTERNAL wipe (a separate OS
+ * process deleting and recreating a user's directory) has no way to touch
+ * THIS process's already-open file descriptors — they silently become
+ * bound to the deleted (but still-readable/writable-via-fd) old files.
+ * Reads through the web app after that point return whatever was last
+ * cached; writes go into those orphaned files, invisible to any fresh
+ * connection at the real path — reproduced live and confirmed in an
+ * earlier session with the old single-user version of this bug.
  *
  * Fix: give the web app's OWN process a wipe path that closes its own
- * cached connections before deleting ./dev-data, so nothing is ever
- * orphaned. This is the same underlying delete-and-recreate operation
- * scripts/chat.ts's /wipe already does — exposed here so it can run
- * in-process for the surface that actually holds long-lived connections.
- * A wipe triggered externally (REPL) while the web app keeps running
- * still requires restarting the web app — no in-process fix can reach
- * into a different OS process's file descriptors.
+ * cached connections for THIS user before deleting THIS user's directory,
+ * so nothing is ever orphaned and no other user's data is ever touched.
+ * Scoped strictly to one uid's subdirectory (src/storage/userDataPaths.ts)
+ * — never the shared dev-data root, never another user's directory.
  */
-export function resetDevData(): void {
-  cache.eventLog?.close();
-  cache.projectionsDb?.close();
-  cache.retrievalDb?.close();
-  cache.dailyContentCache?.close();
-  fs.rmSync(DEV_DATA_DIR, { recursive: true, force: true });
-  cache.eventLog = undefined;
-  cache.projectionsDb = undefined;
-  cache.retrievalDb = undefined;
-  cache.blobStore = undefined;
-  cache.dailyContentCache = undefined;
-  ensureDevDataDir();
+export function resetUserData(uid: string): void {
+  const safeUid = sanitizeUidForPath(uid);
+  const paths = getUserDataPaths(DEV_DATA_DIR, uid);
+
+  const openConnections = [eventLogMap().get(safeUid), projectionsDbMap().get(safeUid), retrievalDbMap().get(safeUid)].filter((c): c is NonNullable<typeof c> => c !== undefined);
+  wipeUserDirectory(paths, openConnections);
+
+  eventLogMap().delete(safeUid);
+  projectionsDbMap().delete(safeUid);
+  retrievalDbMap().delete(safeUid);
+  blobStoreMap().delete(safeUid);
 }

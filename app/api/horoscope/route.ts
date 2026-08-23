@@ -2,12 +2,19 @@ import { NextResponse } from "next/server";
 import { getChineseZodiacSign, getWesternZodiacSign } from "../../../src/zodiac/zodiac.js";
 import { getDailyZodiacCompatibility } from "../../../src/zodiac/zodiacContent.js";
 import { getPrimaryUserBirthdate } from "../../../src/projections/peopleView.js";
-import { getChatRouter, getDailyContentCache, getDevUserId, getStores } from "../../../lib/serverPipeline.js";
+import { getChatRouter, getDailyContentCache, getStores } from "../../../lib/serverPipeline.js";
+import { authErrorResponse, requireUserId } from "../../../lib/requireUser.js";
 
 /** EN-032, part 2: Daily Zodiac Compatibility ("today's astrological relationship weather"). */
-export async function GET(): Promise<Response> {
-  const userId = getDevUserId();
-  const { projectionsDb } = getStores();
+export async function GET(request: Request): Promise<Response> {
+  let userId: string;
+  try {
+    userId = await requireUserId(request);
+  } catch (err) {
+    return authErrorResponse(err) ?? NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+  }
+
+  const { projectionsDb } = getStores(userId);
   const birthdate = getPrimaryUserBirthdate(projectionsDb, userId);
   if (!birthdate) return NextResponse.json({ available: false });
 

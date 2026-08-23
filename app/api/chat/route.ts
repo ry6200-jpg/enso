@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { sendMessage } from "../../../src/conversation/chatPipeline.js";
 import { refreshMemoryAfterTurn } from "../../../src/conversation/turnMemoryRefresh.js";
 import { resolveCurrentLocationContext } from "../../../src/location/currentLocation.js";
-import { getChatRouter, getDevUserId, getEmbedder, getExtractionRouter, getIntentRouter, getStores } from "../../../lib/serverPipeline.js";
+import { getChatRouter, getEmbedder, getExtractionRouter, getIntentRouter, getStores } from "../../../lib/serverPipeline.js";
+import { authErrorResponse, requireUserId } from "../../../lib/requireUser.js";
 
 /**
  * The ONE API route backing the chat UI (Phase 7 Part 1) — calls
@@ -29,6 +30,13 @@ function getRequestIp(request: Request): string | null {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  let userId: string;
+  try {
+    userId = await requireUserId(request);
+  } catch (err) {
+    return authErrorResponse(err) ?? NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+  }
+
   const body = (await request.json()) as { text: string; attachmentEventId?: string; locationContext?: { placeName: string | null; timezone: string | null } };
   const hasText = typeof body.text === "string" && body.text.trim() !== "";
   const hasAttachment = typeof body.attachmentEventId === "string" && body.attachmentEventId.length > 0;
@@ -40,8 +48,7 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: "text or an attachment is required" }, { status: 400 });
   }
 
-  const userId = getDevUserId();
-  const { eventLog, projectionsDb, retrievalDb } = getStores();
+  const { eventLog, projectionsDb, retrievalDb } = getStores(userId);
   const embedder = await getEmbedder();
   const chatRouter = getChatRouter();
   const intentRouter = getIntentRouter();

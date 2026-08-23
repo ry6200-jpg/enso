@@ -20,6 +20,8 @@
     "better-sqlite3": "12.4.1",
     "double-metaphone": "^2.0.1",
     "fastest-levenshtein": "^1.0.16",
+    "firebase": "^12.18.0",
+    "firebase-admin": "^14.3.0",
     "next": "^16.3.1",
     "openai": "^7.5.0",
     "react": "^19.2.8",
