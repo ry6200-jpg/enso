@@ -13,7 +13,7 @@ import { recencyMode } from "../retrieval/recencyMode.js";
 import type { ContentChunkRow, RetrievalDb } from "../retrieval/retrievalDb.js";
 import { assembleContext, DEFAULT_CONTEXT_BUDGETS, type AssembledContext, type ContextBudgets } from "./contextAssembly.js";
 import { decideRetrievalInvocation, findAllMentionedEntityIds, type RetrievalInvocation, type RetrievalMode } from "./retrievalInvocation.js";
-import { buildAttachmentContextBlock, buildEntityDossierBlock, buildLocationContextBlock, buildSelfProfileBlock, type RecentTurnForPrompt, type VoiceMode } from "../persona/systemPrompt.js";
+import { buildAttachmentContextBlock, buildCurrentDateContextBlock, buildEntityDossierBlock, buildLocationContextBlock, buildSelfProfileBlock, type RecentTurnForPrompt, type VoiceMode } from "../persona/systemPrompt.js";
 import { buildEntityDossier, buildSelfProfile, MAX_ENTITY_DOSSIERS_PER_TURN } from "../projections/peopleView.js";
 import type { CurrentLocationContext } from "../location/currentLocation.js";
 import { getSessionTurnsForPrompt } from "./conversationHistory.js";
@@ -74,6 +74,14 @@ export interface ReplySentPayload {
      * the other three.
      */
     locationContext?: { placeName: string | null; tier: "geolocation" | "ip" | "timezone" | null; timezone: string | null } | null;
+    /**
+     * Ambient current-date (breadth-before-depth batch, item 4): the exact
+     * date line the model actually saw this turn, for the same round-trip
+     * debuggability as locationContext above. Unlike location, this is
+     * never permission-gated — null only if the block somehow exceeded its
+     * own tiny budget, which in practice never happens.
+     */
+    currentDateContext?: string | null;
   };
   /**
    * Phase 6 round-trip survival: the router's own decision shaped this
@@ -339,6 +347,14 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     ? buildLocationContextBlock(input.locationContext, (input.budgets ?? DEFAULT_CONTEXT_BUDGETS).maxLocationContextChars)
     : null;
 
+  // Ambient current-date (breadth-before-depth batch, item 4): unlike
+  // location, never permission-gated or async-resolved by the caller —
+  // the server always knows today's date, so this is computed directly
+  // here, present on every single turn. Own budget (maxCurrentDateContextChars),
+  // deliberately NOT passed anywhere near extraction below, same discipline
+  // as locationContextBlock.
+  const dateContextBlock = buildCurrentDateContextBlock(new Date(), (input.budgets ?? DEFAULT_CONTEXT_BUDGETS).maxCurrentDateContextChars);
+
   let invocation: RetrievalInvocation;
   let routerResult: RouterResult | null = null;
   let claims: ReturnType<typeof recentAttributeClaims> = [];
@@ -430,7 +446,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     voiceMode,
     selfProfileResult.block,
     entityDossierBlock,
-    locationContextBlock
+    locationContextBlock,
+    dateContextBlock
   );
 
   const callResult = await deps.chatRouter.reply({ system: assembled.systemPrompt, history: [], latestMessage: effectiveText });
@@ -476,7 +493,10 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       },
       // Reflects what the model actually SAW (locationContextBlock !== null), not merely what the caller
       // supplied — a reading that got dropped for exceeding its own budget was never in the prompt at all.
-      locationContext: locationContextBlock ? input.locationContext! : null
+      locationContext: locationContextBlock ? input.locationContext! : null,
+      // Same "reflects what the model actually saw" discipline as locationContext above — null only if the
+      // budget was somehow exceeded (never permission-gated, so this is non-null on effectively every turn).
+      currentDateContext: dateContextBlock ? dateContextBlock : null
     },
     router: {
       used: routerResult !== null,

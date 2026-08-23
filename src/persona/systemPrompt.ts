@@ -1,6 +1,7 @@
 import {
   ANTI_SYCOPHANCY_INSTRUCTION,
   buildPersonaInstruction,
+  CURRENT_DATE_INSTRUCTION,
   CURRENT_LOCATION_INSTRUCTION,
   FACT_RECEIPT_AND_REPETITION_INSTRUCTION,
   FIGURATIVE_LANGUAGE_INSTRUCTION,
@@ -38,6 +39,7 @@ export function buildPersonaBlock(voiceMode: VoiceMode = "natural"): string {
     FIGURATIVE_LANGUAGE_INSTRUCTION,
     ANTI_SYCOPHANCY_INSTRUCTION,
     MEMORY_HONESTY_INSTRUCTION,
+    CURRENT_DATE_INSTRUCTION,
     CURRENT_LOCATION_INSTRUCTION,
     REGISTER_CALIBRATION_INSTRUCTION
   ].join("\n\n");
@@ -162,6 +164,33 @@ export function buildLocationContextBlock(context: { placeName: string | null; t
 }
 
 /**
+ * Ambient current-date (breadth-before-depth batch, item 4). Live-caught:
+ * asked her mother's age, Enso said 86, then "corrected" to 87, "turns 88
+ * on May 20, 2026" — a date already months in the past relative to the
+ * real conversation. Confirmed by inspection before this was built: the
+ * current date reached the system prompt nowhere at all — the ONLY date/
+ * time computation anywhere in this file was buildLocationContextBlock's
+ * `formatLocalTime`, which only renders when a location reading exists
+ * (permission-gated, can be entirely absent) and only produces a time-of-
+ * day string, never a date the model could reliably do year arithmetic
+ * against.
+ *
+ * Deliberately its own function, its own block, its own budget — never
+ * folded into buildLocationContextBlock — because the two have completely
+ * different availability models: location is permission-gated and can be
+ * genuinely absent for an entire session; the server always knows what
+ * day it is, so this block is present on every single turn regardless of
+ * whether location ever resolves. Same discipline as every other context
+ * block here: pure data formatting, no directive language for the model
+ * to recite back if asked what it was told.
+ */
+export function buildCurrentDateContextBlock(referenceDate: Date, maxChars: number): string | null {
+  const dateLine = new Intl.DateTimeFormat("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" }).format(referenceDate);
+  const block = `=== CURRENT DATE (begin) ===\nToday's date: ${dateLine}\n=== CURRENT DATE (end) ===`;
+  return block.length <= maxChars ? block : null;
+}
+
+/**
  * Part D (R40): renders buildEntityDossier's data (src/projections/
  * peopleView.ts) into a block for every KNOWN entity named directly in
  * this turn — same discipline as buildSelfProfileBlock: plain labeled
@@ -278,9 +307,11 @@ export function buildSystemPrompt(
   voiceMode: VoiceMode = "natural",
   selfProfileBlock: string | null = null,
   entityDossierBlock: string | null = null,
-  locationContextBlock: string | null = null
+  locationContextBlock: string | null = null,
+  dateContextBlock: string | null = null
 ): string {
   const parts = [buildPersonaBlock(voiceMode)];
+  if (dateContextBlock) parts.push(dateContextBlock);
   if (selfProfileBlock) parts.push(selfProfileBlock);
   if (locationContextBlock) parts.push(locationContextBlock);
   if (entityDossierBlock) parts.push(entityDossierBlock);

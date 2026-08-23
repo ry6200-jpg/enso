@@ -554,7 +554,7 @@ describe("sendMessage — ambient current-location (CORE DISTINCTION: never a fa
       recentTurns: [{ role: "user", text: "a".repeat(500) }],
       retrievalOverride: { mode: "recency", query: "hello", n: 0 },
       locationContext: GEO_CONTEXT,
-      budgets: { maxRetrievedChunks: 8, maxRetrievedChars: 6000, maxRecentWindowChars: 10, maxSelfProfileChars: 1000, maxLocationContextChars: 200 }
+      budgets: { maxRetrievedChunks: 8, maxRetrievedChars: 6000, maxRecentWindowChars: 10, maxSelfProfileChars: 1000, maxLocationContextChars: 200, maxCurrentDateContextChars: 100 }
     });
 
     // Recent window got truncated to nothing (budget of 10 vs. 500 chars)...

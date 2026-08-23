@@ -44,6 +44,17 @@ export interface ContextBudgets {
    * ballooning the prompt.
    */
   maxLocationContextChars: number;
+  /**
+   * Ambient current-date (breadth-before-depth batch, item 4): its own
+   * SEPARATE tiny allocation, same reasoning as maxLocationContextChars —
+   * this content is a single fixed-shape line with nothing meaningful to
+   * trim, so a real content bug should show up as the block being OMITTED
+   * (buildCurrentDateContextBlock returns null over budget) rather than a
+   * mangled partial render. Unlike location, this is never permission-
+   * gated or tier-dependent — the server always knows today's date — so
+   * in practice this block is present on every single turn.
+   */
+  maxCurrentDateContextChars: number;
 }
 
 export const DEFAULT_CONTEXT_BUDGETS: ContextBudgets = {
@@ -51,7 +62,8 @@ export const DEFAULT_CONTEXT_BUDGETS: ContextBudgets = {
   maxRetrievedChars: 6000,
   maxRecentWindowChars: 40000,
   maxSelfProfileChars: 1000,
-  maxLocationContextChars: 200
+  maxLocationContextChars: 200,
+  maxCurrentDateContextChars: 100
 };
 
 export interface RetrievalProvenance {
@@ -163,7 +175,8 @@ export function assembleContext(
   voiceMode: VoiceMode = "natural",
   selfProfileBlock: string | null = null,
   entityDossierBlock: string | null = null,
-  locationContextBlock: string | null = null
+  locationContextBlock: string | null = null,
+  dateContextBlock: string | null = null
 ): AssembledContext {
   const { injectedTurns, truncated: recentTruncated } = truncateRecentTurnsToCharBudget(recentTurns, budgets.maxRecentWindowChars);
 
@@ -185,7 +198,7 @@ export function assembleContext(
     injectedChunks.map((c) => ({ id: c.id, text: c.text, occurredAt: c.occurred_at, recordedAt: c.recorded_at }))
   );
   const recentWindowBlock = buildRecentWindowBlock(injectedTurns, recentTruncated);
-  const baseSystemPrompt = buildSystemPrompt(retrievedBlock, recentWindowBlock, attachmentBlock, voiceMode, selfProfileBlock, entityDossierBlock, locationContextBlock);
+  const baseSystemPrompt = buildSystemPrompt(retrievedBlock, recentWindowBlock, attachmentBlock, voiceMode, selfProfileBlock, entityDossierBlock, locationContextBlock, dateContextBlock);
   // EN-071 stage 3: a gate directive, when present, is injected at the END
   // of the system prompt — highest-salience position, named action only.
   const systemPrompt = gateDirective ? `${baseSystemPrompt}\n\n${gateDirective}` : baseSystemPrompt;
