@@ -109,3 +109,51 @@ describe("precedingReplyBlock anchor fix — control: a genuine birthday answer 
     expect(meBirthdate?.value).toContain("1970");
   }, 30000);
 });
+
+/**
+ * Zodiac-gate batch, item 5 investigation: real production dev-data query
+ * (no live call needed for the reproduction itself) found a live
+ * entity_attributes row with attribute="birthdate", value="Richard" —
+ * traced to this exact turn. The entities rule already correctly excluded
+ * "Richard" as a third-party entity (item 10's fix, confirmed still working
+ * in that same production payload — entities: []), but nothing told the
+ * model that same self-reference disqualifies it as an ATTRIBUTE value too.
+ * This is the gap the taxonomySchema.ts fix (a single added GUARD sentence
+ * in the attributes rule) closes. Kept deliberately narrow — earlier,
+ * broader wording attempts (also covering a second, related failure; see
+ * this file's trailing NOTE) destabilized the R37/R38 anchor-fix case
+ * below, so this ships only the one addition confirmed NOT to regress the
+ * rest of this file.
+ */
+describe("attribute value-shape guard — a bare name never becomes a birthdate (real production failure, real API, 3 runs)", () => {
+  it.each([1, 2, 3])("run %i: 'Richard' answering a birthday question extracts NO birthdate for 'me'", async () => {
+    const router = createDefaultRouter({ openai: requireEnv("OPENAI_API_KEY"), gemini: requireEnv("GEMINI_API_KEY") });
+
+    const result = await router.extract({
+      kind: "message",
+      text: "Richard",
+      referenceDate: "2026-08-23",
+      knownPeopleNames: [],
+      precedingReplyText: "Hey, glad you're here. Starting with an easy one: when do you celebrate your birthday?"
+    });
+
+    const meBirthdate = result.taxonomy.attributes.find((a) => a.entityName.toLowerCase() === "me" && a.attribute === "birthdate");
+    expect(meBirthdate).toBeUndefined();
+    expect(result.taxonomy.entities).toEqual([]);
+  }, 30000);
+});
+
+// NOTE: the same production trace also showed a second, related failure —
+// the immediately following turn ("4/24/1970" answering "What kind of
+// work keeps you busy?") was extracted as attribute="occupation",
+// value="4/24/1970". A prompt-wording fix was attempted for this but
+// consistently destabilized the R37/R38 anchor-fix case above (the model
+// started extracting "1983" as a birthdate again, live-confirmed 3/3
+// runs, regardless of exactly how the added guard was worded) — every
+// wording tried either left this occupation case unfixed or broke that
+// already-hard-won fix. Deferred rather than shipped in a
+// known-regressing state; the name-guard above (the confirmed cause of
+// the zodiac-sidebar bug this batch exists to fix) is the one guard that
+// held up cleanly across the whole existing suite. See the batch report
+// for full detail — this is a real, open, reported gap, not a silently
+// dropped one.
