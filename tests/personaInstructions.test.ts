@@ -72,6 +72,13 @@ describe("PERSONA_INSTRUCTION (EN-096: unsolicited advice / lecture mode)", () =
     expect(PERSONA_INSTRUCTION).not.toMatch(/no technical (topics|discussion|help)/i);
     expect(PERSONA_INSTRUCTION).not.toMatch(/refuse (to answer|any) technical/i);
   });
+
+  it("ambient/register/zodiac batch, item 2: names the shared discriminator with THE COACH and carves out a person-centered suggestion from both guards", () => {
+    expect(PERSONA_INSTRUCTION).toMatch(/THE SHARED DISCRIMINATOR/);
+    expect(PERSONA_INSTRUCTION).toMatch(/would this suggestion still make sense if the task or problem disappeared/);
+    expect(PERSONA_INSTRUCTION).toMatch(/Could Alice take you/);
+    expect(PERSONA_INSTRUCTION).toMatch(/never gated by either guard/);
+  });
 });
 
 describe("PERSONA_INSTRUCTION (EN-097: elicitation stance)", () => {
