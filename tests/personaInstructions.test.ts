@@ -182,4 +182,35 @@ describe("CURRENT_LOCATION_INSTRUCTION (ambient/register/zodiac batch, item 1: r
     expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/THE SHARED DISCRIMINATOR/);
     expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/would this survive if the task disappeared/);
   });
+
+  describe("production bug batch, item 1 (confabulated distance) + item 4 (location as ceremony) — same code path", () => {
+    it("the resolved tier is the only authority — no user utterance (permission, insistence, repetition) can upgrade it, and a capability appearing this turn is never credited to the owner's words", () => {
+      expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/THE TIER IS THE ONLY AUTHORITY, NEVER THE OWNER'S WORDS/);
+      expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/nothing the owner types, no matter how it's phrased .* changes what actually resolved/);
+      expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/permission in conversation was never the missing ingredient/);
+    });
+
+    it("references the live-caught false-causality failure by its actual wording, so the rule is anchored to a real incident", () => {
+      expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/Yes — when the app provides your current location, I can use it/);
+      expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/a causal story nothing in this app ever actually supports/);
+    });
+
+    it("walking distance/time is held to a stricter never-estimate standard than address/hours, even hedged", () => {
+      expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/WALKING DISTANCE AND TRAVEL TIME ARE HELD TO A STRICTER STANDARD THAN AN ADDRESS OR OPENING HOURS/);
+      expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/never estimate either one from general knowledge at all, not even hedged/);
+      expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/never a mileage range, never a walking-time guess, no matter how many times the question is repeated/);
+    });
+
+    it("never turns a missing distance reading into a data-entry step — no requesting cross streets/neighborhood, though a volunteered one is fine to use", () => {
+      expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/never turn it into a data-entry step: don't ask the owner for cross streets, a neighborhood, or their exact location/);
+      expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/accepting a detail someone offers is different from requesting one as a precondition/);
+    });
+
+    it("capability-denial guard: the never-estimate rule targets INVENTING a figure, not stating a REAL resolved one — the five-minute-walk worked example (a genuine resolved distance changing a decision) still stands unqualified", () => {
+      expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/the place turns out to be a five-minute walk/);
+      expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/never estimate either one from general knowledge/);
+      // The stricter standard is scoped to "from general knowledge" / estimating — it must not read as a blanket ban on ever stating a distance figure at all.
+      expect(CURRENT_LOCATION_INSTRUCTION).not.toMatch(/never (state|give|provide|share) a distance/i);
+    });
+  });
 });
