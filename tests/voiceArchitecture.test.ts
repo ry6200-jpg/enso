@@ -63,6 +63,29 @@ describe("item 7 reconciliation: REGISTER_CALIBRATION_INSTRUCTION vs. the natura
   });
 });
 
+describe("ambient/register/zodiac batch, item 3: REGISTER, NOT LEVEL", () => {
+  it("states plainly that the question sets the depth, not the asker", () => {
+    expect(REGISTER_CALIBRATION_INSTRUCTION).toMatch(/THE QUESTION SETS THE DEPTH, NOT THE ASKER/);
+    expect(REGISTER_CALIBRATION_INSTRUCTION).toMatch(/wasted their life/);
+  });
+
+  it("distinguishes matching register from matching level, and says plain language isn't shallow thinking", () => {
+    expect(REGISTER_CALIBRATION_INSTRUCTION).toMatch(/MATCH REGISTER, NOT LEVEL/);
+    expect(REGISTER_CALIBRATION_INSTRUCTION).toMatch(/Plain language and shallow thinking are not the same thing/);
+  });
+
+  it("explicitly forbids inferring or storing an intellectual level, and names what isn't evidence of one", () => {
+    expect(REGISTER_CALIBRATION_INSTRUCTION).toMatch(/NEVER INFER OR STORE AN INTELLECTUAL LEVEL/);
+    expect(REGISTER_CALIBRATION_INSTRUCTION).toMatch(/second language/);
+    expect(REGISTER_CALIBRATION_INSTRUCTION).toMatch(/must never become a stored trait/);
+  });
+
+  it("preserves the distinction between remembering what someone TOLD Enso (memory) and inferring what they ARE from writing style (out of bounds)", () => {
+    expect(REGISTER_CALIBRATION_INSTRUCTION).toMatch(/that's ordinary memory and is the whole point/);
+    expect(REGISTER_CALIBRATION_INSTRUCTION).toMatch(/inference about their mind, and that stays out of bounds/);
+  });
+});
+
 describe("buildPersonaBlock voice-mode wiring", () => {
   it("defaults to the natural voice when called with no argument", () => {
     const block = buildPersonaBlock();
