@@ -195,6 +195,11 @@ export default function Page() {
     if (!("geolocation" in navigator)) return;
     navigator.geolocation.getCurrentPosition(
       (position) => {
+        // The success callback firing at all means permission is granted,
+        // regardless of whether reverse-geocoding itself later succeeds —
+        // clears a stale "blocked" state from an earlier denial that was
+        // since reversed in the browser's own site settings.
+        setLocationBlocked(false);
         const { latitude, longitude } = position.coords; // read once, never stored — discarded the instant this callback returns
         fetch("/api/location", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ latitude, longitude }) })
           .then((res) => res.json())
@@ -296,15 +301,32 @@ export default function Page() {
         <span className="text-4xl font-bold tracking-wide" style={{ color: "var(--enso-ink)" }}>
           Enso
         </span>
-        {/* "Provide a way to grant it later" — Enso itself never asks; this is the ONLY other trigger besides the one-time first-send attempt. */}
-        <button
-          type="button"
-          onClick={attemptGeolocation}
-          title={locationBlocked ? "Location access is blocked — check your browser's site settings to allow it" : locationContext.placeName ? `Location: ${locationContext.placeName}` : "Share your current location"}
-          className="ml-auto text-sm text-stone-400 hover:text-stone-600"
-        >
-          📍{locationContext.placeName ? ` ${locationContext.placeName}` : ""}
-        </button>
+        {/*
+          "Provide a way to grant it later," scoped precisely: visible ONLY
+          when permission was explicitly denied — never on a fresh/prompt
+          state (nothing to "grant later" yet — the one-time first-send
+          attempt already covers that), and never once granted (a
+          permanent indicator would be a standing solicitation, which
+          directly contradicts "denial is permanent and silent"). This is
+          the only state locationBlocked can accurately represent: it's
+          set true only from a real PERMISSION_DENIED, and reset false the
+          moment any later attempt actually succeeds (see
+          attemptGeolocation) — so it never lies in either direction.
+          Clicking can't force the native prompt back open once truly
+          denied (no web API does that) — the tooltip is honest about that
+          and points at the real fix instead of promising one it can't
+          deliver.
+        */}
+        {locationBlocked && (
+          <button
+            type="button"
+            onClick={attemptGeolocation}
+            title="Location access is blocked — check your browser's site settings to allow it"
+            className="ml-auto text-sm text-stone-400 hover:text-stone-600"
+          >
+            📍
+          </button>
+        )}
       </header>
 
       <div className="flex-1 flex min-h-0">

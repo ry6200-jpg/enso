@@ -127,4 +127,21 @@ describe("CURRENT_LOCATION_INSTRUCTION (ambient current-location)", () => {
   it("references the same capability-denial regression this project has already been burned by", () => {
     expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/capability-denial trap this project has been burned by before/);
   });
+
+  it("never invents a REASON for an absent block (live-caught: \"I can't access your device's GPS signal\", which nothing in this prompt ever said)", () => {
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/This extends to WHY it's absent, too/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/I can't access your device's GPS signal/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/never a confident guess at the mechanism behind the gap/);
+  });
+
+  it("HONESTY ABOUT THE SOURCE: never manufactures unverifiable specifics (address/phone/hours) for a location-adjacent answer from general knowledge", () => {
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/HONESTY ABOUT THE SOURCE/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/never manufacture a specific street address, phone number, or exact opening time you have no way to verify/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/this app has no real place-lookup, maps, or directions capability/);
+  });
+
+  it("the honesty addition does not become a refusal — a rough, hedged answer is still a real, still-short answer", () => {
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/The fix is not to withhold the answer/);
+    expect(CURRENT_LOCATION_INSTRUCTION).not.toMatch(/never answer|refuse to answer|decline to answer|won't answer|don't answer/i);
+  });
 });
