@@ -1,0 +1,75 @@
+# Cloud Build config for Enso's Cloud Run deployment (deployment batch,
+# Stage 3). Invoked via:
+#
+#   gcloud builds submit --config=cloudbuild.yaml \
+#     --substitutions=_NEXT_PUBLIC_FIREBASE_API_KEY=...,_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=...,_NEXT_PUBLIC_FIREBASE_PROJECT_ID=... \
+#     --service-account=projects/mirror-505915/serviceAccounts/enso-deploy@mirror-505915.iam.gserviceaccount.com
+#
+# Builds natively on Cloud Build's own amd64 workers — deliberately never a
+# locally-built-then-pushed image. This project's dev environment is
+# arm64; Cloud Run targets amd64, and local QEMU cross-emulation could not
+# be bootstrapped there (see the Stage 1 report in the deployment batch) —
+# Cloud Build sidesteps that gap entirely rather than working around it.
+#
+# NEXT_PUBLIC_FIREBASE_* are public-by-design values that Next.js inlines
+# into the client bundle at BUILD time (see Dockerfile's ARGs) — they
+# arrive here as substitutions, not as Cloud Run runtime env vars, which
+# would do nothing: the client bundle is already finished by the time the
+# container starts.
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    # BuildKit is required — the Dockerfile's defensive sqlite-vec copy
+    # uses `RUN --mount=type=bind`, a BuildKit-only feature. Cloud Build's
+    # docker builder image does NOT default to BuildKit the way a local
+    # `docker build` does; without this the build fails at that exact step
+    # (confirmed live — this is not a precaution, it broke without it).
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - build
+      - --build-arg=NEXT_PUBLIC_FIREBASE_API_KEY=${_NEXT_PUBLIC_FIREBASE_API_KEY}
+      - --build-arg=NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=${_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN}
+      - --build-arg=NEXT_PUBLIC_FIREBASE_PROJECT_ID=${_NEXT_PUBLIC_FIREBASE_PROJECT_ID}
+      - --tag=us-west1-docker.pkg.dev/$PROJECT_ID/enso/enso:$BUILD_ID
+      - .
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - us-west1-docker.pkg.dev/$PROJECT_ID/enso/enso:$BUILD_ID
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - enso
+      - --image=us-west1-docker.pkg.dev/$PROJECT_ID/enso/enso:$BUILD_ID
+      - --region=us-west1
+      - --service-account=enso-run@$PROJECT_ID.iam.gserviceaccount.com
+      - --allow-unauthenticated
+      - --port=8080
+      # REQUIRED, not a default — the belt to the checkout/checkin lock's
+      # braces (src/storage/userSession.ts). GcsStorageBackend's per-user
+      # lock uses a real generation-precondition compare-and-swap, so it
+      # holds correctly across instances in principle, but that guarantee
+      # has only ever been exercised against a single instance (see
+      # enso-rebuild-requirements.md Section 12 item 10). Do not raise this
+      # without first getting real multi-instance verification of the lock
+      # under concurrency — not just a re-read of the CAS logic.
+      - --max-instances=1
+      - --min-instances=0
+      # Comma-safe delimiter (ALLOWED_EMAILS' own value contains commas,
+      # which would otherwise collide with --set-env-vars' default
+      # comma-separated-pairs syntax) — see `gcloud topic escaping`.
+      - --set-env-vars=^;^ALLOWED_EMAILS=ry6200@gmail.com,ry3223@gmail.com;GCS_BUCKET_NAME=mirror-505915-enso-user-data
+      - --set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,GOOGLE_MAPS_API_KEY=GOOGLE_MAPS_API_KEY:latest,FIREBASE_SERVICE_ACCOUNT_JSON=FIREBASE_SERVICE_ACCOUNT_JSON:latest
+
+images:
+  - us-west1-docker.pkg.dev/$PROJECT_ID/enso/enso:$BUILD_ID
+
+options:
+  logging: CLOUD_LOGGING_ONLY

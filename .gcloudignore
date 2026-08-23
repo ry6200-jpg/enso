@@ -1,0 +1,14 @@
+.git
+node_modules
+.next
+dist
+.cache
+dev-data
+.local-instance-disk
+.env
+.env.*
+*.log
+
+tests
+.claude
+.vscode
