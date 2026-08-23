@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getChineseZodiacSign, getCurrentChineseYearSign, getWesternZodiacSign, zodiacIconUrl } from "../../../src/zodiac/zodiac.js";
 import { getZodiacSidebarReflection } from "../../../src/zodiac/zodiacContent.js";
 import { getPrimaryUserBirthdate } from "../../../src/projections/peopleView.js";
-import { getChatRouter, getDailyContentCache, runUserSession } from "../../../lib/serverPipeline.js";
+import { getChatRouter, getDailyContentCache, runReadOnlyUserSession } from "../../../lib/serverPipeline.js";
 import { authErrorResponse, requireUserId } from "../../../lib/requireUser.js";
 import type { EventLog } from "../../../src/events/eventLog.js";
 
@@ -29,7 +29,7 @@ export async function GET(request: Request): Promise<Response> {
   // Only these reads need the per-user checkout/lock — reflection
   // generation below is an LLM call unrelated to this user's own files, so
   // it runs outside the checkout window rather than holding the lock.
-  const prep = await runUserSession(userId, async ({ eventLog, projectionsDb }) => {
+  const prep = await runReadOnlyUserSession(userId, async ({ eventLog, projectionsDb }) => {
     const birthdate = getPrimaryUserBirthdate(projectionsDb, userId);
     if (!birthdate) return null;
     const chineseSign = getChineseZodiacSign(birthdate);

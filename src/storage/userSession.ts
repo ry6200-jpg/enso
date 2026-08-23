@@ -99,3 +99,56 @@ export async function withUserSession<T>(
     await backend.releaseLock(uid, handle);
   }
 }
+
+/**
+ * Refresh-blank-chat batch: a read-only sibling of withUserSession, for
+ * callers whose `work` never mutates anything. Same acquire/download/
+ * open/work/close sequence, but skips step 6 (upload) entirely and
+ * releases the lock as soon as the read finishes, instead of holding it
+ * through a checkin step that has nothing to check in.
+ *
+ * Why this exists, not just a "use the fast path" optimization: live
+ * evidence (real Cloud Run logs) showed GET /api/history and
+ * GET /api/zodiac-sidebar's birthdate read colliding at the SAME
+ * per-user lock at the exact same millisecond — both fire on the same
+ * "just signed in" page load, and both were paying for a full
+ * checkout-AND-checkin cycle to do nothing but read. Shortening the
+ * read path to checkout-then-release (no checkin) shrinks that collision
+ * window directly, rather than papering over the symptom with a retry.
+ *
+ * DANGER, read before reusing this for a new route: `work` MUST NOT
+ * write anything through the stores it's given. Any write survives only
+ * on this instance's local ephemeral disk and is never uploaded — not an
+ * error, not a warning, a SILENT loss of exactly the kind EN-061 forbids
+ * elsewhere in this project. If a route's `work` needs to write, even
+ * conditionally, use withUserSession instead.
+ */
+export async function withReadOnlyUserSession<T>(
+  backend: UserStorageBackend,
+  localRoot: string,
+  uid: string,
+  lockTtlMs: number,
+  work: (stores: UserSessionStores) => Promise<T>
+): Promise<T> {
+  const handle = await backend.acquireLock(uid, lockTtlMs);
+  try {
+    const paths = getUserDataPaths(localRoot, uid);
+    await backend.download(uid, paths.dir);
+    fs.mkdirSync(paths.blobsDir, { recursive: true });
+
+    const eventLog = new EventLog(paths.eventsDb);
+    const projectionsDb = new ProjectionsDb(paths.projectionsDb);
+    const retrievalDb = new RetrievalDb(paths.retrievalDb);
+    const blobStore = new BlobStore(paths.blobsDir);
+
+    try {
+      return await work({ eventLog, projectionsDb, retrievalDb, blobStore });
+    } finally {
+      eventLog.close();
+      projectionsDb.close();
+      retrievalDb.close();
+    }
+  } finally {
+    await backend.releaseLock(uid, handle);
+  }
+}

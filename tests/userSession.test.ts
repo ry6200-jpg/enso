@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withUserSession } from "../src/storage/userSession.js";
+import { withReadOnlyUserSession, withUserSession } from "../src/storage/userSession.js";
 import { EventLog } from "../src/events/eventLog.js";
 import { LocalStorageBackend } from "../src/storage/localStorageBackend.js";
 import { LockAcquisitionError } from "../src/storage/userStorageBackend.js";
@@ -251,5 +251,83 @@ describe("withUserSession — the crash-between-checkout-and-checkin failure mod
     });
 
     crashedEventLog.close();
+  });
+});
+
+describe("withReadOnlyUserSession (refresh-blank-chat batch)", () => {
+  it("reads existing data correctly", async () => {
+    const remoteRoot = freshRoot("remote");
+    const backend = new LocalStorageBackend(remoteRoot);
+    const uid = "user-a";
+
+    await withUserSession(backend, freshRoot("local-write"), uid, 30_000, async ({ eventLog }) => {
+      eventLog.append({ type: "message_sent", actor: "user", payload: { text: "real history", attachmentOnly: false }, userId: uid });
+    });
+
+    await withReadOnlyUserSession(backend, freshRoot("local-read"), uid, 30_000, async ({ eventLog }) => {
+      expect(eventLog.listForUser(uid).map((e) => (e.payload as { text: string }).text)).toEqual(["real history"]);
+    });
+  });
+
+  it("never uploads a write made inside `work` — the whole point of the read-only path", async () => {
+    const remoteRoot = freshRoot("remote");
+    const backend = new LocalStorageBackend(remoteRoot);
+    const uid = "user-a";
+
+    await withReadOnlyUserSession(backend, freshRoot("local-sneaky-write"), uid, 30_000, async ({ eventLog }) => {
+      // A caller that violates the contract (writes inside a read-only
+      // session) — this must never reach remote storage.
+      eventLog.append({ type: "message_sent", actor: "user", payload: { text: "should never be uploaded", attachmentOnly: false }, userId: uid });
+    });
+
+    await withUserSession(backend, freshRoot("local-verify"), uid, 30_000, async ({ eventLog }) => {
+      expect(eventLog.listForUser(uid)).toEqual([]);
+    });
+  });
+
+  it("releases the lock immediately after the read, not held through a checkin it never does", async () => {
+    const remoteRoot = freshRoot("remote");
+    const backend = new LocalStorageBackend(remoteRoot);
+    const uid = "user-a";
+
+    await withReadOnlyUserSession(backend, freshRoot("local-read"), uid, 30_000, async () => {});
+
+    // If the lock were still held, this would throw LockAcquisitionError.
+    const handle = await backend.acquireLock(uid, 30_000);
+    await backend.releaseLock(uid, handle);
+  });
+
+  it("still fails loud if another checkout currently holds the lock — never queues", async () => {
+    const remoteRoot = freshRoot("remote");
+    const backend = new LocalStorageBackend(remoteRoot);
+    const uid = "user-a";
+
+    let releaseFirst!: () => void;
+    const holdUntil = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const first = withUserSession(backend, freshRoot("local-1"), uid, 30_000, async () => {
+      await holdUntil;
+    });
+    await sleep(20);
+
+    await expect(withReadOnlyUserSession(backend, freshRoot("local-2"), uid, 30_000, async () => {})).rejects.toBeInstanceOf(LockAcquisitionError);
+
+    releaseFirst();
+    await first;
+  });
+
+  it("a real write session started right after a read-only one sees only what the write session itself commits", async () => {
+    const remoteRoot = freshRoot("remote");
+    const backend = new LocalStorageBackend(remoteRoot);
+    const uid = "user-a";
+
+    await withReadOnlyUserSession(backend, freshRoot("local-read"), uid, 30_000, async () => {});
+    await withUserSession(backend, freshRoot("local-write"), uid, 30_000, async ({ eventLog }) => {
+      eventLog.append({ type: "message_sent", actor: "user", payload: { text: "written after a read", attachmentOnly: false }, userId: uid });
+    });
+    await withReadOnlyUserSession(backend, freshRoot("local-read-2"), uid, 30_000, async ({ eventLog }) => {
+      expect(eventLog.listForUser(uid).map((e) => (e.payload as { text: string }).text)).toEqual(["written after a read"]);
+    });
   });
 });

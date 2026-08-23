@@ -227,6 +227,23 @@ export default function Page() {
     });
   }, []);
 
+  // Refresh-blank-chat batch: root cause was this effect depending on the
+  // whole `user` OBJECT — Firebase's onIdTokenChanged reliably fires more
+  // than once during page load (this project's own authDomain requires a
+  // cross-origin iframe handshake for auth-state sync, and that can
+  // deliver more than one callback, each with a NEW User object reference
+  // for the same signed-in account — see watchAuthState in
+  // firebaseClient.ts). Each firing re-ran this effect: the cleanup
+  // discarded whatever the FIRST fetch returned (even a real, successful
+  // response), while a SECOND concurrent fetch for the same uid raced the
+  // first at the per-user checkout lock — confirmed live in production
+  // logs as a real LockAcquisitionError on this exact route. Depending on
+  // `user?.uid` (stable across those re-firings for the same account)
+  // instead of `user` (a new object each time) means this now only really
+  // re-runs on an actual sign-in/sign-out/account-change, eliminating the
+  // self-collision at its source rather than papering over the race with
+  // a retry.
+  //
   // History only ever fetches once a real signed-in user is present — an
   // unauthenticated request would just 401 anyway, and this is also where
   // a non-allowlisted account gets caught: the server enforces the
@@ -248,17 +265,32 @@ export default function Page() {
           }
           return null;
         }
+        if (!r.ok) {
+          // Fail loud, per the same discipline every other route on this
+          // page already follows (see sendMessage's !res.ok branch) — a
+          // blank chat with nothing in the console is its own bug. This
+          // was previously indistinguishable from "genuinely no history
+          // yet," which is exactly how the LockAcquisitionError race above
+          // went unnoticed in the browser for as long as it did.
+          const body = await r.json().catch(() => ({}));
+          // eslint-disable-next-line no-console
+          console.error(`GET /api/history failed (${r.status}): ${body.error ?? "no error message in response body"}`);
+          return null;
+        }
         return r.json();
       })
       .then((json: { messages: ChatMessage[] } | null) => {
         if (cancelled || !json) return;
         setMessages(json.messages);
       })
-      .catch(() => {});
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error("GET /api/history threw before a response was received:", err);
+      });
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [user?.uid]);
 
   // Timezone alone (Tier 3): zero permission cost, always collected — safe
   // to grab on mount, unlike geolocation below which is gated behind an

@@ -65,7 +65,7 @@ import { createDocumentRouter, createImageRouter } from "../src/providers/attach
 import type { DocumentContentAdapter, ImageContentAdapter } from "../src/providers/attachmentTypes.js";
 import { DailyContentCache } from "../src/zodiac/dailyContentCache.js";
 import { getUserDataPaths } from "../src/storage/userDataPaths.js";
-import { withUserSession, type UserSessionStores } from "../src/storage/userSession.js";
+import { withReadOnlyUserSession, withUserSession, type UserSessionStores } from "../src/storage/userSession.js";
 import { LocalStorageBackend } from "../src/storage/localStorageBackend.js";
 import { GcsStorageBackend } from "../src/storage/gcsStorageBackend.js";
 import type { UserStorageBackend } from "../src/storage/userStorageBackend.js";
@@ -316,6 +316,23 @@ export function runUserSession<T>(uid: string, work: (stores: UserSessionStores)
   ensureDataPathsWritable();
   if (!isCloudMode()) ensureDevDataDir();
   return withUserSession(getStorageBackend(), LOCAL_INSTANCE_DIR, uid, USER_SESSION_LOCK_TTL_MS, work);
+}
+
+/**
+ * Refresh-blank-chat batch: the read-only sibling of runUserSession, for
+ * routes whose `work` never writes anything — see
+ * src/storage/userSession.ts's withReadOnlyUserSession for the real
+ * mechanism (skips checkin, releases the lock as soon as the read
+ * finishes) and the DANGER note on misusing it for something that writes.
+ * Introduced specifically because GET /api/history and
+ * GET /api/zodiac-sidebar's birthdate read were observed colliding at the
+ * per-user lock in real production logs — both fire on the same page
+ * load, and neither had anything to check in.
+ */
+export function runReadOnlyUserSession<T>(uid: string, work: (stores: UserSessionStores) => Promise<T>): Promise<T> {
+  ensureDataPathsWritable();
+  if (!isCloudMode()) ensureDevDataDir();
+  return withReadOnlyUserSession(getStorageBackend(), LOCAL_INSTANCE_DIR, uid, USER_SESSION_LOCK_TTL_MS, work);
 }
 
 export function getEmbedder(): Promise<Embedder> {
