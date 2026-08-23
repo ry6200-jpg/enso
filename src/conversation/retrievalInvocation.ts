@@ -28,6 +28,22 @@ export interface RetrievalInvocationOptions {
 const RECENCY_PHRASES = /\b(read (me |back )?(my|our) (messages|conversation)|what (have|did) we (talk|talked) about|catch me up|recap)\b/i;
 const DEFAULT_RECENCY_N = 10;
 
+/** Shared by both mention-finding functions below — never re-derived, so they can't disagree on what counts as a "word" to check. */
+const MENTIONABLE_WORD_PATTERN = /\b[A-Za-z][A-Za-z'-]*\b/g;
+
+function mentionableWords(message: string): string[] {
+  const words = message.match(MENTIONABLE_WORD_PATTERN) ?? [];
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const word of words) {
+    const key = word.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(word);
+  }
+  return deduped;
+}
+
 /**
  * Finds an entity whose exact alias (a real name, not a role/kinship term —
  * see entity_aliases, which only ever stores names extraction actually
@@ -39,16 +55,33 @@ const DEFAULT_RECENCY_N = 10;
  * entity-resolution attempt.
  */
 function findMentionedEntityId(message: string, projectionsDb: ProjectionsDb, userId: string): string | undefined {
-  const words = message.match(/\b[A-Za-z][A-Za-z'-]*\b/g) ?? [];
-  const seen = new Set<string>();
-  for (const word of words) {
-    const key = word.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
+  for (const word of mentionableWords(message)) {
     const entityId = projectionsDb.findEntityIdByExactAlias(userId, word);
     if (entityId) return entityId;
   }
   return undefined;
+}
+
+/**
+ * Part D: the SAME name-resolution primitive as findMentionedEntityId above
+ * (findEntityIdByExactAlias — never a second name matcher), but collecting
+ * every distinct entity mentioned instead of stopping at the first, for the
+ * entity-dossier feature (chatPipeline.ts) to inject a structured record
+ * for each one directly, no search or ranking involved. Capped at
+ * `maxEntities` — a message naming many people at once still only dossiers
+ * the first few encountered, left-to-right.
+ */
+export function findAllMentionedEntityIds(message: string, projectionsDb: ProjectionsDb, userId: string, maxEntities: number): string[] {
+  const found: string[] = [];
+  const seenEntityIds = new Set<string>();
+  for (const word of mentionableWords(message)) {
+    if (found.length >= maxEntities) break;
+    const entityId = projectionsDb.findEntityIdByExactAlias(userId, word);
+    if (!entityId || seenEntityIds.has(entityId)) continue;
+    seenEntityIds.add(entityId);
+    found.push(entityId);
+  }
+  return found;
 }
 
 /**

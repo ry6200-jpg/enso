@@ -414,3 +414,55 @@ describe("sendMessage — recentTurns omitted: the event log is the source of tr
     expect(receivedSystem).toContain("explicitly overridden turn");
   });
 });
+
+describe("sendMessage — entity dossier reaches the prompt on direct name match (Part D, R40)", () => {
+  it("a known entity named in the current message gets its structured record injected directly", async () => {
+    const elenaId = newId();
+    projectionsDb.insertEntity({ id: elenaId, user_id: PRIMARY_USER_ID, name: "Elena", confirmed: 1, source_event_ids: "[]", extractor_version: "v1", pending_disambiguation: null, created_at: new Date().toISOString() });
+    projectionsDb.insertEntityAlias({ id: newId(), user_id: PRIMARY_USER_ID, entity_id: elenaId, alias: "Elena", source_event_ids: "[]", created_at: new Date().toISOString() });
+    projectionsDb.insertEntityAttribute({ id: newId(), user_id: PRIMARY_USER_ID, entity_id: elenaId, attribute: "location", value: "Seattle", source_event_ids: "[]", created_at: new Date().toISOString() });
+
+    let receivedSystem = "";
+    deps.chatRouter = {
+      async reply(request) {
+        receivedSystem = request.system;
+        return CANNED_REPLY;
+      }
+    };
+
+    const result = await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "I saw Elena yesterday.",
+      recentTurns: [],
+      retrievalOverride: { mode: "recency", query: "Elena", n: 0 }
+    });
+
+    expect(receivedSystem).toContain("=== NAMED PEOPLE (begin) ===");
+    expect(receivedSystem).toContain("Elena");
+    expect(receivedSystem).toContain("Location: Seattle");
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.contextProvenance.entityDossier).toEqual({ mentionedEntityIds: [elenaId], includedEntityCount: 1 });
+  });
+
+  it("no known entity named: no NAMED PEOPLE block, empty provenance", async () => {
+    let receivedSystem = "";
+    deps.chatRouter = {
+      async reply(request) {
+        receivedSystem = request.system;
+        return CANNED_REPLY;
+      }
+    };
+
+    const result = await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "just an ordinary day",
+      recentTurns: [],
+      retrievalOverride: { mode: "recency", query: "day", n: 0 }
+    });
+
+    // Not a bare "NAMED PEOPLE" substring check — MEMORY_HONESTY_INSTRUCTION (persona block, always present) now references the block by name generically.
+    expect(receivedSystem).not.toContain("=== NAMED PEOPLE (begin)");
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.contextProvenance.entityDossier).toEqual({ mentionedEntityIds: [], includedEntityCount: 0 });
+  });
+});

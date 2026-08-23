@@ -10,7 +10,7 @@ import {
   REGISTER_CALIBRATION_INSTRUCTION,
   ZEN_MODE_INSTRUCTION
 } from "./instructions.js";
-import type { SelfProfile } from "../projections/peopleView.js";
+import type { EntityDossier, SelfProfile } from "../projections/peopleView.js";
 
 export type VoiceMode = "natural" | "zen";
 
@@ -110,6 +110,33 @@ export function buildSelfProfileBlock(profile: SelfProfile, maxChars: number): S
   return { block, attributeCount: attributeLines.length, bondCount, truncated };
 }
 
+/**
+ * Part D (R40): renders buildEntityDossier's data (src/projections/
+ * peopleView.ts) into a block for every KNOWN entity named directly in
+ * this turn — same discipline as buildSelfProfileBlock: plain labeled
+ * data, no directive language for Enso to recite back if asked what it
+ * was told (THE ANTI-ROBOT RULE). `dossiers` is already capped by the
+ * caller (MAX_ENTITY_DOSSIERS_PER_TURN, MAX_RELATIONSHIPS_PER_ENTITY_
+ * DOSSIER — peopleView.ts) before this function ever sees it; this is
+ * pure formatting, same as buildRetrievedMemoryBlock/buildRecentWindowBlock.
+ */
+export function buildEntityDossierBlock(dossiers: EntityDossier[]): string | null {
+  const nonEmpty = dossiers.filter((d) => d.attributes.length > 0 || d.relationshipsToOwner.length > 0);
+  if (nonEmpty.length === 0) return null;
+
+  const lines = nonEmpty.map((d) => {
+    const parts: string[] = [];
+    for (const a of d.attributes) {
+      const label = SELF_PROFILE_ATTRIBUTE_LABEL[a.attribute];
+      parts.push(a.conflictingValues.length === 0 ? `${label}: ${a.value}` : `${label}: ${a.value} (a later, unresolved record also states ${a.conflictingValues.map((v) => `"${v}"`).join(", ")})`);
+    }
+    if (d.relationshipsToOwner.length > 0) parts.push(`Relationship to owner: ${d.relationshipsToOwner.join(", ")}`);
+    return `${d.name} — ${parts.join("; ")}`;
+  });
+
+  return `=== NAMED PEOPLE (begin) ===\n${lines.join("\n")}\n=== NAMED PEOPLE (end) ===`;
+}
+
 export interface RetrievedChunkForPrompt {
   id: string;
   text: string;
@@ -191,10 +218,12 @@ export function buildSystemPrompt(
   recentWindowBlock: string,
   attachmentBlock: string | null = null,
   voiceMode: VoiceMode = "natural",
-  selfProfileBlock: string | null = null
+  selfProfileBlock: string | null = null,
+  entityDossierBlock: string | null = null
 ): string {
   const parts = [buildPersonaBlock(voiceMode)];
   if (selfProfileBlock) parts.push(selfProfileBlock);
+  if (entityDossierBlock) parts.push(entityDossierBlock);
   parts.push(retrievedBlock);
   if (attachmentBlock) parts.push(attachmentBlock);
   parts.push(recentWindowBlock);

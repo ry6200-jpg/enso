@@ -12,9 +12,9 @@ import { hybridSearch } from "../retrieval/hybridSearch.js";
 import { recencyMode } from "../retrieval/recencyMode.js";
 import type { ContentChunkRow, RetrievalDb } from "../retrieval/retrievalDb.js";
 import { assembleContext, DEFAULT_CONTEXT_BUDGETS, type AssembledContext, type ContextBudgets } from "./contextAssembly.js";
-import { decideRetrievalInvocation, type RetrievalInvocation, type RetrievalMode } from "./retrievalInvocation.js";
-import { buildAttachmentContextBlock, buildSelfProfileBlock, type RecentTurnForPrompt, type VoiceMode } from "../persona/systemPrompt.js";
-import { buildSelfProfile } from "../projections/peopleView.js";
+import { decideRetrievalInvocation, findAllMentionedEntityIds, type RetrievalInvocation, type RetrievalMode } from "./retrievalInvocation.js";
+import { buildAttachmentContextBlock, buildEntityDossierBlock, buildSelfProfileBlock, type RecentTurnForPrompt, type VoiceMode } from "../persona/systemPrompt.js";
+import { buildEntityDossier, buildSelfProfile, MAX_ENTITY_DOSSIERS_PER_TURN } from "../projections/peopleView.js";
 import { getSessionTurnsForPrompt } from "./conversationHistory.js";
 import { buildConnectDotDirective, buildCuriosityAskDirective, findCuriosityAskCandidates, isCuriosityTurnEligible, verifyCuriosityAskExecuted } from "./circleBack.js";
 import type { CuriosityAskCandidate } from "./router/routerTypes.js";
@@ -56,6 +56,13 @@ export interface ReplySentPayload {
      * forward.
      */
     selfProfile?: { included: boolean; attributeCount: number; bondCount: number; truncated: boolean };
+    /**
+     * Part D (R40): the entity-dossier block is a FOURTH context-shaping
+     * input — which known entities got a direct-match dossier this turn,
+     * for the same round-trip reason as selfProfile above. Optional for
+     * the same pre-existing-events reason.
+     */
+    entityDossier?: { mentionedEntityIds: string[]; includedEntityCount: number };
   };
   /**
    * Phase 6 round-trip survival: the router's own decision shaped this
@@ -286,6 +293,14 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   const selfProfile = buildSelfProfile(deps.projectionsDb, input.userId);
   const selfProfileResult = buildSelfProfileBlock(selfProfile, (input.budgets ?? DEFAULT_CONTEXT_BUDGETS).maxSelfProfileChars);
 
+  // Part D (R40): direct name match only — no search, no ranking, reusing
+  // the same findEntityIdByExactAlias primitive entity-mode retrieval
+  // already uses. Deterministic and code-computed, same as the self-
+  // profile block above; never a router decision.
+  const mentionedEntityIds = findAllMentionedEntityIds(effectiveText, deps.projectionsDb, input.userId, MAX_ENTITY_DOSSIERS_PER_TURN);
+  const entityDossiers = mentionedEntityIds.map((id) => buildEntityDossier(deps.projectionsDb, input.userId, id)).filter((d): d is NonNullable<typeof d> => d !== null);
+  const entityDossierBlock = buildEntityDossierBlock(entityDossiers);
+
   let invocation: RetrievalInvocation;
   let routerResult: RouterResult | null = null;
   let claims: ReturnType<typeof recentAttributeClaims> = [];
@@ -375,7 +390,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     gateDirective,
     attachmentBlock,
     voiceMode,
-    selfProfileResult.block
+    selfProfileResult.block,
+    entityDossierBlock
   );
 
   const callResult = await deps.chatRouter.reply({ system: assembled.systemPrompt, history: [], latestMessage: effectiveText });
@@ -414,6 +430,10 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
         attributeCount: selfProfileResult.attributeCount,
         bondCount: selfProfileResult.bondCount,
         truncated: selfProfileResult.truncated
+      },
+      entityDossier: {
+        mentionedEntityIds,
+        includedEntityCount: entityDossiers.length
       }
     },
     router: {

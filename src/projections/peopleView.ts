@@ -97,6 +97,23 @@ function socialBondRelationshipLabel(type: string, ownerIsFromSide: boolean): st
 }
 
 /**
+ * Shared by buildSelfProfile and Part D's buildEntityDossier: resolves an
+ * arbitrary entity's birthdate/location/occupation through Part A's
+ * shared resolver (resolveEntityAttribute) — same conflict handling for
+ * self or third party, since R37's mutability rule (a birthdate can't
+ * legitimately change for anyone) was never self-specific to begin with.
+ */
+function resolveEntityProfileAttributes(projections: ProjectionsDb, userId: string, entityId: string): SelfProfileAttribute[] {
+  const attributes: SelfProfileAttribute[] = [];
+  for (const attribute of SELF_PROFILE_ATTRIBUTE_ORDER) {
+    const resolved = resolveEntityAttribute(projections, userId, entityId, attribute);
+    if (!resolved) continue;
+    attributes.push({ attribute, value: resolved.value, conflictingValues: [...new Set(resolved.conflicting.map((r) => r.value))] });
+  }
+  return attributes;
+}
+
+/**
  * Part B (R38): the always-on self-profile block's data — what Enso
  * already knows about the OWNER specifically, resolved through the same
  * shared resolver (resolveEntityAttribute, R37) every other reader uses,
@@ -120,12 +137,7 @@ function socialBondRelationshipLabel(type: string, ownerIsFromSide: boolean): st
 export function buildSelfProfile(projections: ProjectionsDb, userId: string): SelfProfile {
   const primary = primaryEntityId(userId);
 
-  const attributes: SelfProfileAttribute[] = [];
-  for (const attribute of SELF_PROFILE_ATTRIBUTE_ORDER) {
-    const resolved = resolveEntityAttribute(projections, userId, primary, attribute);
-    if (!resolved) continue;
-    attributes.push({ attribute, value: resolved.value, conflictingValues: [...new Set(resolved.conflicting.map((r) => r.value))] });
-  }
+  const attributes = resolveEntityProfileAttributes(projections, userId, primary);
 
   const bonds: SelfProfileBond[] = [];
   for (const atom of projections.listStructuralAtoms(userId)) {
@@ -148,6 +160,61 @@ export function buildSelfProfile(projections: ProjectionsDb, userId: string): Se
   }
 
   return { attributes, bonds };
+}
+
+export interface EntityDossier {
+  entityId: string;
+  name: string;
+  attributes: SelfProfileAttribute[];
+  /** This entity's relationship(s) TO THE OWNER specifically — direct bonds/atoms only, same as SelfProfile.bonds, just viewed from the other end of the same connection. Capped (see MAX_RELATIONSHIPS_PER_ENTITY_DOSSIER). */
+  relationshipsToOwner: string[];
+}
+
+/** Part D caps — reported in the spec (R40): a message naming many people still only dossiers a bounded few, and each one's provenance is bounded too, so one heavily-connected entity can't blow the prompt budget on its own. */
+export const MAX_ENTITY_DOSSIERS_PER_TURN = 3;
+export const MAX_RELATIONSHIPS_PER_ENTITY_DOSSIER = 5;
+
+/**
+ * Part D — completes deterministic Layer 1 (R40): when a KNOWN entity is
+ * named in the current turn (src/conversation/retrievalInvocation.ts's
+ * findAllMentionedEntityIds — direct name match via the SAME
+ * findEntityIdByExactAlias primitive entity-mode retrieval already uses,
+ * never a second name matcher), its structured record is injected
+ * directly — no search, no ranking, no possibility of losing a retrieval
+ * competition the way R38/R39 showed a bare fact reliably does. Same
+ * discipline as buildSelfProfile: resolved attributes via Part A's shared
+ * resolver (an immutable conflict renders as two disagreeing facts, never
+ * a hidden pick), direct OPEN bonds/atoms only. Returns null for an
+ * unknown/deleted entity id rather than throwing — a stale id should never
+ * crash a turn.
+ */
+export function buildEntityDossier(projections: ProjectionsDb, userId: string, entityId: string): EntityDossier | null {
+  const entity = projections.getEntityById(entityId);
+  if (!entity) return null;
+
+  const primary = primaryEntityId(userId);
+  const attributes = resolveEntityProfileAttributes(projections, userId, entityId);
+
+  const relationshipsToOwner: string[] = [];
+  for (const atom of projections.listStructuralAtoms(userId)) {
+    if (relationshipsToOwner.length >= MAX_RELATIONSHIPS_PER_ENTITY_DOSSIER) break;
+    if (atom.interval_end) continue;
+    const entityIsFromSide = atom.from_entity_id === entityId && atom.to_entity_id === primary;
+    const entityIsToSide = atom.to_entity_id === entityId && atom.from_entity_id === primary;
+    if (!entityIsFromSide && !entityIsToSide) continue;
+    // Label from the OWNER's perspective, same as buildSelfProfile — ownerIsFromSide is the inverse of entityIsFromSide here.
+    relationshipsToOwner.push(structuralAtomRelationshipLabel(atom.type, entityIsToSide));
+  }
+  for (const bond of projections.listSocialBonds(userId)) {
+    if (relationshipsToOwner.length >= MAX_RELATIONSHIPS_PER_ENTITY_DOSSIER) break;
+    if (bond.interval_end) continue;
+    const entityIsFromSide = bond.from_entity_id === entityId && bond.to_entity_id === primary;
+    const entityIsToSide = bond.to_entity_id === entityId && bond.from_entity_id === primary;
+    if (!entityIsFromSide && !entityIsToSide) continue;
+    relationshipsToOwner.push(socialBondRelationshipLabel(bond.type, entityIsToSide));
+  }
+
+  return { entityId, name: entity.name, attributes, relationshipsToOwner };
 }
 
 export function getPeopleView(eventLog: EventLog, projections: ProjectionsDb, userId: string): PersonView[] {

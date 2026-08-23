@@ -126,6 +126,13 @@ function truncateRecentTurnsToCharBudget(recentTurns: RecentTurnForPrompt[], max
  * a non-answer. recentTurns' `eventId` (systemPrompt.ts) is what makes this
  * possible; a turn with no eventId (hand-built in most FAST tests) simply
  * never matches, which is the safe no-op default.
+ *
+ * `entityDossierBlock` (Part D, R40): pre-built by the caller from
+ * buildEntityDossier + buildEntityDossierBlock — same pre-built-string
+ * pattern as selfProfileBlock/attachmentBlock, already capped
+ * (MAX_ENTITY_DOSSIERS_PER_TURN, MAX_RELATIONSHIPS_PER_ENTITY_DOSSIER) by
+ * the time it reaches here, so no budget logic for it lives in this
+ * function either.
  */
 export function assembleContext(
   candidateChunks: ContentChunkRow[],
@@ -135,7 +142,8 @@ export function assembleContext(
   gateDirective: string | null = null,
   attachmentBlock: string | null = null,
   voiceMode: VoiceMode = "natural",
-  selfProfileBlock: string | null = null
+  selfProfileBlock: string | null = null,
+  entityDossierBlock: string | null = null
 ): AssembledContext {
   const { injectedTurns, truncated: recentTruncated } = truncateRecentTurnsToCharBudget(recentTurns, budgets.maxRecentWindowChars);
 
@@ -157,7 +165,7 @@ export function assembleContext(
     injectedChunks.map((c) => ({ id: c.id, text: c.text, occurredAt: c.occurred_at, recordedAt: c.recorded_at }))
   );
   const recentWindowBlock = buildRecentWindowBlock(injectedTurns, recentTruncated);
-  const baseSystemPrompt = buildSystemPrompt(retrievedBlock, recentWindowBlock, attachmentBlock, voiceMode, selfProfileBlock);
+  const baseSystemPrompt = buildSystemPrompt(retrievedBlock, recentWindowBlock, attachmentBlock, voiceMode, selfProfileBlock, entityDossierBlock);
   // EN-071 stage 3: a gate directive, when present, is injected at the END
   // of the system prompt — highest-salience position, named action only.
   const systemPrompt = gateDirective ? `${baseSystemPrompt}\n\n${gateDirective}` : baseSystemPrompt;
