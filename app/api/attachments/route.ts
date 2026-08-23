@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { uploadAndExtract } from "../../../src/attachments/uploadAndExtract.js";
 import { UploadTooLargeError } from "../../../src/attachments/attachmentCapture.js";
 import { listUploads } from "../../../src/attachments/uploadDeletion.js";
-import { getDocumentRouter, getImageRouter, runUserSession } from "../../../lib/serverPipeline.js";
+import { getDocumentRouter, getImageRouter, runReadOnlyUserSession, runUserSession } from "../../../lib/serverPipeline.js";
 import { authErrorResponse, requireUserId } from "../../../lib/requireUser.js";
 
 /**
@@ -10,6 +10,12 @@ import { authErrorResponse, requireUserId } from "../../../lib/requireUser.js";
  * was no way to even see what you'd uploaded, let alone delete one.
  * Deleted uploads are excluded (listUploads already filters them via the
  * same eclipsed-set logic deletion itself uses).
+ *
+ * Refresh-blank-chat batch follow-up: this handler never writes through
+ * its stores (unlike POST below, which genuinely uploads and stays on
+ * runUserSession), so it uses runReadOnlyUserSession (see
+ * src/storage/userSession.ts) — same reduced-lock-contention reasoning as
+ * app/api/history/route.ts.
  */
 export async function GET(request: Request): Promise<Response> {
   let userId: string;
@@ -19,7 +25,7 @@ export async function GET(request: Request): Promise<Response> {
     return authErrorResponse(err) ?? NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
 
-  const uploads = await runUserSession(userId, async ({ eventLog }) => listUploads(eventLog, userId));
+  const uploads = await runReadOnlyUserSession(userId, async ({ eventLog }) => listUploads(eventLog, userId));
   return NextResponse.json({ uploads });
 }
 

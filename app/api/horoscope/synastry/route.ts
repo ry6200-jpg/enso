@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getChineseZodiacSign, getWesternZodiacSign } from "../../../../src/zodiac/zodiac.js";
 import { getSynastryReading } from "../../../../src/zodiac/zodiacContent.js";
 import { getPeopleView, getPrimaryUserBirthdate } from "../../../../src/projections/peopleView.js";
-import { getChatRouter, getDailyContentCache, runUserSession } from "../../../../lib/serverPipeline.js";
+import { getChatRouter, getDailyContentCache, runReadOnlyUserSession } from "../../../../lib/serverPipeline.js";
 import { authErrorResponse, requireUserId } from "../../../../lib/requireUser.js";
 
 /**
@@ -12,6 +12,11 @@ import { authErrorResponse, requireUserId } from "../../../../lib/requireUser.js
  * gate — out of this phase's Part 0/1/2/3 scope) — once stated, it's an
  * ordinary attribute like any other and this route picks it up
  * automatically; until then it reports unavailable rather than guessing.
+ *
+ * Refresh-blank-chat batch follow-up: the reads below never write through
+ * their stores, so this uses runReadOnlyUserSession (see
+ * src/storage/userSession.ts) — same reduced-lock-contention reasoning as
+ * app/api/history/route.ts.
  */
 export async function GET(request: Request): Promise<Response> {
   const entityId = new URL(request.url).searchParams.get("entityId");
@@ -27,7 +32,7 @@ export async function GET(request: Request): Promise<Response> {
   // Only the reads below need the per-user checkout/lock — reading
   // generation is an LLM call unrelated to this user's own files, so it
   // runs outside the checkout window rather than holding the lock for it.
-  const prep = await runUserSession(userId, async ({ eventLog, projectionsDb }) => {
+  const prep = await runReadOnlyUserSession(userId, async ({ eventLog, projectionsDb }) => {
     const userBirthdate = getPrimaryUserBirthdate(projectionsDb, userId);
     const userChineseSign = userBirthdate ? getChineseZodiacSign(userBirthdate) : null;
     const userWesternSign = userBirthdate ? getWesternZodiacSign(userBirthdate) : null;
