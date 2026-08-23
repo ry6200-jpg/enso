@@ -38,4 +38,52 @@ describe("getConversationHistory (item 9: conversation appeared to vanish on ref
     eventLog.append({ type: "message_sent", actor: "user", payload: { text: "someone else's message", attachmentOnly: false }, userId: "someone-else" });
     expect(getConversationHistory(eventLog, PRIMARY_USER_ID)).toEqual([]);
   });
+
+  it("joins a message's attachment filename via the explicit attachmentEventId link, not by adjacency in the log", () => {
+    // Two uploads and an unrelated reply all sit BETWEEN the upload and the
+    // message that actually references it — if the join were positional
+    // (e.g. "the nearest file_uploaded event"), this would resolve to the
+    // wrong filename or none at all. It must resolve correctly regardless.
+    const targetUpload = eventLog.append({
+      type: "file_uploaded",
+      actor: "user",
+      payload: { filename: "resume.pdf", mimeType: "application/pdf", byteLength: 1000, path: "ab/resume.pdf" },
+      userId: PRIMARY_USER_ID
+    });
+    eventLog.append({
+      type: "file_uploaded",
+      actor: "user",
+      payload: { filename: "unrelated-decoy.pdf", mimeType: "application/pdf", byteLength: 1000, path: "cd/decoy.pdf" },
+      userId: PRIMARY_USER_ID
+    });
+    eventLog.append({ type: "reply_sent", actor: "enso", payload: { text: "unrelated reply sitting in between" }, userId: PRIMARY_USER_ID });
+
+    const msg = eventLog.append({
+      type: "message_sent",
+      actor: "user",
+      payload: { text: "here's my resume", attachmentOnly: false, attachmentEventId: targetUpload.id },
+      userId: PRIMARY_USER_ID
+    });
+
+    const history = getConversationHistory(eventLog, PRIMARY_USER_ID);
+    const joined = history.find((m) => m.id === msg.id);
+    expect(joined?.filename).toBe("resume.pdf");
+  });
+
+  it("a message with no attachmentEventId has no filename", () => {
+    eventLog.append({ type: "message_sent", actor: "user", payload: { text: "just text", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    const [message] = getConversationHistory(eventLog, PRIMARY_USER_ID);
+    expect(message!.filename).toBeUndefined();
+  });
+
+  it("a stale attachmentEventId pointing at nothing (or a non-upload event) resolves to no filename rather than throwing", () => {
+    eventLog.append({
+      type: "message_sent",
+      actor: "user",
+      payload: { text: "orphaned reference", attachmentOnly: false, attachmentEventId: "01NONEXISTENT00000000000" },
+      userId: PRIMARY_USER_ID
+    });
+    const [message] = getConversationHistory(eventLog, PRIMARY_USER_ID);
+    expect(message!.filename).toBeUndefined();
+  });
 });

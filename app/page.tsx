@@ -9,7 +9,7 @@ interface ChatMessage {
   id: string;
   role: "user" | "enso";
   text: string;
-  attachmentFilename?: string;
+  filename?: string;
 }
 
 interface AttachmentStatus {
@@ -111,6 +111,28 @@ interface LocationContextState {
  * Send button — while Enso's own bubbles stay recessive (white, a thin
  * border, near-black text) so the accent reads as "the user's voice /
  * action," not decoration.
+ *
+ * Mobile layout fix batch: THE structural bug (real phone, real live
+ * feedback) was ZodiacSidebar.tsx's `w-72 shrink-0` — an unconditional
+ * 288px flex sibling with no breakpoint ever removing it, so a phone
+ * viewport got the chat column PLUS 288px of sidebar it had no way to
+ * actually see, and the whole page scrolled sideways to prove it. Diagnosed
+ * to that exact cause rather than patched with `overflow-hidden` (which
+ * would have hidden the symptom while the 288px was still being reserved).
+ * Fix is structural: below `md`, ZodiacSidebar renders nothing inline at
+ * all (`hidden md:flex`) — it becomes an off-canvas panel opened from a
+ * small mark in the header, gated on `zodiacAvailable` so that entry point
+ * exists only once the birthdate gate has actually unlocked content, per
+ * the standing rule against a tap target that opens nothing. Keyboard-safe
+ * input (item 3) is a layout.tsx change (`interactiveWidget:
+ * "resizes-content"` + `h-dvh`), not anything here — this page's existing
+ * flex-1/shrink-0 pinning (EN-036, above) already does the right thing
+ * once the viewport itself resizes correctly under the keyboard. autoFocus
+ * (below, item 4) needed no change: since the keyboard-safe fix is pure
+ * CSS/viewport behavior with no JS state toggling on keyboard-open, there
+ * is nothing for autofocus to fight regardless of what triggers the
+ * keyboard. isNarrowScreen (item 5) swaps the placeholder text only — a
+ * plain string prop can't respond to a CSS media query on its own.
  */
 export default function Page() {
   // Cloud migration prerequisite batch, item 1: real user identity via
@@ -131,6 +153,20 @@ export default function Page() {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [sidebarRefreshSignal, setSidebarRefreshSignal] = useState(0);
   const [refocusInputSignal, setRefocusInputSignal] = useState(0);
+  // Mobile layout fix batch: the zodiac sidebar's mobile entry point (a
+  // small mark in the header) must appear ONLY once the birthdate gate has
+  // actually unlocked real content — never a tap target that opens an
+  // empty/"not available yet" panel. ZodiacSidebar reports availability
+  // here via a callback since the trigger button lives in the header, not
+  // inside that component. mobileSidebarOpen is otherwise ordinary
+  // open/close state for the off-canvas panel itself.
+  const [zodiacAvailable, setZodiacAvailable] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  // Below md (Tailwind's breakpoint, matching ZodiacSidebar's own `hidden
+  // md:flex`), the desktop placeholder's parenthetical wraps to three lines
+  // and explains a keyboard shortcut a phone doesn't have. matchMedia, not
+  // a resize listener — fires on rotation/resize alike with no polling.
+  const [isNarrowScreen, setIsNarrowScreen] = useState(false);
   // Ambient current-location (see enso-rebuild-requirements.md's CORE
   // DISTINCTION) — timezone is computed once on mount (zero permission
   // cost); placeName stays null until/unless geolocation resolves. Neither
@@ -207,6 +243,14 @@ export default function Page() {
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages]);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    setIsNarrowScreen(mq.matches);
+    const handleChange = (e: MediaQueryListEvent) => setIsNarrowScreen(e.matches);
+    mq.addEventListener("change", handleChange);
+    return () => mq.removeEventListener("change", handleChange);
+  }, []);
 
   useEffect(() => {
     if (!attachmentStatus) return;
@@ -301,7 +345,7 @@ export default function Page() {
     setSending(true);
     setInput("");
     setPendingFile(null);
-    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", text, attachmentFilename: file?.name }]);
+    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", text, filename: file?.name }]);
 
     try {
       let attachmentEventId: string | undefined;
@@ -401,36 +445,51 @@ export default function Page() {
         <button type="button" onClick={() => void signOut()} className="ml-2 text-xs text-stone-400 hover:text-stone-600" title="Sign out">
           Sign out
         </button>
-        {/*
-          "Provide a way to grant it later," scoped precisely: visible ONLY
-          when permission was explicitly denied — never on a fresh/prompt
-          state (nothing to "grant later" yet — the one-time first-send
-          attempt already covers that), and never once granted (a
-          permanent indicator would be a standing solicitation, which
-          directly contradicts "denial is permanent and silent"). This is
-          the only state locationBlocked can accurately represent: it's
-          set true only from a real PERMISSION_DENIED, and reset false the
-          moment any later attempt actually succeeds (see
-          attemptGeolocation) — so it never lies in either direction.
-          Clicking can't force the native prompt back open once truly
-          denied (no web API does that) — the tooltip is honest about that
-          and points at the real fix instead of promising one it can't
-          deliver.
-        */}
-        {locationBlocked && (
-          <button
-            type="button"
-            onClick={attemptGeolocation}
-            title="Location access is blocked — check your browser's site settings to allow it"
-            className="ml-auto text-sm text-stone-400 hover:text-stone-600"
-          >
-            📍
-          </button>
-        )}
+
+        {/* Single ml-auto wrapper, not one per button — flexbox only
+            honors the FIRST auto margin among siblings to push the whole
+            rest of the row right; a second independent ml-auto here would
+            fight the first instead of just sitting next to it. */}
+        <div className="ml-auto flex items-center gap-3">
+          {/*
+            Mobile-only entry point to the zodiac sidebar (ZodiacSidebar.tsx
+            owns the actual panel). Gated on zodiacAvailable — set by that
+            component's onAvailabilityChange — so this button exists ONLY
+            once the birthdate gate has unlocked real content, never as a
+            tap target that opens an empty/"not available yet" panel.
+          */}
+          {zodiacAvailable && (
+            <button type="button" onClick={() => setMobileSidebarOpen(true)} className="md:hidden shrink-0" title="Open your zodiac sidebar">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/assets/enso-mark.png" alt="Zodiac sidebar" className="w-7 h-7" />
+            </button>
+          )}
+          {/*
+            "Provide a way to grant it later," scoped precisely: visible ONLY
+            when permission was explicitly denied — never on a fresh/prompt
+            state (nothing to "grant later" yet — the one-time first-send
+            attempt already covers that), and never once granted (a
+            permanent indicator would be a standing solicitation, which
+            directly contradicts "denial is permanent and silent"). This is
+            the only state locationBlocked can accurately represent: it's
+            set true only from a real PERMISSION_DENIED, and reset false the
+            moment any later attempt actually succeeds (see
+            attemptGeolocation) — so it never lies in either direction.
+            Clicking can't force the native prompt back open once truly
+            denied (no web API does that) — the tooltip is honest about that
+            and points at the real fix instead of promising one it can't
+            deliver.
+          */}
+          {locationBlocked && (
+            <button type="button" onClick={attemptGeolocation} title="Location access is blocked — check your browser's site settings to allow it" className="text-sm text-stone-400 hover:text-stone-600">
+              📍
+            </button>
+          )}
+        </div>
       </header>
 
       <div className="flex-1 flex min-h-0">
-        <div className="flex-1 flex flex-col min-h-0">
+        <div className="flex-1 flex flex-col min-h-0 min-w-0">
           <div ref={listRef} className="flex-1 overflow-y-auto min-h-0 p-4 flex flex-col gap-3">
             {messages.map((m) => (
               <div
@@ -440,7 +499,7 @@ export default function Page() {
                 }`}
                 style={m.role === "user" ? { backgroundColor: "var(--enso-red)", color: "#faf7f2" } : { color: "var(--enso-ink)" }}
               >
-                {m.attachmentFilename && <div className="text-xs opacity-80 mb-1">Attached: {m.attachmentFilename}</div>}
+                {m.filename && <div className="text-xs opacity-80 mb-1">Attached: {m.filename}</div>}
                 {m.text}
               </div>
             ))}
@@ -481,9 +540,9 @@ export default function Page() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 disabled={sending}
-                placeholder="Tell Enso what's on your mind... (Enter to send, Shift+Enter for a new line)"
+                placeholder={isNarrowScreen ? "Message Enso..." : "Tell Enso what's on your mind... (Enter to send, Shift+Enter for a new line)"}
                 rows={4}
-                className="flex-1 h-28 resize-none rounded-xl px-4 py-3 text-base bg-white border border-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-300 disabled:opacity-50 overflow-y-auto"
+                className="flex-1 min-w-0 h-28 resize-none rounded-xl px-4 py-3 text-base bg-white border border-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-300 disabled:opacity-50 overflow-y-auto"
               />
               <button
                 type="submit"
@@ -497,7 +556,12 @@ export default function Page() {
           </form>
         </div>
 
-        <ZodiacSidebar refreshSignal={sidebarRefreshSignal} />
+        <ZodiacSidebar
+          refreshSignal={sidebarRefreshSignal}
+          onAvailabilityChange={setZodiacAvailable}
+          mobileOpen={mobileSidebarOpen}
+          onMobileClose={() => setMobileSidebarOpen(false)}
+        />
       </div>
 
       {attachmentStatus && (

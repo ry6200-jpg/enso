@@ -1,10 +1,14 @@
 import type { EventLog } from "../events/eventLog.js";
 import type { RecentTurnForPrompt } from "../persona/systemPrompt.js";
+import type { MessageSentPayload } from "../capture/messageCapture.js";
+import type { FileUploadedPayload } from "../attachments/attachmentCapture.js";
 
 export interface ConversationMessage {
   id: string;
   role: "user" | "enso";
   text: string;
+  /** Set when this message carries messageCapture.ts's attachmentEventId link — looked up by that explicit id, never inferred from the event's position in the log. */
+  filename?: string;
 }
 
 /**
@@ -21,11 +25,26 @@ export function getConversationHistory(eventLog: EventLog, userId: string): Conv
   return eventLog
     .listForUser(userId)
     .filter((e) => e.type === "message_sent" || e.type === "reply_sent")
-    .map((e) => ({
-      id: e.id,
-      role: e.type === "message_sent" ? "user" : "enso",
-      text: (e.payload as { text: string }).text
-    }));
+    .map((e) => {
+      const base: ConversationMessage = {
+        id: e.id,
+        role: e.type === "message_sent" ? "user" : "enso",
+        text: (e.payload as { text: string }).text
+      };
+      if (e.type !== "message_sent") return base;
+
+      // Explicit event-ID join, not positional: the attachment shown here
+      // is whatever messageCapture.ts actually linked this message to at
+      // capture time (src/capture/messageCapture.ts), looked up directly
+      // by that id — never inferred from what happens to sit next to this
+      // event in the log, which breaks the moment anything else (a retry,
+      // an unrelated event) lands between the two.
+      const attachmentEventId = (e.payload as MessageSentPayload).attachmentEventId;
+      if (!attachmentEventId) return base;
+      const uploadEvent = eventLog.getById(attachmentEventId);
+      if (!uploadEvent || uploadEvent.type !== "file_uploaded") return base;
+      return { ...base, filename: (uploadEvent.payload as FileUploadedPayload).filename };
+    });
 }
 
 /**

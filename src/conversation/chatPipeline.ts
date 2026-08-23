@@ -302,7 +302,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   const messageEvent = captureMessage(deps.eventLog, {
     userId: input.userId,
     text: input.text,
-    attachmentCount: input.attachmentEventId ? 1 : 0
+    attachmentCount: input.attachmentEventId ? 1 : 0,
+    attachmentEventId: input.attachmentEventId
   });
 
   const attachmentInfo = input.attachmentEventId ? resolveAttachmentContext(deps.eventLog, input.attachmentEventId) : null;

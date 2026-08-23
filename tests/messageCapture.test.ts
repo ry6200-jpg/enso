@@ -67,6 +67,22 @@ describe("captureMessage (EN-010/064)", () => {
     expect((event.payload as MessageSentPayload).text).toBe(ATTACHMENT_ONLY_PLACEHOLDER);
   });
 
+  it("records attachmentEventId on the message_sent payload when given one — the explicit link getConversationHistory joins on", () => {
+    const upload = eventLog.append({
+      type: "file_uploaded",
+      actor: "user",
+      payload: { filename: "photo.png", mimeType: "image/png", byteLength: 100, path: "ab/photo.png" },
+      userId: PRIMARY_USER_ID
+    });
+    const event = captureMessage(eventLog, { userId: PRIMARY_USER_ID, text: "check this out", attachmentCount: 1, attachmentEventId: upload.id });
+    expect((event.payload as MessageSentPayload).attachmentEventId).toBe(upload.id);
+  });
+
+  it("omits attachmentEventId from the payload entirely when none was given — never a stray undefined/null field", () => {
+    const event = captureMessage(eventLog, { userId: PRIMARY_USER_ID, text: "no attachment here" });
+    expect("attachmentEventId" in (event.payload as object)).toBe(false);
+  });
+
   it("accepts an explicit occurredAt for backdating (EN-016 dual time), defaulting to null when omitted", () => {
     const backdated = captureMessage(eventLog, { userId: PRIMARY_USER_ID, text: "An old note.", occurredAt: "2020-01-01T00:00:00.000Z" });
     expect(backdated.occurredAt).toBe("2020-01-01T00:00:00.000Z");

@@ -13,6 +13,16 @@ export interface CaptureMessageInput {
   text?: string;
   /** How many files were attached to this same turn, if any. */
   attachmentCount?: number;
+  /**
+   * The file_uploaded event id of the file attached to this same turn, if
+   * any — the explicit link getConversationHistory joins on to show a
+   * historical message's attachment filename (never inferred by adjacency/
+   * position in the log, which breaks the moment anything else — another
+   * event, a retry — sits between the two). Mirrors chatPipeline.ts's
+   * SendMessageInput.attachmentEventId; this is where it actually gets
+   * persisted, not just used transiently for this turn's reply.
+   */
+  attachmentEventId?: string;
   /** When this actually happened, if different from now (EN-016 dual time) — e.g. backdating an imported note. Defaults to unset (occurred_at null; told-time is recorded_at). */
   occurredAt?: string;
 }
@@ -20,6 +30,7 @@ export interface CaptureMessageInput {
 export interface MessageSentPayload {
   text: string;
   attachmentOnly: boolean;
+  attachmentEventId?: string;
 }
 
 /**
@@ -45,7 +56,8 @@ export function captureMessage(eventLog: EventLog, input: CaptureMessageInput): 
 
   const payload: MessageSentPayload = {
     text: hasText ? input.text!.trim() : ATTACHMENT_ONLY_PLACEHOLDER,
-    attachmentOnly: !hasText && hasAttachments
+    attachmentOnly: !hasText && hasAttachments,
+    ...(input.attachmentEventId ? { attachmentEventId: input.attachmentEventId } : {})
   };
 
   return eventLog.append({
