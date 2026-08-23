@@ -108,27 +108,28 @@ describe("PERSONA_INSTRUCTION (EN-097: elicitation stance)", () => {
   });
 });
 
-describe("CURRENT_LOCATION_INSTRUCTION (ambient current-location)", () => {
-  it("never asserts current location as a fact about the owner's life, distinct from residence", () => {
-    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/NEVER STATE IT AS A FACT ABOUT WHO THEY ARE/);
-    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/current location is not where the owner lives/);
+describe("CURRENT_LOCATION_INSTRUCTION (ambient/register/zodiac batch, item 1: rewritten into the broader ambient-context instruction)", () => {
+  it("never asserts any ambient reading as a fact about the owner's life, distinct from residence", () => {
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/NEVER STATE ANY OF IT AS A FACT ABOUT WHO THEY ARE/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/is a fact about the owner's life the way their stated residence is/);
   });
 
-  it("never guesses location from timezone/language/content when nothing resolved", () => {
+  it("never guesses location/weather/time from timezone/language/content when nothing resolved", () => {
     expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/NEVER GUESS WHEN NOTHING RESOLVED/);
-    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/Never infer a location from their timezone, their language, a mentioned place/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/never infer one from a timezone, a language, a mentioned place/);
   });
 
   it("a directly-asked location question still gets answered — this is SUBJECT not TOPIC, never a blanket prohibition (the fixture the spec explicitly asked for)", () => {
-    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/a DIRECTLY asked location-adjacent question .* gets a short, plain, genuinely real answer/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/A DIRECTLY asked location-adjacent question .* still gets a short, plain, genuinely real answer/);
     // Must NOT read as a topic ban — no refusal/redirect-away language for the direct-question case.
     expect(CURRENT_LOCATION_INSTRUCTION).not.toMatch(/never answer|refuse to answer|decline to answer|won't answer/i);
   });
 
-  it("does not become a local-recommendations assistant for UNPROMPTED lookups, without banning the topic itself", () => {
-    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/NOT A LOCAL-RECOMMENDATIONS ASSISTANT/);
-    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/doesn't volunteer directions, nearby businesses, or place lookups unprompted/);
+  it("does not become a maps or recommendations assistant for UNPROMPTED lookups, without banning the topic itself — and states plainly that real ambient data now exists (the old 'no capability at all' claim would be false)", () => {
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/NOT A MAPS OR RECOMMENDATIONS ASSISTANT/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/doesn't volunteer directions, doesn't recommend nearby businesses, doesn't run place lookups unprompted/);
     expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/never a ban on the topic itself/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/never renders or offers to render a map/);
   });
 
   it("references the same capability-denial regression this project has already been burned by", () => {
@@ -144,11 +145,34 @@ describe("CURRENT_LOCATION_INSTRUCTION (ambient current-location)", () => {
   it("HONESTY ABOUT THE SOURCE: never manufactures unverifiable specifics (address/phone/hours) for a location-adjacent answer from general knowledge", () => {
     expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/HONESTY ABOUT THE SOURCE/);
     expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/never manufacture a specific street address, phone number, or exact opening time you have no way to verify/);
-    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/this app has no real place-lookup, maps, or directions capability/);
+    // The OLD claim ("this app has no real place-lookup capability") is now false and must be gone —
+    // real ambient data exists now; honesty is about SOURCE (a resolved block vs. general knowledge), not capability denial.
+    expect(CURRENT_LOCATION_INSTRUCTION).not.toMatch(/this app has no real place-lookup/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/rather than a resolved AMBIENT CONTEXT block/);
   });
 
   it("the honesty addition does not become a refusal — a rough, hedged answer is still a real, still-short answer", () => {
     expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/The fix is not to withhold the answer/);
     expect(CURRENT_LOCATION_INSTRUCTION).not.toMatch(/never answer|refuse to answer|decline to answer|won't answer|don't answer/i);
+  });
+
+  it("carries the governing rule, the three uses, two-facts-max, sequence, and the worked example", () => {
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/GOVERNING RULE, the only question that matters: a live decision or concern must already be on the table/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/SILENT CALIBRATION/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/STATED BECAUSE THEY CAN'T KNOW IT/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/STATED BECAUSE IT RESOLVES SOMETHING THEY RAISED/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/TWO FACTS, MAX/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/SEQUENCE: when a person's own state is also part of what they said, respond to THEM first/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/needs a prescription refill and thinks she can walk to a named pharmacy/);
+  });
+
+  it("never mentions the raw number as the point of silent calibration — reciting is the assistant move, feeling the weight is the friend move", () => {
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/reciting the number is the assistant move; feeling its weight is the friend move/);
+  });
+
+  it("routes volunteering through existing judgment, never a new standalone rule, and cross-references item 2's shared discriminator", () => {
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/VOLUNTEERING ROUTES THROUGH EXISTING JUDGMENT, NEVER A NEW RULE OF ITS OWN/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/THE SHARED DISCRIMINATOR/);
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/would this survive if the task disappeared/);
   });
 });
