@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { User } from "firebase/auth";
 import ZodiacSidebar from "./components/ZodiacSidebar";
 import { authFetch, signInWithGoogle, signOut, watchAuthState } from "./lib/firebaseClient";
+import { isPinnedToBottom } from "./lib/chatScroll";
 
 interface ChatMessage {
   id: string;
@@ -200,6 +201,21 @@ export default function Page() {
   // isn't one; the browser's own permission memory was never the problem.
   const geolocationAttemptedRef = useRef(false);
   const listRef = useRef<HTMLDivElement>(null);
+  // Mobile layout and scroll fixes batch: contentRef is the actual message
+  // content — listRef is the scroll container around it. Deliberately two
+  // elements: a ResizeObserver on listRef alone wouldn't fire when a new
+  // message is appended (the scroll container's OWN box stays whatever
+  // flex-1 gives it; only its content's height changes), so the observer
+  // that detects "a new message arrived" has to watch contentRef instead.
+  const contentRef = useRef<HTMLDivElement>(null);
+  // Whether the user is currently at (or within AUTO_SCROLL_THRESHOLD_PX
+  // of) the bottom of the transcript — a ref, not state, because it's
+  // written on every scroll event and read from ResizeObserver/
+  // visualViewport callbacks that don't need a re-render themselves;
+  // showJumpToBottom below is the one piece of this that actually needs
+  // to trigger one.
+  const isPinnedRef = useRef(true);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -256,9 +272,102 @@ export default function Page() {
     }
   }, []);
 
+  // Scroll-pinning system (mobile layout and scroll fixes batch). Replaces
+  // a bare `useEffect(() => scrollTo(...), [messages])`, which was the
+  // likely cause of the most important bug reported: it ran on every
+  // messages-state change, but a React effect fires once React has
+  // committed the DOM, NOT once the browser has actually finished layout
+  // — a change that alters text wrapping (a long reply, a growing
+  // composer shrinking the list) can still be mid-layout at that exact
+  // moment, so scrolling "to the bottom" at that instant could scroll to
+  // where the bottom WAS about to be, not where it ends up, leaving the
+  // newest message exactly where it was reported: hidden behind or below
+  // the composer. ResizeObserver fires after the browser has genuinely
+  // recomputed layout for whatever it's observing, and the extra
+  // requestAnimationFrame in scrollToBottomIfPinned below defers the
+  // actual scrollTop write to the next paint-aligned frame on top of
+  // that — belt and braces against exactly this class of timing bug,
+  // never a bare setTimeout guess.
+  //
+  // One mechanism covers every case in the acceptance criteria uniformly,
+  // rather than special-casing each: mount (history loads -> content
+  // resizes), a new message arriving (content resizes), the composer
+  // growing or shrinking (composer AND list both resize), and the
+  // keyboard opening or closing (visualViewport resize, wired up below) —
+  // all just call the same scrollToBottomIfPinned, which only actually
+  // moves anything while isPinnedRef is true. Sending a message forces
+  // isPinnedRef true first (see sendMessage) — an outgoing message the
+  // user just sent should always bring them back to the bottom even if
+  // they'd scrolled up; an INCOMING reply while they're deliberately
+  // reading history must not interrupt that, which is exactly what
+  // isPinnedRef being false (they scrolled up) already prevents.
+  function scrollToBottomIfPinned() {
+    if (!isPinnedRef.current) return;
+    requestAnimationFrame(() => {
+      const list = listRef.current;
+      if (list) list.scrollTop = list.scrollHeight;
+    });
+  }
+
+  // Tracks whether the user is still pinned to the bottom as they
+  // manually scroll — the ONE thing that can set isPinnedRef back to
+  // false (every other effect here only ever scrolls TO the bottom, never
+  // away from it, so this is the sole source of truth for "they scrolled
+  // up on purpose").
   useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
-  }, [messages]);
+    const list = listRef.current;
+    if (!list) return;
+    function handleScroll() {
+      if (!listRef.current) return;
+      const pinned = isPinnedToBottom(listRef.current.scrollTop, listRef.current.scrollHeight, listRef.current.clientHeight);
+      isPinnedRef.current = pinned;
+      setShowJumpToBottom(!pinned);
+    }
+    list.addEventListener("scroll", handleScroll, { passive: true });
+    return () => list.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  // One ResizeObserver, three observation targets: contentRef (a message
+  // was added/removed, or a bubble's own wrapped-text height changed),
+  // listRef (the scroll container's own box changed — e.g. the composer
+  // growing shrinks it, or the window/orientation changed), and formRef
+  // (the composer itself growing or shrinking — attached directly per
+  // this batch's spec, even though listRef's own resize would catch most
+  // of the same cases indirectly; being explicit here doesn't rely on
+  // that indirect path).
+  useEffect(() => {
+    const content = contentRef.current;
+    const list = listRef.current;
+    const composer = formRef.current;
+    if (!content || !list || !composer) return;
+    const observer = new ResizeObserver(() => scrollToBottomIfPinned());
+    observer.observe(content);
+    observer.observe(list);
+    observer.observe(composer);
+    return () => observer.disconnect();
+  }, []);
+
+  // The on-screen keyboard opening/closing changes window.visualViewport's
+  // height (see layout.tsx's interactiveWidget: "resizes-content" — with
+  // that set, the LAYOUT viewport resizes too, which is what actually
+  // moves the composer, but re-pinning here as well covers browsers/cases
+  // where only the visual viewport moves).
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    function handleViewportResize() {
+      scrollToBottomIfPinned();
+    }
+    vv.addEventListener("resize", handleViewportResize);
+    return () => vv.removeEventListener("resize", handleViewportResize);
+  }, []);
+
+  function handleJumpToBottom() {
+    isPinnedRef.current = true;
+    setShowJumpToBottom(false);
+    const list = listRef.current;
+    if (list) list.scrollTop = list.scrollHeight;
+  }
 
   // Composer growth batch: the textarea grows with its content instead of
   // staying a fixed height. `height: auto` first, THEN read scrollHeight —
@@ -398,6 +507,12 @@ export default function Page() {
     setSending(true);
     setInput("");
     setPendingFile(null);
+    // Sending is always the user's own deliberate action — bring them back
+    // to the bottom even if they'd scrolled up to read history, unlike an
+    // incoming reply arriving passively while they're mid-scroll (which
+    // must NOT interrupt that — see scrollToBottomIfPinned above).
+    isPinnedRef.current = true;
+    setShowJumpToBottom(false);
     setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", text, filename: file?.name }]);
 
     try {
@@ -487,8 +602,16 @@ export default function Page() {
     );
   }
 
+  // md:w-full is not redundant with md:max-w-5xl md:mx-auto — verified
+  // live: mx-auto's auto margins disable this flex item's default
+  // stretch-to-fill behavior (CSS flexbox spec: an item with auto
+  // cross-axis margins is centered via those margins instead of being
+  // stretched), so without an explicit width this collapsed to its
+  // content's own shrink-to-fit size (544px on a 1600px-wide desktop, not
+  // the intended 1024px cap) rather than filling out to max-width before
+  // being capped.
   return (
-    <div className="h-full flex flex-col overflow-hidden md:max-w-5xl md:mx-auto">
+    <div className="h-full flex flex-col overflow-hidden md:w-full md:max-w-5xl md:mx-auto">
       {/* Mobile layout and scroll fixes batch: reduced from a ~96px row
           (w-16 mark, text-4xl wordmark, inline "Sign out" label) to a
           single ~56px one (h-14) — same mark asset, same wordmark, same
@@ -586,19 +709,47 @@ export default function Page() {
 
       <div className="flex-1 flex min-h-0">
         <div className="flex-1 flex flex-col min-h-0 min-w-0">
-          <div ref={listRef} className="flex-1 overflow-y-auto min-h-0 p-4 flex flex-col gap-3">
-            {messages.map((m) => (
-              <div
-                key={m.id}
-                className={`max-w-lg rounded-lg px-4 py-3 text-base leading-[1.4] whitespace-pre-wrap ${
-                  m.role === "user" ? "self-end text-white" : "self-start bg-white border border-stone-200"
-                }`}
-                style={m.role === "user" ? { backgroundColor: "var(--enso-red)", color: "#faf7f2" } : { color: "var(--enso-ink)" }}
-              >
-                {m.filename && <div className="text-xs opacity-80 mb-1">Attached: {m.filename}</div>}
-                {m.text}
+          {/* Scroll container (listRef) and its content (contentRef) are
+              deliberately separate elements — see the refs' own comments
+              above for why a single element can't serve both the
+              ResizeObserver's "did new content arrive" question and the
+              scroll-position bookkeeping at once. This wrapper is the
+              positioning context for the jump-to-bottom button, sized to
+              exactly the list's own flex-1 allocation so the button sits
+              just above the composer regardless of the composer's
+              (now variable) height. */}
+          <div className="flex-1 min-h-0 relative">
+            <div ref={listRef} className="h-full overflow-y-auto overscroll-contain">
+              <div ref={contentRef} className="p-4 flex flex-col gap-3">
+                {messages.map((m) => (
+                  <div
+                    key={m.id}
+                    className={`max-w-lg rounded-lg px-4 py-3 text-base leading-[1.4] whitespace-pre-wrap ${
+                      m.role === "user" ? "self-end text-white" : "self-start bg-white border border-stone-200"
+                    }`}
+                    style={m.role === "user" ? { backgroundColor: "var(--enso-red)", color: "#faf7f2" } : { color: "var(--enso-ink)" }}
+                  >
+                    {m.filename && <div className="text-xs opacity-80 mb-1">Attached: {m.filename}</div>}
+                    {m.text}
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
+
+            {/* Shown only once the user has scrolled up past the pin
+                threshold (isPinnedToBottom, app/lib/chatScroll.ts) — history
+                is a core use of this app and an incoming reply must not
+                yank them back down; this gives them a way back instead. */}
+            {showJumpToBottom && (
+              <button
+                type="button"
+                onClick={handleJumpToBottom}
+                title="Jump to latest"
+                className="absolute bottom-3 right-3 w-10 h-10 rounded-full bg-white border border-stone-300 shadow-md flex items-center justify-center text-stone-600 hover:bg-stone-50"
+              >
+                ↓
+              </button>
+            )}
           </div>
 
           <form
