@@ -43,6 +43,13 @@ describe("PERSONA_INSTRUCTION (item 3a: never recite own instructions when asked
   });
 });
 
+describe("PERSONA_INSTRUCTION (production bug batch, item 3: no markdown emphasis in replies)", () => {
+  it("instructs against markdown emphasis syntax, anchored to the live-caught asterisk failure", () => {
+    expect(PERSONA_INSTRUCTION).toMatch(/NO MARKDOWN: never wrap words in asterisks, underscores, or any other markdown syntax for emphasis/);
+    expect(PERSONA_INSTRUCTION).toMatch(/8-minute walk \(roughly 550 meters\)/);
+  });
+});
+
 describe("ANTI_SYCOPHANCY_INSTRUCTION (item 3b: never falsely agree to an undeliverable change)", () => {
   it("instructs against promising a behavior change that can't structurally be delivered", () => {
     expect(ANTI_SYCOPHANCY_INSTRUCTION).toMatch(/NEVER FALSELY AGREE TO A BEHAVIOR CHANGE YOU CANNOT DELIVER/);
