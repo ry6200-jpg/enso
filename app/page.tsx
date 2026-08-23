@@ -346,6 +346,27 @@ export default function Page() {
   // false (every other effect here only ever scrolls TO the bottom, never
   // away from it, so this is the sole source of truth for "they scrolled
   // up on purpose").
+  //
+  // Scroll/history/focus/zodiac batch, items 1+3: THE actual bug behind
+  // "scroll does not move on send" and "initial scroll position is the
+  // top" — confirmed structurally, not by timing/guesswork. This effect
+  // (and the ResizeObserver one below) used to have an EMPTY dependency
+  // array, meaning each is tied to the component's FIRST-EVER commit —
+  // but `Page`'s early return means that first commit is ALWAYS the
+  // auth-checking screen (authStatus !== "signedIn"), which doesn't
+  // render listRef/contentRef/formRef at all. `if (!list) return;` then
+  // silently no-ops, and because the deps array is `[]`, this effect
+  // NEVER RUNS AGAIN for the rest of the page's life — not even once
+  // authStatus flips to "signedIn" and the real chat UI (with real refs)
+  // finally mounts. The listener is never attached, full stop, for the
+  // entire session — which is exactly why it reproduced 100% of the time
+  // rather than intermittently. A throwaway test harness that mounted the
+  // chat UI directly (no auth-gated early return) never hit this, which
+  // is why it passed there and nowhere else. Depending on `authStatus`
+  // makes this effect re-run on every auth transition, including the one
+  // that actually mounts the real DOM nodes — this is the SAME existing
+  // effect finally attaching to the SAME existing DOM node, not a new
+  // mechanism bolted on top.
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
@@ -357,7 +378,7 @@ export default function Page() {
     }
     list.addEventListener("scroll", handleScroll, { passive: true });
     return () => list.removeEventListener("scroll", handleScroll);
-  }, []);
+  }, [authStatus]);
 
   // One ResizeObserver, three observation targets: contentRef (a message
   // was added/removed, or a bubble's own wrapped-text height changed),
@@ -367,6 +388,14 @@ export default function Page() {
   // this batch's spec, even though listRef's own resize would catch most
   // of the same cases indirectly; being explicit here doesn't rely on
   // that indirect path).
+  //
+  // Scroll/history/focus/zodiac batch, items 1+3: see the identical note
+  // on the scroll-tracking effect above — this had the same `[]`-deps bug
+  // (set up once, tied to the auth-checking screen's commit, where these
+  // three refs are all null, and never retried), which is the actual
+  // reason neither "scroll to bottom on send" nor "scroll to bottom on
+  // initial load" ever fired in production. Depending on `authStatus`
+  // re-attaches this same observer once the real DOM nodes exist.
   useEffect(() => {
     const content = contentRef.current;
     const list = listRef.current;
@@ -377,7 +406,7 @@ export default function Page() {
     observer.observe(list);
     observer.observe(composer);
     return () => observer.disconnect();
-  }, []);
+  }, [authStatus]);
 
   // The on-screen keyboard opening/closing changes window.visualViewport's
   // height (see layout.tsx's interactiveWidget: "resizes-content" — with
