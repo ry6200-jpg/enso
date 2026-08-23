@@ -349,17 +349,34 @@ export default function Page() {
 
   // The on-screen keyboard opening/closing changes window.visualViewport's
   // height (see layout.tsx's interactiveWidget: "resizes-content" — with
-  // that set, the LAYOUT viewport resizes too, which is what actually
-  // moves the composer, but re-pinning here as well covers browsers/cases
-  // where only the visual viewport moves).
+  // that set, Chrome/Android also resizes the LAYOUT viewport, which is
+  // what actually moves the composer there, so ResizeObserver on the list
+  // already re-pins on its own; this listener is what covers the browser
+  // this project actually can't test locally, iOS Safari, where the
+  // keyboard does NOT resize the layout viewport at all — ONLY
+  // visualViewport moves, 'resize' firing once the keyboard has finished
+  // animating in/out and 'scroll' firing repeatedly WHILE it animates
+  // (iOS's visualViewport.offsetTop shifts during the transition — no
+  // 'resize' event for that intermediate motion, only 'scroll'). Both
+  // route through the exact same scrollToBottomIfPinned used everywhere
+  // else, deliberately not a separate re-pin path, so ordering/behavior
+  // stays identical regardless of which trigger fired.
+  //
+  // NOT verified against real iOS Safari — no device was available in
+  // this environment. Guarded for `visualViewport` being undefined
+  // (older browsers, some headless/test environments).
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
-    function handleViewportResize() {
+    function handleViewportChange() {
       scrollToBottomIfPinned();
     }
-    vv.addEventListener("resize", handleViewportResize);
-    return () => vv.removeEventListener("resize", handleViewportResize);
+    vv.addEventListener("resize", handleViewportChange);
+    vv.addEventListener("scroll", handleViewportChange);
+    return () => {
+      vv.removeEventListener("resize", handleViewportChange);
+      vv.removeEventListener("scroll", handleViewportChange);
+    };
   }, []);
 
   function handleJumpToBottom() {
@@ -717,7 +734,18 @@ export default function Page() {
               positioning context for the jump-to-bottom button, sized to
               exactly the list's own flex-1 allocation so the button sits
               just above the composer regardless of the composer's
-              (now variable) height. */}
+              (now variable) height.
+
+              Reported bug 6 (bubbles clipping top/bottom, a stray empty
+              box below the last message) was attributed to this structure
+              missing min-height:0 at some level of the flex chain, fixed
+              by making the levels explicit here. That explanation is
+              UNCONFIRMED, not verified — the only check performed was DOM
+              measurement in a mocked Playwright harness on desktop
+              Chromium, a different evidence class from the real phone and
+              real keyboard the bug was originally seen on. If it
+              reproduces on a real device, treat this structural
+              explanation as wrong, not as "fixed but regressed." */}
           <div className="flex-1 min-h-0 relative">
             <div ref={listRef} className="h-full overflow-y-auto overscroll-contain">
               <div ref={contentRef} className="p-4 flex flex-col gap-3">
