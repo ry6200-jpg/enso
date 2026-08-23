@@ -22,8 +22,8 @@
  * and releases the per-user lock — every call, no connection survives
  * across requests. See src/storage/userSession.ts for the full sequence
  * and src/storage/userStorageBackend.ts for the backend contract
- * (LocalStorageBackend today; GcsStorageBackend is written but not wired
- * in until the deployment batch).
+ * (LocalStorageBackend for local dev/every test; GcsStorageBackend when
+ * GCS_BUCKET_NAME is set — see getStorageBackend below).
  *
  * This replaces the getStores(uid)/getBlobStore(uid) pair that used to
  * cache one open connection set per uid on globalThis forever — that
@@ -66,6 +66,7 @@ import { DailyContentCache } from "../src/zodiac/dailyContentCache.js";
 import { getUserDataPaths, wipeUserDirectory } from "../src/storage/userDataPaths.js";
 import { withUserSession, type UserSessionStores } from "../src/storage/userSession.js";
 import { LocalStorageBackend } from "../src/storage/localStorageBackend.js";
+import { GcsStorageBackend } from "../src/storage/gcsStorageBackend.js";
 import type { UserStorageBackend } from "../src/storage/userStorageBackend.js";
 
 // Not import.meta.dirname: webpack's bundling of API routes doesn't
@@ -118,13 +119,20 @@ function ensureDevDataDir(): void {
 }
 
 /**
- * Deployment seam: still local per this batch's scope (no Dockerfile, no
- * gcloud). Swapping to GcsStorageBackend at deployment is a one-line
- * change here — everything above it (runUserSession, every route) is
- * written against the UserStorageBackend interface, not this concrete
- * class, so nothing else needs to change.
+ * Deployment seam: GCS_BUCKET_NAME set (Cloud Run, Stage 2/3 of the
+ * deployment batch) switches to GcsStorageBackend against that bucket;
+ * unset (local dev, every test) keeps LocalStorageBackend against
+ * DEV_DATA_DIR. Everything above this function (runUserSession, every
+ * route) is written against the UserStorageBackend interface, not either
+ * concrete class, so nothing else needs to change either way. Not cached
+ * on globalThis — construction is cheap (no network call happens until a
+ * caller actually downloads/uploads/locks), matching LocalStorageBackend's
+ * existing per-call construction rather than adding a new cached field's
+ * worth of HMR-staleness surface for no real benefit.
  */
 function getStorageBackend(): UserStorageBackend {
+  const bucketName = process.env.GCS_BUCKET_NAME;
+  if (bucketName) return new GcsStorageBackend(bucketName);
   return new LocalStorageBackend(DEV_DATA_DIR);
 }
 
