@@ -390,6 +390,7 @@ export function rebuildProjections(
     for (const attr of payload.attributes ?? []) {
       const entityId = resolveName(attr.entityName, event.id, extractorVersion, [payload.sourceEventId, event.id]);
       const row = assertAttribute(projections, userId, entityId, attr.attribute, attr.value, [payload.sourceEventId, event.id]);
+      if (!row) continue; // rejected at write time (assertAttribute already logged loudly) — nothing to record a perception-log entry against
       projections.insertPerceptionLog({
         id: newId(),
         user_id: userId,

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { EventLog } from "../src/events/eventLog.js";
 import { ProjectionsDb } from "../src/projections/db.js";
 import { primaryEntityId, rebuildProjections } from "../src/projections/rebuild.js";
-import { getCurrentAttribute, resolveAttribute, resolveEntityAttribute, type ResolvedAttribute } from "../src/perception/attributes.js";
+import { assertAttribute, getCurrentAttribute, resolveAttribute, resolveEntityAttribute, type ResolvedAttribute } from "../src/perception/attributes.js";
 import { getPrimaryUserBirthdate, getPrimaryUserAttribute } from "../src/projections/peopleView.js";
 import { getChineseZodiacSign, getWesternZodiacSign } from "../src/zodiac/zodiac.js";
 import type { EntityAttributeRow } from "../src/projections/db.js";
@@ -147,5 +147,54 @@ describe("real-failure replay: the exact dev-data scenario (R36/R37)", () => {
     rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
 
     expect(getPrimaryUserAttribute(projections, PRIMARY_USER_ID, "location")).toBe("Seattle");
+  });
+});
+
+describe("assertAttribute — write-time tier (item 5b), deliberately different from read-time", () => {
+  let db: ProjectionsDb;
+  const entityId = primaryEntityId(PRIMARY_USER_ID);
+
+  beforeEach(() => {
+    db = new ProjectionsDb(freshTestDbPath(import.meta.url, "write-time"));
+  });
+
+  it("rejects a bare name as a birthdate at write time — the real, live, confirmed failure — and never writes the row", () => {
+    const result = assertAttribute(db, PRIMARY_USER_ID, entityId, "birthdate", "Richard", ["ev1"]);
+    expect(result).toBeNull();
+    expect(db.listEntityAttributeHistory(PRIMARY_USER_ID, entityId, "birthdate")).toEqual([]);
+  });
+
+  it("still writes a bare, implausible-but-date-adjacent year as a birthdate — R36/R37's conflict-surfacing design, unaffected", () => {
+    const result = assertAttribute(db, PRIMARY_USER_ID, entityId, "birthdate", "1983", ["ev1"]);
+    expect(result).not.toBeNull();
+    expect(db.listEntityAttributeHistory(PRIMARY_USER_ID, entityId, "birthdate")).toHaveLength(1);
+  });
+
+  it("still writes a partial date containing only a real month name", () => {
+    const result = assertAttribute(db, PRIMARY_USER_ID, entityId, "birthdate", "April 1970", ["ev1"]);
+    expect(result).not.toBeNull();
+  });
+
+  it("rejects a date-shaped value as an occupation at write time — no looser tier for a mutable attribute, nothing worth preserving", () => {
+    const result = assertAttribute(db, PRIMARY_USER_ID, entityId, "occupation", "4/24/1970", ["ev1"]);
+    expect(result).toBeNull();
+    expect(db.listEntityAttributeHistory(PRIMARY_USER_ID, entityId, "occupation")).toEqual([]);
+  });
+
+  it("rejects a date-shaped value as a location at write time, same strictness as occupation", () => {
+    const result = assertAttribute(db, PRIMARY_USER_ID, entityId, "location", "1970-04-24", ["ev1"]);
+    expect(result).toBeNull();
+  });
+
+  it("still writes an ordinary occupation value", () => {
+    const result = assertAttribute(db, PRIMARY_USER_ID, entityId, "occupation", "Software engineer", ["ev1"]);
+    expect(result).not.toBeNull();
+    expect(db.listEntityAttributeHistory(PRIMARY_USER_ID, entityId, "occupation")).toHaveLength(1);
+  });
+
+  it("still writes a fully valid birthdate", () => {
+    const result = assertAttribute(db, PRIMARY_USER_ID, entityId, "birthdate", "4/24/1970", ["ev1"]);
+    expect(result).not.toBeNull();
+    expect(result!.value).toBe("4/24/1970");
   });
 });

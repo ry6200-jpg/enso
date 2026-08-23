@@ -75,7 +75,7 @@ export type WesternZodiacSign = (typeof WESTERN_ZODIAC_SIGNS)[number];
  * asserted" can ever mean in practice, so it has to keep pace with how
  * people actually say dates, not just how they type them.
  */
-const MONTH_NAMES: Record<string, number> = {
+export const MONTH_NAMES: Record<string, number> = {
   jan: 1, january: 1,
   feb: 2, february: 2,
   mar: 3, march: 3,

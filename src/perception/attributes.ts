@@ -1,6 +1,34 @@
 import { newId } from "../ids.js";
 import type { EntityAttributeRow, ProjectionsDb } from "../projections/db.js";
-import { parseIsoDate } from "../zodiac/zodiac.js";
+import { MONTH_NAMES, parseIsoDate } from "../zodiac/zodiac.js";
+
+/**
+ * TWO DELIBERATELY DIFFERENT TIERS — ambient/register/zodiac batch, item
+ * 5(b), read this before touching either isValidAttributeValue or
+ * isPlausibleWriteTimeValue below. They answer two different questions
+ * and must NEVER be collapsed into one check:
+ *
+ *   - isValidAttributeValue (READ-TIME): "is this the attribute's CURRENT
+ *     value?" — strict, unchanged. resolveAttribute uses this to decide
+ *     what's authoritative and what merely CONFLICTS with it.
+ *   - isPlausibleWriteTimeValue (WRITE-TIME, below): "is this even worth
+ *     recording as a candidate at all?" — deliberately looser for
+ *     birthdate specifically. A real, deliberately-tested design decision
+ *     (tests/attributeResolution.test.ts's R36/R37 replay) keeps an
+ *     implausible-but-DATE-SHAPED birthdate (a bare year like "1983",
+ *     really misextracted answering "what year did you turn 13?") written
+ *     to storage precisely so resolveAttribute's `conflicting` field can
+ *     surface it — Enso or the owner can then see the discrepancy and
+ *     resolve it, instead of that evidence being silently discarded.
+ *     Only a value that isn't even ATTEMPTING to be a date — contains a
+ *     word that isn't a month name, the real, live, confirmed failure was
+ *     "Richard" landing as a birthdate — gets rejected at write time.
+ *     location/occupation have no such conflict-surfacing benefit (see
+ *     ATTRIBUTE_MUTABILITY below: only an IMMUTABLE attribute's
+ *     `conflicting` field is ever populated) — an invalid value there is
+ *     pure clutter with nothing to preserve, so write-time rejection for
+ *     those two stays exactly as strict as read-time, no loosening at all.
+ */
 
 /**
  * Third-party attribute persistence (EN-015): attributes stated about
@@ -8,6 +36,19 @@ import { parseIsoDate } from "../zodiac/zodiac.js";
  * regression this exists to prevent forever. Never updated in place: each
  * assertion is a new row, so "what did I used to believe her birthdate
  * was" stays answerable (EN-017's versioning philosophy applied here too).
+ *
+ * WRITE-TIME validation (item 5b), not just read-time. Real production
+ * evidence showed the extractor can bind a reply to whatever question was
+ * pending rather than to what the reply actually says — a name landing as
+ * a "birthdate" value, a date landing as an "occupation" value. A prompt
+ * guard is probabilistic (extensively verified against real API calls
+ * this same investigation — even a narrow, carefully-tuned one only
+ * partially holds); this check is structural: it doesn't matter WHY the
+ * extractor got it wrong, only THAT the resulting value doesn't even
+ * plausibly fit the claimed attribute's shape. A rejected value is never
+ * written at all, and the rejection is logged loudly (not a silent skip)
+ * so corruption is visible in the moment, not discovered weeks later by
+ * inspecting the database directly.
  */
 export function assertAttribute(
   projections: ProjectionsDb,
@@ -16,7 +57,14 @@ export function assertAttribute(
   attribute: EntityAttributeRow["attribute"],
   value: string,
   sourceEventIds: string[]
-): EntityAttributeRow {
+): EntityAttributeRow | null {
+  if (!isPlausibleWriteTimeValue(attribute, value)) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `assertAttribute: rejected implausible ${attribute} value ${JSON.stringify(value)} for entity ${entityId} (user ${userId}) — never written to entity_attributes. Source events: ${JSON.stringify(sourceEventIds)}.`
+    );
+    return null;
+  }
   const row: EntityAttributeRow = {
     id: newId(),
     user_id: userId,
@@ -53,10 +101,52 @@ export const ATTRIBUTE_MUTABILITY: Record<EntityAttributeRow["attribute"], Attri
   occupation: "mutable"
 };
 
-/** Format validation, birthdate only — location/occupation are free text with no fixed shape. Reuses zodiac.ts's parseIsoDate rather than a second date parser. */
-function isValidAttributeValue(attribute: EntityAttributeRow["attribute"], value: string): boolean {
+/**
+ * READ-TIME tier. Exported (was private) so resolveAttribute's read-time
+ * filter below and isPlausibleWriteTimeValue's own strict path (for
+ * location/occupation, and as the always-accept fast path for birthdate)
+ * both call the exact same check — one definition of "a genuinely valid,
+ * resolvable value," never two that could drift apart. This is STRICTER
+ * than write-time for birthdate specifically — see the two-tier comment
+ * at the top of this file for why they must stay different.
+ *
+ * birthdate must actually parse as a date (zodiac.ts's parseIsoDate,
+ * reused rather than a second date parser). location/occupation are free
+ * text with no fixed shape of their own, but a real place or job title is
+ * never JUST a bare date — the confirmed live failure was a date-shaped
+ * value ("4/24/1970") landing as an occupation purely because that's what
+ * the preceding question asked about. Reusing parseIsoDate's own
+ * detector, inverted, catches this the same structural way regardless of
+ * which attribute the misbinding lands on, without hand-writing a second
+ * pattern that could disagree with what "date-shaped" already means here.
+ */
+export function isValidAttributeValue(attribute: EntityAttributeRow["attribute"], value: string): boolean {
   if (attribute === "birthdate") return parseIsoDate(value) !== null;
-  return true;
+  return parseIsoDate(value) === null;
+}
+
+/**
+ * WRITE-TIME tier — see the two-tier comment at the top of this file.
+ * location/occupation: no conflict-surfacing benefit exists for a mutable
+ * attribute (ATTRIBUTE_MUTABILITY above — only an immutable attribute's
+ * `conflicting` field is ever populated), so write-time rejection here is
+ * exactly as strict as read-time; nothing worth preserving is lost.
+ *
+ * birthdate: a fully valid date always passes, obviously. Otherwise,
+ * reject ONLY when the value contains a word that isn't a recognized
+ * month name — i.e., isn't even attempting to look like a date. A bare
+ * number ("1983") has no such word and passes, so it's still written and
+ * can surface as a conflict via resolveAttribute, per R36/R37's
+ * deliberate, tested design (tests/attributeResolution.test.ts) — do not
+ * change this test's expectations to make this function stricter.
+ * "Richard" — the real, live, confirmed failure — has one, and is
+ * rejected.
+ */
+function isPlausibleWriteTimeValue(attribute: EntityAttributeRow["attribute"], value: string): boolean {
+  if (attribute !== "birthdate") return isValidAttributeValue(attribute, value);
+  if (isValidAttributeValue("birthdate", value)) return true;
+  const words = value.toLowerCase().match(/[a-z]+/g) ?? [];
+  return words.every((word) => word in MONTH_NAMES);
 }
 
 export interface ResolvedAttribute {
