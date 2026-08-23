@@ -9,12 +9,15 @@ export interface ContextBudgets {
   maxRetrievedChars: number;
   /** Max recent conversation turns injected (mirrors the old repo's MAX_HISTORY_TURNS = 6). */
   maxRecentTurns: number;
+  /** Part B (R38): max characters of the always-on self-profile block (src/persona/systemPrompt.ts's buildSelfProfileBlock, called by chatPipeline.ts before assembleContext). Deliberately generous relative to actual content — the profile is bounded by construction (3 attributes, direct bonds only) — but still an explicit, documented cap, never an unbounded block. */
+  maxSelfProfileChars: number;
 }
 
 export const DEFAULT_CONTEXT_BUDGETS: ContextBudgets = {
   maxRetrievedChunks: 8,
   maxRetrievedChars: 6000,
-  maxRecentTurns: 6
+  maxRecentTurns: 6,
+  maxSelfProfileChars: 1000
 };
 
 export interface RetrievalProvenance {
@@ -57,6 +60,13 @@ export interface AssembledContext {
  * `voiceMode` (EN-047/048): natural by default, zen only when the caller
  * (chatPipeline.ts, via src/conversation/voiceMode.ts) decided this turn
  * calls for it — threaded straight through to buildSystemPrompt.
+ *
+ * `selfProfileBlock` (Part B, R38): pre-built by the caller (chatPipeline.ts,
+ * via buildSelfProfile + buildSelfProfileBlock — the same pattern as
+ * `attachmentBlock`) and threaded straight through to buildSystemPrompt.
+ * Its own budget (`maxSelfProfileChars`) is enforced by buildSelfProfileBlock
+ * itself, before this function ever sees the resulting string — not
+ * re-enforced here, same as attachmentBlock has no size cap here either.
  */
 export function assembleContext(
   candidateChunks: ContentChunkRow[],
@@ -65,7 +75,8 @@ export function assembleContext(
   budgets: ContextBudgets = DEFAULT_CONTEXT_BUDGETS,
   gateDirective: string | null = null,
   attachmentBlock: string | null = null,
-  voiceMode: VoiceMode = "natural"
+  voiceMode: VoiceMode = "natural",
+  selfProfileBlock: string | null = null
 ): AssembledContext {
   const countCapped = candidateChunks.slice(0, budgets.maxRetrievedChunks);
   let runningChars = 0;
@@ -84,7 +95,7 @@ export function assembleContext(
     injectedChunks.map((c) => ({ id: c.id, text: c.text, occurredAt: c.occurred_at, recordedAt: c.recorded_at }))
   );
   const recentWindowBlock = buildRecentWindowBlock(injectedTurns);
-  const baseSystemPrompt = buildSystemPrompt(retrievedBlock, recentWindowBlock, attachmentBlock, voiceMode);
+  const baseSystemPrompt = buildSystemPrompt(retrievedBlock, recentWindowBlock, attachmentBlock, voiceMode, selfProfileBlock);
   // EN-071 stage 3: a gate directive, when present, is injected at the END
   // of the system prompt — highest-salience position, named action only.
   const systemPrompt = gateDirective ? `${baseSystemPrompt}\n\n${gateDirective}` : baseSystemPrompt;

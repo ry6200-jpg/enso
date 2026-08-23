@@ -49,6 +49,11 @@ describe("resolveAttribute — pure function (R36/R37: mutability, not format, i
     expect(resolveAttribute(history)!.value).toBe("4/24/1970");
   });
 
+  it("accepts a spelled-out month name, same as zodiac.ts's parser (R38 follow-up, found live: extraction stores a birthdate 'as literally asserted' and a prose sentence produces prose, not ISO)", () => {
+    const history = [row("a", "birthdate", "April 24, 1970")];
+    expect(resolveAttribute(history)!.value).toBe("April 24, 1970");
+  });
+
   it("mutable (location): latest wins, never flagged as a conflict — a real update, not an error", () => {
     const history = [row("a", "location", "Austin"), row("b", "location", "Seattle")];
     const resolved = resolveAttribute(history)!;

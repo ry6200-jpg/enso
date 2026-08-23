@@ -65,6 +65,91 @@ export function getPrimaryUserAttribute(projections: ProjectionsDb, userId: stri
   return resolveEntityAttribute(projections, userId, primaryEntityId(userId), attribute)?.value ?? null;
 }
 
+export interface SelfProfileAttribute {
+  attribute: "birthdate" | "location" | "occupation";
+  value: string;
+  /** Distinct later values that disagree with `value` (R37) — empty for a mutable attribute or when no conflict exists. Never silently dropped: Part B's whole point is surfacing this instead of hiding it. */
+  conflictingValues: string[];
+}
+
+export interface SelfProfileBond {
+  name: string;
+  /** "friend" / "spouse" / "parent" / "mentor" / etc. — already resolved to the label from the OWNER's perspective (e.g. a parent_of atom where the owner is the child renders as "parent", not "parent_of"). */
+  relationship: string;
+}
+
+export interface SelfProfile {
+  attributes: SelfProfileAttribute[];
+  bonds: SelfProfileBond[];
+}
+
+const SELF_PROFILE_ATTRIBUTE_ORDER = ["birthdate", "location", "occupation"] as const;
+
+function structuralAtomRelationshipLabel(type: "parent_of" | "spouse_of" | "sibling_of", ownerIsFromSide: boolean): string {
+  if (type === "spouse_of") return "spouse";
+  if (type === "sibling_of") return "sibling";
+  return ownerIsFromSide ? "child" : "parent"; // parent_of: fromEntityId is the parent, toEntityId is the child
+}
+
+function socialBondRelationshipLabel(type: string, ownerIsFromSide: boolean): string {
+  if (type !== "mentor_of") return type;
+  return ownerIsFromSide ? "mentee" : "mentor"; // mentor_of: fromEntityId is the mentor, toEntityId is the mentee
+}
+
+/**
+ * Part B (R38): the always-on self-profile block's data — what Enso
+ * already knows about the OWNER specifically, resolved through the same
+ * shared resolver (resolveEntityAttribute, R37) every other reader uses,
+ * so this can never disagree with them. This is "THE USER IS THE MOST
+ * IMPORTANT ENTITY" (persona/instructions.ts) made physical: structured
+ * self-knowledge existed in entity_attributes/structural_atoms/
+ * social_bonds all along, but nothing in ordinary conversation ever read
+ * it back — the model relied entirely on hybridSearch resurfacing raw
+ * message text, which a short factual chunk like a bare date structurally
+ * loses (0 on FTS, unlikely to survive the top-N fusion) once a session
+ * has enough other text in it. See src/persona/systemPrompt.ts's
+ * buildSelfProfileBlock for how this renders into the prompt.
+ *
+ * SCOPE LIMIT, deliberate: the owner's own attributes plus DIRECT bonds
+ * only — never third-party entity detail, which is retrieval's job and
+ * would be unbounded over a long relationship. Only OPEN bonds/atoms
+ * (interval_end null) are included — a closed relationship is history,
+ * not a current fact about who the owner is now; that history still lives
+ * in getPeopleView above for anyone who asks about it directly.
+ */
+export function buildSelfProfile(projections: ProjectionsDb, userId: string): SelfProfile {
+  const primary = primaryEntityId(userId);
+
+  const attributes: SelfProfileAttribute[] = [];
+  for (const attribute of SELF_PROFILE_ATTRIBUTE_ORDER) {
+    const resolved = resolveEntityAttribute(projections, userId, primary, attribute);
+    if (!resolved) continue;
+    attributes.push({ attribute, value: resolved.value, conflictingValues: [...new Set(resolved.conflicting.map((r) => r.value))] });
+  }
+
+  const bonds: SelfProfileBond[] = [];
+  for (const atom of projections.listStructuralAtoms(userId)) {
+    if (atom.interval_end) continue;
+    const ownerIsFromSide = atom.from_entity_id === primary;
+    const ownerIsToSide = atom.to_entity_id === primary;
+    if (!ownerIsFromSide && !ownerIsToSide) continue;
+    const other = projections.getEntityById(ownerIsFromSide ? atom.to_entity_id : atom.from_entity_id);
+    if (!other) continue;
+    bonds.push({ name: other.name, relationship: structuralAtomRelationshipLabel(atom.type, ownerIsFromSide) });
+  }
+  for (const bond of projections.listSocialBonds(userId)) {
+    if (bond.interval_end) continue;
+    const ownerIsFromSide = bond.from_entity_id === primary;
+    const ownerIsToSide = bond.to_entity_id === primary;
+    if (!ownerIsFromSide && !ownerIsToSide) continue;
+    const other = projections.getEntityById(ownerIsFromSide ? bond.to_entity_id : bond.from_entity_id);
+    if (!other) continue;
+    bonds.push({ name: other.name, relationship: socialBondRelationshipLabel(bond.type, ownerIsFromSide) });
+  }
+
+  return { attributes, bonds };
+}
+
 export function getPeopleView(eventLog: EventLog, projections: ProjectionsDb, userId: string): PersonView[] {
   const primary = primaryEntityId(userId);
   const entities = projections.listEntities(userId);

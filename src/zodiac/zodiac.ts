@@ -61,13 +61,56 @@ export type WesternZodiacSign = (typeof WESTERN_ZODIAC_SIGNS)[number];
  * validator src/perception/attributes.ts's shared resolveAttribute uses to
  * decide whether a stored birthdate value is well-formed — never a second,
  * separately-maintained date parser that could drift from this one.
+ *
+ * Spelled-out month names (R38 follow-up, found live): Part B's own live
+ * verification test stated a birthdate in an ordinary full sentence ("My
+ * birthday is April 24, 1970") and the extractor stored it — correctly,
+ * per taxonomySchema.ts's "value is the fact as literally asserted" —
+ * exactly as prose, not reformatted to ISO or US slash form. This function
+ * rejected it as malformed, resolveAttribute correctly treated that as "no
+ * valid value on record," and the whole point of R37/R38 (surfacing what's
+ * actually known) silently produced nothing. Since the extraction prompt
+ * deliberately never normalizes what the user typed, this parser is the
+ * only place that can — narrowing its coverage narrows what "as literally
+ * asserted" can ever mean in practice, so it has to keep pace with how
+ * people actually say dates, not just how they type them.
  */
+const MONTH_NAMES: Record<string, number> = {
+  jan: 1, january: 1,
+  feb: 2, february: 2,
+  mar: 3, march: 3,
+  apr: 4, april: 4,
+  may: 5,
+  jun: 6, june: 6,
+  jul: 7, july: 7,
+  aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9,
+  oct: 10, october: 10,
+  nov: 11, november: 11,
+  dec: 12, december: 12
+};
+
 export function parseIsoDate(birthdate: string): { year: number; month: number; day: number } | null {
   const trimmed = birthdate.trim();
   const iso = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (iso) return { year: Number(iso[1]), month: Number(iso[2]), day: Number(iso[3]) };
   const us = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (us) return { year: Number(us[3]), month: Number(us[1]), day: Number(us[2]) };
+
+  // "Month D[,] YYYY" — e.g. "April 24, 1970", "Apr 24 1970", "April 24th, 1970".
+  const monthDayYear = trimmed.match(/^([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$/);
+  if (monthDayYear) {
+    const month = MONTH_NAMES[monthDayYear[1]!.toLowerCase()];
+    if (month) return { year: Number(monthDayYear[3]), month, day: Number(monthDayYear[2]) };
+  }
+
+  // "D Month YYYY" — e.g. "24 April 1970", "24th April, 1970".
+  const dayMonthYear = trimmed.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\.?,?\s+(\d{4})$/);
+  if (dayMonthYear) {
+    const month = MONTH_NAMES[dayMonthYear[2]!.toLowerCase()];
+    if (month) return { year: Number(dayMonthYear[3]), month, day: Number(dayMonthYear[1]) };
+  }
+
   return null;
 }
 

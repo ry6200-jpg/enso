@@ -15,6 +15,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import OpenAI from "openai";
 import { sendMessage, type ReplySentPayload, type SendMessageDeps } from "../src/conversation/chatPipeline.js";
 import { EventLog } from "../src/events/eventLog.js";
+import { ProjectionsDb } from "../src/projections/db.js";
 import { EMBEDDING_DIMENSIONS, type Embedder } from "../src/embeddings/embedder.js";
 import { RetrievalDb } from "../src/retrieval/retrievalDb.js";
 import { createChatRouter, createDefaultChatRouter } from "../src/providers/chatRouter.js";
@@ -56,7 +57,10 @@ function freshDeps(chatRouter: SendMessageDeps["chatRouter"]): SendMessageDeps {
   return {
     eventLog: new EventLog(freshTestDbPath(import.meta.url, "events")),
     retrievalDb: new RetrievalDb(freshTestDbPath(import.meta.url, "retrieval")),
-    projectionsDb: undefined as unknown as SendMessageDeps["projectionsDb"],
+    // Part B (R38): the self-profile block reads projectionsDb unconditionally
+    // now, so this can no longer be the `undefined` stand-in it used to be
+    // when only the router branch touched it.
+    projectionsDb: new ProjectionsDb(freshTestDbPath(import.meta.url, "projections")),
     embedder: unusedEmbedder,
     chatRouter
   };

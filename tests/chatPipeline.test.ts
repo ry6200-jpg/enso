@@ -1,15 +1,19 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { sendMessage, type ReplySentPayload, type SendMessageDeps } from "../src/conversation/chatPipeline.js";
 import { EventLog } from "../src/events/eventLog.js";
+import { ProjectionsDb } from "../src/projections/db.js";
+import { primaryEntityId } from "../src/projections/rebuild.js";
 import { EMBEDDING_DIMENSIONS, type Embedder } from "../src/embeddings/embedder.js";
 import { RetrievalDb } from "../src/retrieval/retrievalDb.js";
 import type { ChatRouter } from "../src/providers/chatRouter.js";
 import type { ChatCallResult } from "../src/providers/chatTypes.js";
+import { newId } from "../src/ids.js";
 import { freshTestDbPath } from "../src/test/dbPath.js";
 import { PRIMARY_USER_ID } from "../src/test/seed.js";
 
 let eventLog: EventLog;
 let retrievalDb: RetrievalDb;
+let projectionsDb: ProjectionsDb;
 let deps: SendMessageDeps;
 
 const CANNED_REPLY: ChatCallResult = {
@@ -40,12 +44,15 @@ const fakeEmbedder: Embedder = {
 beforeEach(() => {
   eventLog = new EventLog(freshTestDbPath(import.meta.url, "events"));
   retrievalDb = new RetrievalDb(freshTestDbPath(import.meta.url, "retrieval"));
+  // Part B (R38): the self-profile block reads projectionsDb unconditionally
+  // on every turn now, so this can no longer be the `undefined` stand-in it
+  // used to be when only the router branch touched it — an empty real
+  // instance (no self-facts on record) is enough for these tests.
+  projectionsDb = new ProjectionsDb(":memory:");
   deps = {
     eventLog,
     retrievalDb,
-    // Not touched: retrievalOverride below skips decideRetrievalInvocation,
-    // and recency mode never calls the embedder.
-    projectionsDb: undefined as unknown as SendMessageDeps["projectionsDb"],
+    projectionsDb,
     embedder: fakeEmbedder,
     chatRouter: fakeChatRouter()
   };
@@ -278,5 +285,60 @@ describe("sendMessage — attachment context reaches the reply (item 8)", () => 
     expect(receivedSystem).not.toContain("Trip itinerary");
     const payload = result.replyEvent.payload as ReplySentPayload;
     expect(payload.attachmentContext).toBeNull();
+  });
+});
+
+describe("sendMessage — self-profile block reaches the prompt (Part B, R38)", () => {
+  it("a known self-fact reaches the actual system prompt sent to the model, and is recorded in contextProvenance", async () => {
+    projectionsDb.insertEntityAttribute({
+      id: newId(),
+      user_id: PRIMARY_USER_ID,
+      entity_id: primaryEntityId(PRIMARY_USER_ID),
+      attribute: "birthdate",
+      value: "1970-04-24",
+      source_event_ids: "[]",
+      created_at: new Date().toISOString()
+    });
+
+    let receivedSystem = "";
+    deps.chatRouter = {
+      async reply(request) {
+        receivedSystem = request.system;
+        return CANNED_REPLY;
+      }
+    };
+
+    const result = await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "what do you know about me?",
+      recentTurns: [],
+      retrievalOverride: { mode: "recency", query: "what do you know about me?", n: 10 }
+    });
+
+    expect(receivedSystem).toContain("=== OWNER PROFILE (begin) ===");
+    expect(receivedSystem).toContain("Birthdate: 1970-04-24");
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.contextProvenance.selfProfile).toEqual({ included: true, attributeCount: 1, bondCount: 0, truncated: false });
+  });
+
+  it("omits the block from the prompt entirely for a genuinely fresh user — no OWNER PROFILE marker at all", async () => {
+    let receivedSystem = "";
+    deps.chatRouter = {
+      async reply(request) {
+        receivedSystem = request.system;
+        return CANNED_REPLY;
+      }
+    };
+
+    const result = await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "hello",
+      recentTurns: [],
+      retrievalOverride: { mode: "recency", query: "hello", n: 10 }
+    });
+
+    expect(receivedSystem).not.toContain("OWNER PROFILE");
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.contextProvenance.selfProfile).toEqual({ included: false, attributeCount: 0, bondCount: 0, truncated: false });
   });
 });

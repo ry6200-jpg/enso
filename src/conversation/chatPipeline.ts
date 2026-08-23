@@ -13,7 +13,8 @@ import { recencyMode } from "../retrieval/recencyMode.js";
 import type { ContentChunkRow, RetrievalDb } from "../retrieval/retrievalDb.js";
 import { assembleContext, DEFAULT_CONTEXT_BUDGETS, type AssembledContext, type ContextBudgets } from "./contextAssembly.js";
 import { decideRetrievalInvocation, type RetrievalInvocation, type RetrievalMode } from "./retrievalInvocation.js";
-import { buildAttachmentContextBlock, type RecentTurnForPrompt, type VoiceMode } from "../persona/systemPrompt.js";
+import { buildAttachmentContextBlock, buildSelfProfileBlock, type RecentTurnForPrompt, type VoiceMode } from "../persona/systemPrompt.js";
+import { buildSelfProfile } from "../projections/peopleView.js";
 import { buildConnectDotDirective, buildCuriosityAskDirective, findCuriosityAskCandidates, isCuriosityTurnEligible, verifyCuriosityAskExecuted } from "./circleBack.js";
 import type { CuriosityAskCandidate } from "./router/routerTypes.js";
 import { buildSelfBirthdateDirective, isSelfBirthdateEligible, verifySelfBirthdateAskExecuted } from "./selfBirthdateGate.js";
@@ -43,6 +44,15 @@ export interface ReplySentPayload {
     recentWindowAvailableTurns: number;
     recentWindowInjectedTurns: number;
     recentWindowTruncated: boolean;
+    /**
+     * Part B (R38): the always-on self-profile block (buildSelfProfile +
+     * buildSelfProfileBlock) is a THIRD context-shaping input alongside
+     * retrieval and the recent window, so it gets the same round-trip
+     * treatment — optional only because events recorded before this field
+     * existed genuinely don't have it, never because it's skippable going
+     * forward.
+     */
+    selfProfile?: { included: boolean; attributeCount: number; bondCount: number; truncated: boolean };
   };
   /**
    * Phase 6 round-trip survival: the router's own decision shaped this
@@ -247,6 +257,13 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   // crashes provider chat APIs").
   const effectiveText = (messageEvent.payload as MessageSentPayload).text;
 
+  // Part B (R38): deterministic, code-computed, never a router decision —
+  // unlike retrieval/gates below, this doesn't branch on deps.intentRouter
+  // or input.retrievalOverride, so every path (router, no-router fallback,
+  // test override) gets the same always-on self-profile block.
+  const selfProfile = buildSelfProfile(deps.projectionsDb, input.userId);
+  const selfProfileResult = buildSelfProfileBlock(selfProfile, (input.budgets ?? DEFAULT_CONTEXT_BUDGETS).maxSelfProfileChars);
+
   let invocation: RetrievalInvocation;
   let routerResult: RouterResult | null = null;
   let claims: ReturnType<typeof recentAttributeClaims> = [];
@@ -329,7 +346,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     input.budgets ?? DEFAULT_CONTEXT_BUDGETS,
     gateDirective,
     attachmentBlock,
-    voiceMode
+    voiceMode,
+    selfProfileResult.block
   );
 
   const callResult = await deps.chatRouter.reply({ system: assembled.systemPrompt, history: [], latestMessage: effectiveText });
@@ -361,7 +379,13 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       retrievalTruncated: assembled.retrieval.truncated,
       recentWindowAvailableTurns: assembled.recentWindow.availableTurns,
       recentWindowInjectedTurns: assembled.recentWindow.injectedTurns,
-      recentWindowTruncated: assembled.recentWindow.truncated
+      recentWindowTruncated: assembled.recentWindow.truncated,
+      selfProfile: {
+        included: selfProfileResult.block !== null,
+        attributeCount: selfProfileResult.attributeCount,
+        bondCount: selfProfileResult.bondCount,
+        truncated: selfProfileResult.truncated
+      }
     },
     router: {
       used: routerResult !== null,
