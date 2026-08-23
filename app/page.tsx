@@ -391,10 +391,19 @@ export default function Page() {
   // skipping the reset would let scrollHeight only ever grow (it reflects
   // whatever height was last set, never shrinks itself), which is exactly
   // why deleting text back down wouldn't un-grow the box without this.
-  // CSS alone (max-h-[156px] + overflow-y-auto on the element, ~6 lines)
-  // caps how tall this can actually render and switches to internal
-  // scrolling past that — this effect never needs to know that cap itself,
-  // it can request any height and the box just won't grow past it.
+  // CSS alone (max-h-[10.619rem] + overflow-y-auto on the element, ~6
+  // lines at this textarea's own font-size/line-height/padding/border —
+  // font-size batch: 1.0625rem*1.45=1.540625rem/line * 6 = 9.24375rem,
+  // + py-2.5's 1.25rem padding, + 0.125rem for the 1px top/bottom border
+  // = 10.61875rem, rounded — see the textarea's own className for the
+  // matching font-size/line-height this was computed from; if either
+  // changes, this needs recomputing too) caps how tall this can actually
+  // render and switches to internal scrolling past that — this effect
+  // never needs to know that cap itself, it can request any height and
+  // the box just won't grow past it. In rem, not px, like the font-size
+  // it's derived from — a px cap would silently claw back the ~6-line
+  // promise the moment the user's system font size is larger than
+  // default, capping at fewer visible lines than intended.
   // Keyed on `input`, not wired into onChange directly: this also handles
   // the non-typing case where input is cleared programmatically after
   // send, correctly shrinking the box back down.
@@ -640,7 +649,7 @@ export default function Page() {
       <header className="shrink-0 h-14 flex items-center gap-3 px-4 border-b border-stone-200">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/assets/enso-mark.png" alt="" className="w-8 h-8" />
-        <span className="text-[17px] font-bold tracking-wide" style={{ color: "var(--enso-ink)" }}>
+        <span className="text-[1.0625rem] font-bold tracking-wide" style={{ color: "var(--enso-ink)" }}>
           Enso
         </span>
 
@@ -752,12 +761,21 @@ export default function Page() {
                 {messages.map((m) => (
                   <div
                     key={m.id}
-                    className={`max-w-lg rounded-lg px-4 py-3 text-base leading-[1.4] whitespace-pre-wrap ${
+                    className={`max-w-lg rounded-lg px-4 py-3 text-[1.0625rem] leading-[1.45] whitespace-pre-wrap ${
                       m.role === "user" ? "self-end text-white" : "self-start bg-white border border-stone-200"
                     }`}
                     style={m.role === "user" ? { backgroundColor: "var(--enso-red)", color: "#faf7f2" } : { color: "var(--enso-ink)" }}
                   >
-                    {m.filename && <div className="text-xs opacity-80 mb-1">Attached: {m.filename}</div>}
+                    {/* Secondary text, scaled proportionally to the 17px
+                        body above (0.75rem was proportional to the old
+                        16px body — 0.75 * 17/16 ≈ 0.8rem keeps the same
+                        relative weight against the new size, not just an
+                        unscaled leftover). No explicit leading override:
+                        a unitless line-height (leading-[1.45] above) is
+                        inherited as the RATIO, not the computed pixel
+                        value, so this recomputes correctly against its
+                        own smaller font-size automatically. */}
+                    {m.filename && <div className="text-[0.8rem] opacity-80 mb-1">Attached: {m.filename}</div>}
                     {m.text}
                   </div>
                 ))}
@@ -821,7 +839,7 @@ export default function Page() {
                 disabled={sending}
                 placeholder={isNarrowScreen ? "Message Enso..." : "Tell Enso what's on your mind... (Enter to send, Shift+Enter for a new line)"}
                 rows={1}
-                className="flex-1 min-w-0 min-h-11 max-h-[156px] resize-none rounded-xl px-3 py-2.5 text-base leading-[1.4] bg-white border border-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-300 disabled:opacity-50 overflow-y-auto"
+                className="flex-1 min-w-0 min-h-11 max-h-[10.619rem] resize-none rounded-xl px-3 py-2.5 text-[1.0625rem] leading-[1.45] bg-white border border-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-300 disabled:opacity-50 overflow-y-auto"
               />
               <button
                 type="submit"
