@@ -563,7 +563,7 @@ export default function Page() {
             {messages.map((m) => (
               <div
                 key={m.id}
-                className={`max-w-lg rounded-lg px-4 py-3 text-base whitespace-pre-wrap ${
+                className={`max-w-lg rounded-lg px-4 py-3 text-base leading-[1.4] whitespace-pre-wrap ${
                   m.role === "user" ? "self-end text-white" : "self-start bg-white border border-stone-200"
                 }`}
                 style={m.role === "user" ? { backgroundColor: "var(--enso-red)", color: "#faf7f2" } : { color: "var(--enso-ink)" }}
@@ -580,8 +580,8 @@ export default function Page() {
               e.preventDefault();
               void sendMessage();
             }}
-            className="shrink-0 flex flex-col gap-2 p-4 border-t border-stone-200"
-            style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
+            className="shrink-0 flex flex-col gap-1.5 px-3 py-2 border-t border-stone-200"
+            style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
           >
             {pendingFile && (
               <div className="flex items-center gap-2 text-sm text-stone-600 bg-stone-100 border border-stone-300 rounded-lg px-3 py-1.5 w-fit">
@@ -591,14 +591,18 @@ export default function Page() {
                 </button>
               </div>
             )}
-            <div className="flex items-stretch gap-3">
+            {/* items-end (not items-stretch): the attachment/Send buttons
+                are fixed ~44px tap targets that stay bottom-aligned as the
+                textarea grows (next commit) — they must never stretch to
+                match its height or vertically re-center mid-growth. */}
+            <div className="flex items-end gap-2">
               <input ref={fileInputRef} type="file" onChange={handleFileChange} className="hidden" id="attachment-input" />
               <label
                 htmlFor="attachment-input"
-                className="shrink-0 w-14 h-28 flex items-center justify-center cursor-pointer rounded-xl bg-stone-100 border border-stone-300 text-stone-600 hover:bg-stone-200"
+                className="shrink-0 w-11 h-11 flex items-center justify-center cursor-pointer rounded-xl bg-stone-100 border border-stone-300 text-stone-600 hover:bg-stone-200"
                 title="Attach a file"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
                 </svg>
               </label>
@@ -610,13 +614,13 @@ export default function Page() {
                 onKeyDown={handleKeyDown}
                 disabled={sending}
                 placeholder={isNarrowScreen ? "Message Enso..." : "Tell Enso what's on your mind... (Enter to send, Shift+Enter for a new line)"}
-                rows={4}
-                className="flex-1 min-w-0 h-28 resize-none rounded-xl px-4 py-3 text-base bg-white border border-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-300 disabled:opacity-50 overflow-y-auto"
+                rows={1}
+                className="flex-1 min-w-0 min-h-11 resize-none rounded-xl px-3 py-2.5 text-base leading-[1.4] bg-white border border-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-300 disabled:opacity-50 overflow-y-auto"
               />
               <button
                 type="submit"
                 disabled={sending || (!input.trim() && !pendingFile)}
-                className="shrink-0 h-28 rounded-xl text-white px-6 text-base font-medium disabled:opacity-50 hover:opacity-90"
+                className="shrink-0 h-11 rounded-xl text-white px-5 text-base font-medium disabled:opacity-50 hover:opacity-90"
                 style={{ backgroundColor: "var(--enso-red)" }}
               >
                 Send
@@ -634,7 +638,7 @@ export default function Page() {
       </div>
 
       {attachmentStatus && (
-        <div className="fixed bottom-28 left-4 max-w-sm rounded-lg bg-stone-800 text-white text-xs px-3 py-2 shadow-lg z-10">
+        <div className="fixed bottom-20 left-4 max-w-sm rounded-lg bg-stone-800 text-white text-xs px-3 py-2 shadow-lg z-10">
           {attachmentStatus.filename}: {attachmentStatus.extractionSucceeded ? "extraction succeeded" : `extraction failed — ${attachmentStatus.extractionError}`}
         </div>
       )}
