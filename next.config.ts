@@ -1,6 +1,15 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Cloud Run batch: produces .next/standalone — a self-contained
+  // server.js plus a file-traced node_modules subset — so the runtime
+  // Docker stage doesn't need the full dev node_modules tree (typescript,
+  // tailwind, vitest, etc. never ship). serverExternalPackages below are
+  // real `require`s Next.js's tracer follows, not bundled — the Dockerfile
+  // still defensively copies their native binaries on top of the traced
+  // output, since file tracing has known gaps with prebuilt .node files
+  // (see Dockerfile's comment on this).
+  output: "standalone",
   // The app calls into src/ (better-sqlite3, @huggingface/transformers,
   // local embeddings) directly from API routes — same pipeline the REPL
   // uses (scripts/chat.ts), never re-implemented. Those packages are
