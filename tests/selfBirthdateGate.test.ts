@@ -48,9 +48,37 @@ describe("isSelfBirthdateEligible (item 1: self-entity establishment)", () => {
     expect(isSelfBirthdateEligible(eventLog, projections, PRIMARY_USER_ID, "what do you think about that?")).toBe(false);
   });
 
-  it("is NOT eligible once MAX_SELF_BIRTHDATE_ATTEMPTS has already fired — a one-shot ask, not a repeatable gate", () => {
-    expect(MAX_SELF_BIRTHDATE_ATTEMPTS).toBe(1);
+  it("is STILL eligible after exactly one prior attempt that never landed a valid birthdate (item 4 #1) — a real dead end otherwise", () => {
+    // Real, confirmed production scenario: the gate fired once, the
+    // owner's answer got misbound to the wrong attribute (or wasn't
+    // recognized at all), and no valid birthdate ever resulted — a bare
+    // reply_sent.gateActions.selfBirthdateAskFired count on its own can't
+    // tell the difference between "asked and got a valid answer" and
+    // "asked and got nothing usable"; getPrimaryUserBirthdate returning
+    // null is what actually carries that signal, and this eligibility
+    // check already consults it BEFORE the attempt-count budget below.
+    expect(MAX_SELF_BIRTHDATE_ATTEMPTS).toBe(2);
     appendSelfBirthdateFiredReply();
+    expect(isSelfBirthdateEligible(eventLog, projections, PRIMARY_USER_ID, "another update")).toBe(true);
+  });
+
+  it("is NOT eligible once MAX_SELF_BIRTHDATE_ATTEMPTS (2) has been reached — a bounded retry, not an unlimited gate", () => {
+    appendSelfBirthdateFiredReply();
+    appendSelfBirthdateFiredReply();
+    expect(isSelfBirthdateEligible(eventLog, projections, PRIMARY_USER_ID, "another update")).toBe(false);
+  });
+
+  it("is NOT eligible for a second attempt once the first one DID land a valid birthdate, even though the budget allows two", () => {
+    appendSelfBirthdateFiredReply();
+    projections.insertEntityAttribute({
+      id: newId(),
+      user_id: PRIMARY_USER_ID,
+      entity_id: primaryEntityId(PRIMARY_USER_ID),
+      attribute: "birthdate",
+      value: "1970-04-24",
+      source_event_ids: JSON.stringify(["x"]),
+      created_at: new Date().toISOString()
+    });
     expect(isSelfBirthdateEligible(eventLog, projections, PRIMARY_USER_ID, "another update")).toBe(false);
   });
 });

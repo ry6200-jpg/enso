@@ -25,12 +25,35 @@ import type { ReplySentPayload } from "./chatPipeline.js";
  * standing, board-scoped priority ("we don't know the owner's birthdate
  * yet"), not a nuanced per-turn call worth a new LIVE-validated router
  * flag (EN-075's N=20 confusion-matrix bar) for what is fundamentally a
- * single fact this account will only ever need to ask about once.
+ * single fact this account will normally only ever need to ask about
+ * once — see MAX_SELF_BIRTHDATE_ATTEMPTS below for the one exception.
  *
  * State is derived the same way circle-back derives its own state — a
  * scan of reply_sent.gateActions, never a new event type.
+ *
+ * Ambient/register/zodiac batch, item 4 #1: a real, confirmed production
+ * dead end — the gate fired once, the owner's actual answer got misbound
+ * to the wrong attribute (write-time validation, item 5, now prevents
+ * this going forward but doesn't repair what already happened), and the
+ * gate then never asked again because its one-shot budget was already
+ * spent — regardless of whether that one attempt actually landed a valid
+ * birthdate. Two later unprompted restatements ("4/24/1970" typed bare,
+ * with no birthday-relevant question immediately before it) both
+ * extracted nothing at all, confirmed by reading the real extraction
+ * events directly: a bare fragment with no adjacent conversational anchor
+ * isn't reliably recognized, so there was no path back to a valid value
+ * without the gate asking again.
+ *
+ * MAX_SELF_BIRTHDATE_ATTEMPTS is now 2, but this is NOT "just ask twice
+ * unconditionally" — isSelfBirthdateEligible below already checks
+ * getPrimaryUserBirthdate(...) FIRST and returns false immediately once a
+ * VALID birthdate exists, before this budget is ever consulted. That
+ * means the second attempt is only ever reachable when the first one did
+ * NOT land a valid value — this constant just widens the existing,
+ * already-conditional budget from 1 to 2; it does not change what makes a
+ * second ask eligible.
  */
-export const MAX_SELF_BIRTHDATE_ATTEMPTS = 1;
+export const MAX_SELF_BIRTHDATE_ATTEMPTS = 2;
 
 function selfBirthdateAttemptCount(eventLog: EventLog, userId: string): number {
   let count = 0;
