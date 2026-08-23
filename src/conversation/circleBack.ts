@@ -7,6 +7,7 @@ import type { CircleBackCandidate, CuriosityAskCandidate } from "./router/router
 import type { RecentTurnForPrompt } from "../persona/systemPrompt.js";
 import type { ReplySentPayload } from "./chatPipeline.js";
 import { buildElicitationDirective, findElicitationCandidate, justOpenedUpFromElicitation, verifyElicitationExecuted } from "./elicitation.js";
+import { buildEntityDensityByMessageId, buildMessageTextById, computeInterestScore, rankByInterestWithRotation, recentlyFiredStableKeys } from "./entityInterest.js";
 
 /**
  * Circle-back gate (EN-030/070-073), ported from the old repo's
@@ -176,10 +177,15 @@ export function findEligibleCircleBackCandidates(eventLog: EventLog, projections
     attemptTurnIndex.set(h.stableKey, Math.max(attemptTurnIndex.get(h.stableKey) ?? -1, h.turnIndex));
   }
 
-  const fresh: CircleBackCandidate[] = [];
-  const retries: CircleBackCandidate[] = [];
+  type ScoredCandidate = CircleBackCandidate & { returnScore: number; elaborationScore: number };
+  const fresh: ScoredCandidate[] = [];
+  const retries: ScoredCandidate[] = [];
 
-  for (const entity of projections.listEntities(userId)) {
+  const allEntities = projections.listEntities(userId);
+  const entityDensityByMessageId = buildEntityDensityByMessageId(allEntities.map((e) => JSON.parse(e.source_event_ids) as string[]));
+  const messageTextById = buildMessageTextById(userTurns);
+
+  for (const entity of allEntities) {
     if (isEstablished(projections, userId, entity.id)) continue;
 
     const sourceIds = (JSON.parse(entity.source_event_ids) as string[]).slice().sort();
@@ -191,7 +197,16 @@ export function findEligibleCircleBackCandidates(eventLog: EventLog, projections
 
     const earliestEvent = eventLog.getById(earliestId);
     const ageLabel = earliestEvent ? mentionAgeLabel(earliestEvent.recordedAt) : "a while back";
-    const candidate: CircleBackCandidate = { entityId: entity.id, name: entity.name, attemptNumber: (attemptsSoFar + 1) as 1 | 2, mentionAgeLabel: ageLabel, stableKey: earliestId };
+    const interest = computeInterestScore(earliestId, sourceIds, turnIndexByMessageId, messageTextById, entityDensityByMessageId);
+    const candidate: ScoredCandidate = {
+      entityId: entity.id,
+      name: entity.name,
+      attemptNumber: (attemptsSoFar + 1) as 1 | 2,
+      mentionAgeLabel: ageLabel,
+      stableKey: earliestId,
+      returnScore: interest.returnScore,
+      elaborationScore: interest.elaborationScore
+    };
 
     if (attemptsSoFar === 0) {
       // First attempt: still subject to the recency window.
@@ -206,7 +221,12 @@ export function findEligibleCircleBackCandidates(eventLog: EventLog, projections
     }
   }
 
-  return fresh.length > 0 ? fresh : retries;
+  // WEIGHTING (return/elaboration over list-arrival) then ROTATION (a just-asked entity yields the floor
+  // for the next few selections regardless of score) — never kinship distance or structural relation type,
+  // deliberately: see this file's own header comment and entityInterest.ts for why.
+  const recentThirdPartyFires = recentlyFiredStableKeys(history);
+  const ranked = fresh.length > 0 ? fresh : retries;
+  return rankByInterestWithRotation(ranked, recentThirdPartyFires).map(({ returnScore: _returnScore, elaborationScore: _elaborationScore, ...candidate }) => candidate);
 }
 
 /**

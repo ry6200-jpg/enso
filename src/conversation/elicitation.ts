@@ -7,6 +7,7 @@ import type { RecentTurnForPrompt } from "../persona/systemPrompt.js";
 import type { ElicitationCandidate, ElicitationLayer1ProbeType, ElicitationLayer3ProbeType } from "./router/routerTypes.js";
 import type { ReplySentPayload } from "./chatPipeline.js";
 import type { MessageExtractionCompletedPayload } from "../extraction/resilientExtraction.js";
+import { buildEntityDensityByMessageId, buildMessageTextById, computeInterestScore, rankByInterestWithRotation, recentlyFiredStableKeys } from "./entityInterest.js";
 
 /**
  * ============================================================================
@@ -204,23 +205,43 @@ function findLayer1Candidate(eventLog: EventLog, userId: string): ElicitationCan
  * engaged. This is the identical bug class CircleBackCandidate's own doc
  * comment already names as fixed once in circleBack.ts; it had never been
  * applied here.
+ *
+ * BREADTH-BEFORE-DEPTH (see entityInterest.ts): even with R44's cap
+ * correctly engaged, ordering anchors by "most recently mentioned" alone
+ * let one live, correctly-top-ranked anchor monopolize every Layer 3
+ * selection — six probe types exhausted on the same person before any
+ * other established anchor got a turn, the live-caught failure this
+ * batch fixes. Anchors are now ranked by return/elaboration interest
+ * (never kinship distance — see entityInterest.ts), then any anchor asked
+ * about (any probe type) within the last few selections is moved to the
+ * back regardless of score — a correctly top-ranked thread still yields
+ * the floor.
  */
 export function findLayer3Candidate(eventLog: EventLog, projections: ProjectionsDb, userId: string): ElicitationCandidate | null {
   const userTurns = userMessageTurns(eventLog, userId);
   const history = firedElicitationHistory(eventLog, userId, userTurns);
-  const askedPairs = new Set(history.filter((h) => h.layer === 3).map((h) => `${h.anchorStableKey}:${h.probeType}`));
+  const layer3History = history.filter((h) => h.layer === 3);
+  const askedPairs = new Set(layer3History.map((h) => `${h.anchorStableKey}:${h.probeType}`));
+  const recentAnchors = recentlyFiredStableKeys(layer3History.filter((h) => h.anchorStableKey !== undefined).map((h) => ({ stableKey: h.anchorStableKey!, turnIndex: h.turnIndex })));
 
-  const anchors = projections
-    .listEntities(userId)
+  const turnIndexByMessageId = new Map(userTurns.map((t, i) => [t.id, i]));
+  const allEntities = projections.listEntities(userId);
+  const entityDensityByMessageId = buildEntityDensityByMessageId(allEntities.map((e) => JSON.parse(e.source_event_ids) as string[]));
+  const messageTextById = buildMessageTextById(userTurns);
+
+  const anchors = allEntities
     .filter((e) => isEstablished(projections, userId, e.id))
     .map((e) => {
       const sourceIds = (JSON.parse(e.source_event_ids) as string[]).slice().sort();
-      return { entity: e, stableKey: sourceIds[0] ?? "", mostRecentSourceId: sourceIds[sourceIds.length - 1] ?? "" };
+      const stableKey = sourceIds[0] ?? "";
+      const interest = computeInterestScore(stableKey, sourceIds, turnIndexByMessageId, messageTextById, entityDensityByMessageId);
+      return { entity: e, stableKey, returnScore: interest.returnScore, elaborationScore: interest.elaborationScore };
     })
-    .filter((a) => a.stableKey !== "") // no provenance at all — nothing to key attempts on
-    .sort((a, b) => (a.mostRecentSourceId < b.mostRecentSourceId ? 1 : -1)); // most-recently-mentioned first
+    .filter((a) => a.stableKey !== ""); // no provenance at all — nothing to key attempts on
 
-  for (const { entity, stableKey } of anchors) {
+  const rankedAnchors = rankByInterestWithRotation(anchors, recentAnchors);
+
+  for (const { entity, stableKey } of rankedAnchors) {
     for (const probeType of LAYER3_PROBE_TYPES) {
       if (askedPairs.has(`${stableKey}:${probeType}`)) continue;
       return { kind: "elicitation", layer: 3, probeType, anchorEntityId: entity.id, anchorName: entity.name, anchorStableKey: stableKey };

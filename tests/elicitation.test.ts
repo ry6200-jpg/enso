@@ -155,6 +155,29 @@ describe("EN-097 acceptance fixture: anchor exists -> Layer 3 available; no anch
   });
 });
 
+describe("Candidate rotation and weighting (breadth-before-depth batch, item 3)", () => {
+  it("rotation: an anchor just asked about (any probe type) yields the floor even though it would otherwise still win on recency alone", () => {
+    // Elena established FIRST — under the old "most-recently-mentioned wins" rule alone, she'd rank behind Marcus below.
+    const msgElena = userTurn("My friend Elena and I grabbed coffee yesterday.");
+    const elenaId = insertEntity("Elena", [msgElena.id]);
+    establishAsFriend(elenaId);
+
+    // Marcus established SECOND, and is the same live shape as the real bug: just asked about (howMet fired),
+    // yet remains the "most recently mentioned" anchor — the exact condition that let one anchor monopolize every
+    // Layer 3 selection before this fix, since recency alone would keep re-selecting him regardless of the ask.
+    const msgMarcus = userTurn("My friend Marcus helped me move a couch.");
+    const marcusId = insertEntity("Marcus", [msgMarcus.id]);
+    establishAsFriend(marcusId);
+    const askTurn = userTurn("filler turn between the ask and the next selection");
+    recordReply(askTurn.id, { elicitationFired: { layer: 3, probeType: "howMet", anchorEntityId: marcusId, anchorStableKey: msgMarcus.id } });
+
+    const next = findLayer3Candidate(eventLog, projections, PRIMARY_USER_ID);
+
+    expect(next?.layer).toBe(3);
+    expect(next && next.layer === 3 ? next.anchorName : null).toBe("Elena");
+  });
+});
+
 describe("R44: Layer 3's attempt cap keys on the anchor's stable id, not the ephemeral projection entityId", () => {
   it("real-transcript case: the SAME anchor reassigned a new projection entityId on every rebuild (EN-054) must not look like a fresh candidate — only the underlying gap's first fire counts, however many times the entity was re-inserted under a new id", () => {
     const msg = userTurn("I went to Saigon in May to visit a childhood friend.");

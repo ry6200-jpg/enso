@@ -235,6 +235,28 @@ describe("Name-clarification rule (adversarial-test batch, item 2): second attem
   });
 });
 
+describe("Candidate rotation and weighting (breadth-before-depth batch, item 3)", () => {
+  it("weighting: an entity only ever mentioned bundled in a roster ranks below one the owner returned to on their own", () => {
+    // Roster turn: five names dropped in one message — intake, not interest (each name's elaboration is diluted by density).
+    const roster = userTurn("My cousins are Priya, Sam, Alex, Jordan, and Riley.");
+    insertEntity("Priya", [roster.id]);
+    insertEntity("Sam", [roster.id]);
+    insertEntity("Alex", [roster.id]);
+    insertEntity("Jordan", [roster.id]);
+    const rileyId = insertEntity("Riley", [roster.id]);
+
+    // Returned-to: mentioned once in the roster, then brought up again unprompted, with real detail, in a later, separate turn.
+    const secondMention = userTurn("Riley actually just started a new job and seems a lot happier lately.");
+    projections.touchEntity(rileyId, [secondMention.id], "message-v1");
+
+    const candidates = findEligibleCircleBackCandidates(eventLog, projections, PRIMARY_USER_ID, "just a regular update");
+    const names = candidates.map((c) => c.name);
+
+    expect(names[0]).toBe("Riley");
+    expect(names.indexOf("Riley")).toBeLessThan(names.indexOf("Priya"));
+  });
+});
+
 describe("verifyCircleBackExecuted (EN-073 — directive-execution verification)", () => {
   it("returns true when the reply actually mentions the candidate's name", () => {
     expect(verifyCircleBackExecuted("By the way, who is Marcus to you?", "Marcus")).toBe(true);
