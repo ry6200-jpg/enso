@@ -3,6 +3,7 @@ dist/
 .tmp/
 data/
 dev-data/
+.local-instance-disk/
 *.log
 .env
 .env.*

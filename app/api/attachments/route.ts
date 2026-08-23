@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { uploadAndExtract } from "../../../src/attachments/uploadAndExtract.js";
 import { UploadTooLargeError } from "../../../src/attachments/attachmentCapture.js";
 import { listUploads } from "../../../src/attachments/uploadDeletion.js";
-import { getBlobStore, getDocumentRouter, getImageRouter, getStores } from "../../../lib/serverPipeline.js";
+import { getDocumentRouter, getImageRouter, runUserSession } from "../../../lib/serverPipeline.js";
 import { authErrorResponse, requireUserId } from "../../../lib/requireUser.js";
 
 /**
@@ -19,8 +19,8 @@ export async function GET(request: Request): Promise<Response> {
     return authErrorResponse(err) ?? NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
 
-  const { eventLog } = getStores(userId);
-  return NextResponse.json({ uploads: listUploads(eventLog, userId) });
+  const uploads = await runUserSession(userId, async ({ eventLog }) => listUploads(eventLog, userId));
+  return NextResponse.json({ uploads });
 }
 
 /**
@@ -44,18 +44,14 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: "file is required" }, { status: 400 });
   }
 
-  const { eventLog } = getStores(userId);
-  const blobStore = getBlobStore(userId);
   const documentRouter = getDocumentRouter();
   const imageRouter = getImageRouter();
-
   const bytes = Buffer.from(await file.arrayBuffer());
 
   let result;
   try {
-    result = await uploadAndExtract(
-      { eventLog, blobStore, documentRouter, imageRouter },
-      { userId, bytes, filename: file.name, mimeType: file.type || "application/octet-stream" }
+    result = await runUserSession(userId, async ({ eventLog, blobStore }) =>
+      uploadAndExtract({ eventLog, blobStore, documentRouter, imageRouter }, { userId, bytes, filename: file.name, mimeType: file.type || "application/octet-stream" })
     );
   } catch (err) {
     if (err instanceof UploadTooLargeError) {

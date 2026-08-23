@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { sendMessage } from "../../../src/conversation/chatPipeline.js";
 import { refreshMemoryAfterTurn } from "../../../src/conversation/turnMemoryRefresh.js";
 import { resolveCurrentLocationContext } from "../../../src/location/currentLocation.js";
-import { getChatRouter, getEmbedder, getExtractionRouter, getIntentRouter, getStores } from "../../../lib/serverPipeline.js";
+import { getChatRouter, getEmbedder, getExtractionRouter, getIntentRouter, runUserSession } from "../../../lib/serverPipeline.js";
 import { authErrorResponse, requireUserId } from "../../../lib/requireUser.js";
 
 /**
@@ -48,7 +48,6 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: "text or an attachment is required" }, { status: 400 });
   }
 
-  const { eventLog, projectionsDb, retrievalDb } = getStores(userId);
   const embedder = await getEmbedder();
   const chatRouter = getChatRouter();
   const intentRouter = getIntentRouter();
@@ -63,27 +62,34 @@ export async function POST(request: Request): Promise<Response> {
     getRequestIp(request)
   );
 
-  let result;
-  try {
-    result = await sendMessage(
-      { eventLog, projectionsDb, retrievalDb, embedder, chatRouter, intentRouter },
-      { userId, text: body.text ?? "", attachmentEventId: body.attachmentEventId, locationContext }
-    );
-  } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 502 });
-  }
+  // Cloud Storage batch: the whole turn — sendMessage AND
+  // refreshMemoryAfterTurn — runs inside one checkout/checkin cycle
+  // (lib/serverPipeline.ts's runUserSession), so extraction's writes are
+  // checked in along with the reply, not left stranded on local disk by a
+  // checkin that already happened before extraction ran.
+  const outcome = await runUserSession(userId, async ({ eventLog, projectionsDb, retrievalDb }) => {
+    let result;
+    try {
+      result = await sendMessage(
+        { eventLog, projectionsDb, retrievalDb, embedder, chatRouter, intentRouter },
+        { userId, text: body.text ?? "", attachmentEventId: body.attachmentEventId, locationContext }
+      );
+    } catch (err) {
+      return { status: 502 as const, body: { error: err instanceof Error ? err.message : String(err) } };
+    }
 
-  let memoryUpdateError: string | null = null;
-  try {
-    await refreshMemoryAfterTurn({ eventLog, projectionsDb, retrievalDb, embedder, extractionRouter }, userId, result.messageEvent.id);
-  } catch (err) {
-    memoryUpdateError = err instanceof Error ? err.message : String(err);
-  }
+    let memoryUpdateError: string | null = null;
+    try {
+      await refreshMemoryAfterTurn({ eventLog, projectionsDb, retrievalDb, embedder, extractionRouter }, userId, result.messageEvent.id);
+    } catch (err) {
+      memoryUpdateError = err instanceof Error ? err.message : String(err);
+    }
 
-  return NextResponse.json({
-    replyText: result.replyText,
-    messageEventId: result.messageEvent.id,
-    replyEventId: result.replyEvent.id,
-    memoryUpdateError
+    return {
+      status: 200 as const,
+      body: { replyText: result.replyText, messageEventId: result.messageEvent.id, replyEventId: result.replyEvent.id, memoryUpdateError }
+    };
   });
+
+  return NextResponse.json(outcome.body, { status: outcome.status });
 }

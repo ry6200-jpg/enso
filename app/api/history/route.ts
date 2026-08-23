@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getConversationHistory } from "../../../src/conversation/conversationHistory.js";
-import { getStores } from "../../../lib/serverPipeline.js";
+import { runUserSession } from "../../../lib/serverPipeline.js";
 import { authErrorResponse, requireUserId } from "../../../lib/requireUser.js";
 import { PROACTIVE_OPENER_MESSAGE } from "../../../src/persona/proactiveOpener.js";
 
@@ -28,8 +28,7 @@ export async function GET(request: Request): Promise<Response> {
     return authErrorResponse(err) ?? NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
 
-  const { eventLog } = getStores(userId);
-  const messages = getConversationHistory(eventLog, userId);
+  const messages = await runUserSession(userId, async ({ eventLog }) => getConversationHistory(eventLog, userId));
   return NextResponse.json({
     messages: messages.length > 0 ? messages : [{ id: "proactive-opener", role: "enso" as const, text: PROACTIVE_OPENER_MESSAGE }]
   });

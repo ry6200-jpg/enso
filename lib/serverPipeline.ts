@@ -1,26 +1,49 @@
 /**
- * Phase 7 Part 1 / Cloud migration prerequisite batch: the ONE place the
- * web app constructs the pipeline — every API route imports from here,
- * never re-implements capture, retrieval, extraction, or the router.
+ * Phase 7 Part 1 / Cloud migration prerequisite batch / Cloud Storage
+ * checkout/checkin batch: the ONE place the web app constructs the
+ * pipeline — every API route imports from here, never re-implements
+ * capture, retrieval, extraction, or the router.
  *
  * Node-runtime only (better-sqlite3, local ONNX embeddings) — never
  * import this from a client component or the edge runtime.
  *
  * Cached on `globalThis` because Next.js dev mode re-executes module
  * top-level code on hot reload; without this, every HMR cycle would open
- * a fresh set of SQLite connections to the same files.
+ * a fresh set of SQLite connections to the same files. This now applies
+ * ONLY to the stateless, per-process singletons below (embedder, cost
+ * tracker, chat/extraction/intent/document/image routers, the shared
+ * daily-content cache) — never to per-user data connections.
  *
- * Per-user data (Cloud migration prerequisite batch, item 2): eventLog,
- * projectionsDb, retrievalDb, and blobStore are now keyed by uid, one set
- * of connections per authenticated user, one directory per user on disk
- * (src/storage/userDataPaths.ts). dailyContentCache stays a SINGLE global
- * cache deliberately — its own schema has no user_id column at all (it
- * caches AI-generated daily zodiac content keyed only by sign and date,
- * genuinely the same content for every user sharing a sign on a given
- * day) — sharing it is correct, not an oversight. Every other cached
- * field (embedder, cost tracker, chat/extraction/intent/document/image
- * routers) is a stateless API-client singleton with no per-user state at
- * all and is unchanged.
+ * Per-user data (Cloud Storage checkout/checkin batch) no longer lives in
+ * any cache at all: runUserSession(uid, work) checks a user's data out of
+ * remote storage into this instance's local ephemeral disk, opens fresh
+ * EventLog/ProjectionsDb/RetrievalDb/BlobStore connections against that
+ * checkout, runs `work`, then checks the (possibly-modified) files back in
+ * and releases the per-user lock — every call, no connection survives
+ * across requests. See src/storage/userSession.ts for the full sequence
+ * and src/storage/userStorageBackend.ts for the backend contract
+ * (LocalStorageBackend today; GcsStorageBackend is written but not wired
+ * in until the deployment batch).
+ *
+ * This replaces the getStores(uid)/getBlobStore(uid) pair that used to
+ * cache one open connection set per uid on globalThis forever — that
+ * model is fundamentally incompatible with checkout/checkin, which needs
+ * local disk to be refreshed from remote at the start of each unit of
+ * work and safely closed/uploaded at the end, never held open indefinitely
+ * (see the collision report accompanying this batch: WAL-mode writes,
+ * checkpointing, and the per-user lock's release point all depend on a
+ * connection's lifetime being bounded to one request). A useful side
+ * effect: this structurally removes two of the three historical
+ * HMR-staleness bugs invalidateIfStale() below still guards against for
+ * the OTHER cached fields — a per-user DB connection can no longer survive
+ * a code change to go stale, because none is ever kept around long enough
+ * to.
+ *
+ * dailyContentCache stays a SINGLE global cache deliberately — its own
+ * schema has no user_id column at all (it caches AI-generated daily
+ * zodiac content keyed only by sign and date, genuinely the same content
+ * for every user sharing a sign on a given day) — sharing it is correct,
+ * not an oversight, and it is untouched by the checkout/checkin change.
  *
  * getDevUserId() no longer exists. There is no fallback identity anymore
  * — every route derives userId from a verified request (src/auth/
@@ -32,9 +55,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { EventLog } from "../src/events/eventLog.js";
-import { ProjectionsDb } from "../src/projections/db.js";
-import { RetrievalDb } from "../src/retrieval/retrievalDb.js";
 import { configureLocalOnlyEmbeddings, createEmbedder, type Embedder } from "../src/embeddings/embedder.js";
 import { CostTracker } from "../src/providers/costTracker.js";
 import { createDefaultChatRouter, type ChatRouter } from "../src/providers/chatRouter.js";
@@ -42,9 +62,11 @@ import { createDefaultRouter, type ExtractionRouter } from "../src/providers/rou
 import { createDefaultIntentRouter, type IntentRouter } from "../src/conversation/router/intentRouter.js";
 import { createDocumentRouter, createImageRouter } from "../src/providers/attachmentRouter.js";
 import type { DocumentContentAdapter, ImageContentAdapter } from "../src/providers/attachmentTypes.js";
-import { BlobStore } from "../src/blobs/blobStore.js";
 import { DailyContentCache } from "../src/zodiac/dailyContentCache.js";
-import { getUserDataPaths, sanitizeUidForPath, wipeUserDirectory } from "../src/storage/userDataPaths.js";
+import { getUserDataPaths, wipeUserDirectory } from "../src/storage/userDataPaths.js";
+import { withUserSession, type UserSessionStores } from "../src/storage/userSession.js";
+import { LocalStorageBackend } from "../src/storage/localStorageBackend.js";
+import type { UserStorageBackend } from "../src/storage/userStorageBackend.js";
 
 // Not import.meta.dirname: webpack's bundling of API routes doesn't
 // support it (confirmed live — undefined at runtime under `next dev
@@ -54,6 +76,14 @@ export const REPO_ROOT = process.cwd();
 export const DEV_DATA_DIR = path.join(REPO_ROOT, "dev-data");
 const README_FILE = path.join(DEV_DATA_DIR, "README.txt");
 
+// This Cloud Run instance's ephemeral local disk, standing in for real
+// ephemeral disk before deployment adds it for real. Every checkout writes
+// here; every checkin uploads from here and leaves the copy in place
+// (harmless — the next checkout for that uid wipes-then-refetches, so a
+// stale leftover between requests is never re-uploaded by accident, see
+// LocalStorageBackend.download). Gitignored, same as dev-data itself.
+export const LOCAL_INSTANCE_DIR = path.join(REPO_ROOT, ".local-instance-disk");
+
 const README_TEXT = `This directory holds REAL, PERSISTENT data from interactively feel-testing
 Enso via the web app (npm run dev). It is gitignored.
 
@@ -62,6 +92,12 @@ users/<uid>/ (events.db, projections.db, retrieval.db, blobs/) — see
 src/storage/userDataPaths.ts. dailyContent.db at this top level is the one
 deliberately-shared cache (AI-generated daily zodiac content, no user_id
 column at all).
+
+Cloud Storage checkout/checkin batch: this directory is now also the
+LOCAL backend's "remote" root (src/storage/localStorageBackend.ts) — every
+request checks a user's files out to .local-instance-disk/ and back in
+here, exactly as it will check them out of and into a real GCS bucket at
+deployment. Still local, still dev data.
 
 This is pre-cutover test/dev data, not production journaling data — see
 enso-rebuild-requirements.md Section 12 ("Data migration — RESOLVED: start
@@ -81,11 +117,25 @@ function ensureDevDataDir(): void {
   if (!fs.existsSync(README_FILE)) fs.writeFileSync(README_FILE, README_TEXT);
 }
 
+/**
+ * Deployment seam: still local per this batch's scope (no Dockerfile, no
+ * gcloud). Swapping to GcsStorageBackend at deployment is a one-line
+ * change here — everything above it (runUserSession, every route) is
+ * written against the UserStorageBackend interface, not this concrete
+ * class, so nothing else needs to change.
+ */
+function getStorageBackend(): UserStorageBackend {
+  return new LocalStorageBackend(DEV_DATA_DIR);
+}
+
+// One turn is at most a couple of LLM calls (chat reply, then extraction),
+// each retried at most once via runWithFallback — generous headroom over
+// even a slow real case, while still bounding how long a crashed
+// instance's abandoned lock blocks the next request for that user. Revisit
+// against real production latency once there's data to revisit it with.
+const USER_SESSION_LOCK_TTL_MS = 60_000;
+
 interface PipelineGlobals {
-  eventLogByUser?: Map<string, EventLog>;
-  projectionsDbByUser?: Map<string, ProjectionsDb>;
-  retrievalDbByUser?: Map<string, RetrievalDb>;
-  blobStoreByUser?: Map<string, BlobStore>;
   embedderPromise?: Promise<Embedder>;
   costTracker?: CostTracker;
   chatRouter?: ChatRouter;
@@ -100,23 +150,6 @@ interface PipelineGlobals {
 const g = globalThis as unknown as { __ensoPipeline?: PipelineGlobals };
 if (!g.__ensoPipeline) g.__ensoPipeline = {};
 const cache = g.__ensoPipeline;
-
-function eventLogMap(): Map<string, EventLog> {
-  if (!cache.eventLogByUser) cache.eventLogByUser = new Map();
-  return cache.eventLogByUser;
-}
-function projectionsDbMap(): Map<string, ProjectionsDb> {
-  if (!cache.projectionsDbByUser) cache.projectionsDbByUser = new Map();
-  return cache.projectionsDbByUser;
-}
-function retrievalDbMap(): Map<string, RetrievalDb> {
-  if (!cache.retrievalDbByUser) cache.retrievalDbByUser = new Map();
-  return cache.retrievalDbByUser;
-}
-function blobStoreMap(): Map<string, BlobStore> {
-  if (!cache.blobStoreByUser) cache.blobStoreByUser = new Map();
-  return cache.blobStoreByUser;
-}
 
 /**
  * Dev-only staleness safeguard. `globalThis` caching survives every HMR
@@ -136,14 +169,12 @@ function blobStoreMap(): Map<string, BlobStore> {
  * Fingerprints every .ts file under src/ and lib/ by path+mtime+size (not
  * content — hashing bytes is needless work for a debounced per-request
  * check) and, if it differs from the fingerprint recorded when the cache
- * was last populated, closes and drops every cached entry — now across
- * every user's connections in each per-user map, not just a single field
- * — so the next getter call rebuilds from the current code. Debounced to
- * at most once per second so an active dev session doesn't pay a
- * directory walk on every request. Never runs in production: a deployed
- * process's code cannot change without an actual restart, which already
- * clears `globalThis` by definition, so this check would be pure overhead
- * there.
+ * was last populated, closes and drops every cached entry so the next
+ * getter call rebuilds from the current code. Debounced to at most once
+ * per second so an active dev session doesn't pay a directory walk on
+ * every request. Never runs in production: a deployed process's code
+ * cannot change without an actual restart, which already clears
+ * `globalThis` by definition, so this check would be pure overhead there.
  */
 function computeSourceFingerprint(): string {
   const parts: string[] = [];
@@ -181,9 +212,6 @@ function invalidateIfStale(): void {
   if (cache.sourceFingerprint === current) return;
   const isFirstRun = cache.sourceFingerprint === undefined;
   if (!isFirstRun) {
-    for (const eventLog of eventLogMap().values()) eventLog.close();
-    for (const projectionsDb of projectionsDbMap().values()) projectionsDb.close();
-    for (const retrievalDb of retrievalDbMap().values()) retrievalDb.close();
     cache.dailyContentCache?.close();
     for (const key of Object.keys(cache) as (keyof PipelineGlobals)[]) {
       if (key !== "sourceFingerprint") delete cache[key];
@@ -194,32 +222,19 @@ function invalidateIfStale(): void {
   cache.sourceFingerprint = current;
 }
 
-/** Every caller must have already gone through src/auth/verifyRequest.ts's getVerifiedUserId — this function does not itself verify anything, it only trusts the uid it's given and scopes storage to it. */
-export function getStores(uid: string): { eventLog: EventLog; projectionsDb: ProjectionsDb; retrievalDb: RetrievalDb } {
-  invalidateIfStale();
-  const paths = getUserDataPaths(DEV_DATA_DIR, uid);
-  fs.mkdirSync(paths.dir, { recursive: true });
+/**
+ * The Cloud Storage checkout/checkin entry point (replaces the old
+ * getStores(uid)/getBlobStore(uid) pair — see this file's header comment
+ * for why they couldn't coexist with checkout/checkin). Every caller must
+ * have already gone through src/auth/verifyRequest.ts's getVerifiedUserId
+ * — this function does not itself verify anything, it only trusts the uid
+ * it's given and scopes storage to it. `ensureDevDataDir` still runs here
+ * because DEV_DATA_DIR is also LocalStorageBackend's remote root — its
+ * README needs to exist regardless of which backend is in play.
+ */
+export function runUserSession<T>(uid: string, work: (stores: UserSessionStores) => Promise<T>): Promise<T> {
   ensureDevDataDir();
-
-  const eventLogs = eventLogMap();
-  if (!eventLogs.has(uid)) eventLogs.set(uid, new EventLog(paths.eventsDb));
-  const projectionsDbs = projectionsDbMap();
-  if (!projectionsDbs.has(uid)) projectionsDbs.set(uid, new ProjectionsDb(paths.projectionsDb));
-  const retrievalDbs = retrievalDbMap();
-  if (!retrievalDbs.has(uid)) retrievalDbs.set(uid, new RetrievalDb(paths.retrievalDb));
-
-  return { eventLog: eventLogs.get(uid)!, projectionsDb: projectionsDbs.get(uid)!, retrievalDb: retrievalDbs.get(uid)! };
-}
-
-export function getBlobStore(uid: string): BlobStore {
-  invalidateIfStale();
-  const paths = getUserDataPaths(DEV_DATA_DIR, uid);
-  fs.mkdirSync(paths.dir, { recursive: true });
-  ensureDevDataDir();
-
-  const blobStores = blobStoreMap();
-  if (!blobStores.has(uid)) blobStores.set(uid, new BlobStore(paths.blobsDir));
-  return blobStores.get(uid)!;
+  return withUserSession(getStorageBackend(), LOCAL_INSTANCE_DIR, uid, USER_SESSION_LOCK_TTL_MS, work);
 }
 
 export function getEmbedder(): Promise<Embedder> {
@@ -276,33 +291,30 @@ export function getDailyContentCache(): DailyContentCache {
 }
 
 /**
- * The gap that made /wipe (correctly, at the file level) look broken
- * through the web app: this module caches EventLog/ProjectionsDb/
- * RetrievalDb connections on globalThis so Next.js dev-mode hot reload
- * doesn't reopen them every HMR cycle. But an EXTERNAL wipe (a separate OS
- * process deleting and recreating a user's directory) has no way to touch
- * THIS process's already-open file descriptors — they silently become
- * bound to the deleted (but still-readable/writable-via-fd) old files.
- * Reads through the web app after that point return whatever was last
- * cached; writes go into those orphaned files, invisible to any fresh
- * connection at the real path — reproduced live and confirmed in an
- * earlier session with the old single-user version of this bug.
+ * Historical note: this used to also need to close this process's own
+ * cached per-user connections before deleting a user's directory, because
+ * an externally-deleted-and-recreated directory left orphaned open file
+ * descriptors behind (reproduced live, an earlier session). That entire
+ * bug class is gone now that no per-user connection is ever cached across
+ * requests (runUserSession above) — there's nothing left to orphan.
  *
- * Fix: give the web app's OWN process a wipe path that closes its own
- * cached connections for THIS user before deleting THIS user's directory,
- * so nothing is ever orphaned and no other user's data is ever touched.
- * Scoped strictly to one uid's subdirectory (src/storage/userDataPaths.ts)
- * — never the shared dev-data root, never another user's directory.
+ * Still goes through the per-user lock, though: without it, a wipe could
+ * race an in-flight checkin from a concurrent request for the same user
+ * and have the checkin's upload silently recreate the "wiped" directory
+ * right after this deletes it. Scoped strictly to one uid's subdirectory
+ * (src/storage/userDataPaths.ts) — never the shared dev-data root, never
+ * another user's directory. Also clears any local ephemeral checkout this
+ * instance is holding for the user, so a stale local copy can never be
+ * re-uploaded on a later checkin and resurrect what was just wiped.
  */
-export function resetUserData(uid: string): void {
-  const safeUid = sanitizeUidForPath(uid);
-  const paths = getUserDataPaths(DEV_DATA_DIR, uid);
-
-  const openConnections = [eventLogMap().get(safeUid), projectionsDbMap().get(safeUid), retrievalDbMap().get(safeUid)].filter((c): c is NonNullable<typeof c> => c !== undefined);
-  wipeUserDirectory(paths, openConnections);
-
-  eventLogMap().delete(safeUid);
-  projectionsDbMap().delete(safeUid);
-  retrievalDbMap().delete(safeUid);
-  blobStoreMap().delete(safeUid);
+export async function resetUserData(uid: string): Promise<void> {
+  const backend = getStorageBackend();
+  const handle = await backend.acquireLock(uid, USER_SESSION_LOCK_TTL_MS);
+  try {
+    wipeUserDirectory(getUserDataPaths(DEV_DATA_DIR, uid), []);
+    const localPaths = getUserDataPaths(LOCAL_INSTANCE_DIR, uid);
+    fs.rmSync(localPaths.dir, { recursive: true, force: true });
+  } finally {
+    await backend.releaseLock(uid, handle);
+  }
 }

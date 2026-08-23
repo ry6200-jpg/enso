@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { computeDeletionImpact } from "../../../../../src/attachments/uploadDeletion.js";
-import { getStores } from "../../../../../lib/serverPipeline.js";
+import { runUserSession } from "../../../../../lib/serverPipeline.js";
 import { authErrorResponse, requireUserId } from "../../../../../lib/requireUser.js";
 
 /**
@@ -20,10 +20,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     return authErrorResponse(err) ?? NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
 
-  const { eventLog, projectionsDb } = getStores(userId);
-
   try {
-    const impact = computeDeletionImpact(eventLog, projectionsDb, userId, id);
+    const impact = await runUserSession(userId, async ({ eventLog, projectionsDb }) => computeDeletionImpact(eventLog, projectionsDb, userId, id));
     return NextResponse.json(impact);
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 404 });

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getPeopleView } from "../../../src/projections/peopleView.js";
-import { getStores } from "../../../lib/serverPipeline.js";
+import { runUserSession } from "../../../lib/serverPipeline.js";
 import { authErrorResponse, requireUserId } from "../../../lib/requireUser.js";
 
 /**
@@ -20,6 +20,6 @@ export async function GET(request: Request): Promise<Response> {
     return authErrorResponse(err) ?? NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
 
-  const { eventLog, projectionsDb } = getStores(userId);
-  return NextResponse.json({ people: getPeopleView(eventLog, projectionsDb, userId) });
+  const people = await runUserSession(userId, async ({ eventLog, projectionsDb }) => getPeopleView(eventLog, projectionsDb, userId));
+  return NextResponse.json({ people });
 }

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getChineseZodiacSign, getWesternZodiacSign } from "../../../../src/zodiac/zodiac.js";
 import { getSynastryReading } from "../../../../src/zodiac/zodiacContent.js";
 import { getPeopleView, getPrimaryUserBirthdate } from "../../../../src/projections/peopleView.js";
-import { getChatRouter, getDailyContentCache, getStores } from "../../../../lib/serverPipeline.js";
+import { getChatRouter, getDailyContentCache, runUserSession } from "../../../../lib/serverPipeline.js";
 import { authErrorResponse, requireUserId } from "../../../../lib/requireUser.js";
 
 /**
@@ -24,35 +24,59 @@ export async function GET(request: Request): Promise<Response> {
     return authErrorResponse(err) ?? NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
 
-  const { eventLog, projectionsDb } = getStores(userId);
+  // Only the reads below need the per-user checkout/lock — reading
+  // generation is an LLM call unrelated to this user's own files, so it
+  // runs outside the checkout window rather than holding the lock for it.
+  const prep = await runUserSession(userId, async ({ eventLog, projectionsDb }) => {
+    const userBirthdate = getPrimaryUserBirthdate(projectionsDb, userId);
+    const userChineseSign = userBirthdate ? getChineseZodiacSign(userBirthdate) : null;
+    const userWesternSign = userBirthdate ? getWesternZodiacSign(userBirthdate) : null;
+    if (!userChineseSign || !userWesternSign) return { status: "no_user_birthdate" as const };
 
-  const userBirthdate = getPrimaryUserBirthdate(projectionsDb, userId);
-  const userChineseSign = userBirthdate ? getChineseZodiacSign(userBirthdate) : null;
-  const userWesternSign = userBirthdate ? getWesternZodiacSign(userBirthdate) : null;
-  if (!userChineseSign || !userWesternSign) {
-    return NextResponse.json({ available: false, reason: "your own birthdate isn't on record yet — mention it to Enso in chat" });
-  }
+    const person = getPeopleView(eventLog, projectionsDb, userId).find((p) => p.entityId === entityId);
+    if (!person) return { status: "unknown_entity" as const };
 
-  const person = getPeopleView(eventLog, projectionsDb, userId).find((p) => p.entityId === entityId);
-  if (!person) return NextResponse.json({ error: "unknown entity" }, { status: 404 });
+    const birthdateFact = person.attributes.find((a) => a.attribute === "birthdate")?.facts[0];
+    const entityChineseSign = birthdateFact ? getChineseZodiacSign(birthdateFact.value) : null;
+    const entityWesternSign = birthdateFact ? getWesternZodiacSign(birthdateFact.value) : null;
+    if (!entityChineseSign || !entityWesternSign) return { status: "no_entity_birthdate" as const, personName: person.name };
 
-  const birthdateFact = person.attributes.find((a) => a.attribute === "birthdate")?.facts[0];
-  const entityChineseSign = birthdateFact ? getChineseZodiacSign(birthdateFact.value) : null;
-  const entityWesternSign = birthdateFact ? getWesternZodiacSign(birthdateFact.value) : null;
-  if (!entityChineseSign || !entityWesternSign) {
-    return NextResponse.json({ available: false, reason: `${person.name}'s birthdate isn't on record yet — mention it to Enso in chat` });
-  }
-
-  const relationshipType = person.relationships[0]?.type ?? null;
-
-  const reading = await getSynastryReading(getDailyContentCache(), getChatRouter(), {
-    userWesternSign,
-    userChineseSign,
-    entityName: person.name,
-    entityWesternSign,
-    entityChineseSign,
-    relationshipType
+    return {
+      status: "ready" as const,
+      personName: person.name,
+      userChineseSign,
+      userWesternSign,
+      entityChineseSign,
+      entityWesternSign,
+      relationshipType: person.relationships[0]?.type ?? null
+    };
   });
 
-  return NextResponse.json({ available: true, entityName: person.name, userChineseSign, userWesternSign, entityChineseSign, entityWesternSign, relationshipType, reading });
+  if (prep.status === "no_user_birthdate") {
+    return NextResponse.json({ available: false, reason: "your own birthdate isn't on record yet — mention it to Enso in chat" });
+  }
+  if (prep.status === "unknown_entity") return NextResponse.json({ error: "unknown entity" }, { status: 404 });
+  if (prep.status === "no_entity_birthdate") {
+    return NextResponse.json({ available: false, reason: `${prep.personName}'s birthdate isn't on record yet — mention it to Enso in chat` });
+  }
+
+  const reading = await getSynastryReading(getDailyContentCache(), getChatRouter(), {
+    userWesternSign: prep.userWesternSign,
+    userChineseSign: prep.userChineseSign,
+    entityName: prep.personName,
+    entityWesternSign: prep.entityWesternSign,
+    entityChineseSign: prep.entityChineseSign,
+    relationshipType: prep.relationshipType
+  });
+
+  return NextResponse.json({
+    available: true,
+    entityName: prep.personName,
+    userChineseSign: prep.userChineseSign,
+    userWesternSign: prep.userWesternSign,
+    entityChineseSign: prep.entityChineseSign,
+    entityWesternSign: prep.entityWesternSign,
+    relationshipType: prep.relationshipType,
+    reading
+  });
 }

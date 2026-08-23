@@ -29,6 +29,6 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: `confirm must be exactly "${WIPE_CONFIRMATION_PHRASE}"` }, { status: 400 });
   }
 
-  resetUserData(userId);
+  await resetUserData(userId);
   return NextResponse.json({ wiped: true });
 }

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { deleteUpload } from "../../../../src/attachments/uploadDeletion.js";
-import { getBlobStore, getEmbedder, getStores } from "../../../../lib/serverPipeline.js";
+import { getEmbedder, runUserSession } from "../../../../lib/serverPipeline.js";
 import { authErrorResponse, requireUserId } from "../../../../lib/requireUser.js";
 
 /**
@@ -17,12 +17,13 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     return authErrorResponse(err) ?? NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
 
-  const { eventLog, projectionsDb, retrievalDb } = getStores(userId);
-  const blobStore = getBlobStore(userId);
   const embedder = await getEmbedder();
 
   try {
-    const { impact } = await deleteUpload({ eventLog, blobStore, projectionsDb, retrievalDb, embedder }, userId, id);
+    const impact = await runUserSession(userId, async ({ eventLog, projectionsDb, retrievalDb, blobStore }) => {
+      const { impact } = await deleteUpload({ eventLog, blobStore, projectionsDb, retrievalDb, embedder }, userId, id);
+      return impact;
+    });
     return NextResponse.json(impact);
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 404 });
