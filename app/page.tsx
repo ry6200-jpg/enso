@@ -162,6 +162,14 @@ export default function Page() {
   // open/close state for the off-canvas panel itself.
   const [zodiacAvailable, setZodiacAvailable] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  // Mobile layout and scroll fixes batch: the header shrank to a single
+  // ~56px row, which had no room left for an inline "Sign out" text label
+  // — it now lives in a small overflow menu (along with the read-only
+  // signed-in email, so testers can confirm which Google account they're
+  // on) opened from a ⋮ button. menuRef backs the click-outside-closes
+  // handler below.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   // Below md (Tailwind's breakpoint, matching ZodiacSidebar's own `hidden
   // md:flex`), the desktop placeholder's parenthetical wraps to three lines
   // and explains a keyboard shortcut a phone doesn't have. matchMedia, not
@@ -243,6 +251,24 @@ export default function Page() {
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages]);
+
+  // Closes the ⋮ menu on an outside click or Escape — standard disclosure
+  // behavior; only wired up while the menu is actually open.
+  useEffect(() => {
+    if (!menuOpen) return;
+    function handlePointerDown(e: PointerEvent) {
+      if (menuRef.current && e.target instanceof Node && !menuRef.current.contains(e.target)) setMenuOpen(false);
+    }
+    function handleKeyDown(e: globalThis.KeyboardEvent) {
+      if (e.key === "Escape") setMenuOpen(false);
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [menuOpen]);
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 767px)");
@@ -435,22 +461,27 @@ export default function Page() {
   }
 
   return (
-    <div className="h-full flex flex-col">
-      <header className="shrink-0 flex items-center gap-4 px-6 py-4 border-b border-stone-200">
+    <div className="h-full flex flex-col overflow-hidden md:max-w-5xl md:mx-auto">
+      {/* Mobile layout and scroll fixes batch: reduced from a ~96px row
+          (w-16 mark, text-4xl wordmark, inline "Sign out" label) to a
+          single ~56px one (h-14) — same mark asset, same wordmark, same
+          colors, just smaller, with "Sign out" moved into the ⋮ menu below
+          to make room. `shrink-0` (a flex:none sibling of the scrolling
+          message list, never vh-sized) is what keeps this row's height
+          fixed regardless of keyboard open/close — nothing here reacts to
+          the viewport at all, which is the point. */}
+      <header className="shrink-0 h-14 flex items-center gap-3 px-4 border-b border-stone-200">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/assets/enso-mark.png" alt="" className="w-16 h-16" />
-        <span className="text-4xl font-bold tracking-wide" style={{ color: "var(--enso-ink)" }}>
+        <img src="/assets/enso-mark.png" alt="" className="w-8 h-8" />
+        <span className="text-[17px] font-bold tracking-wide" style={{ color: "var(--enso-ink)" }}>
           Enso
         </span>
-        <button type="button" onClick={() => void signOut()} className="ml-2 text-xs text-stone-400 hover:text-stone-600" title="Sign out">
-          Sign out
-        </button>
 
         {/* Single ml-auto wrapper, not one per button — flexbox only
             honors the FIRST auto margin among siblings to push the whole
             rest of the row right; a second independent ml-auto here would
             fight the first instead of just sitting next to it. */}
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex items-center gap-1">
           {/*
             Mobile-only entry point to the zodiac sidebar (ZodiacSidebar.tsx
             owns the actual panel). Gated on zodiacAvailable — set by that
@@ -459,9 +490,9 @@ export default function Page() {
             tap target that opens an empty/"not available yet" panel.
           */}
           {zodiacAvailable && (
-            <button type="button" onClick={() => setMobileSidebarOpen(true)} className="md:hidden shrink-0" title="Open your zodiac sidebar">
+            <button type="button" onClick={() => setMobileSidebarOpen(true)} className="md:hidden shrink-0 w-10 h-10 flex items-center justify-center" title="Open your zodiac sidebar">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/assets/enso-mark.png" alt="Zodiac sidebar" className="w-7 h-7" />
+              <img src="/assets/enso-mark.png" alt="Zodiac sidebar" className="w-6 h-6" />
             </button>
           )}
           {/*
@@ -481,10 +512,48 @@ export default function Page() {
             deliver.
           */}
           {locationBlocked && (
-            <button type="button" onClick={attemptGeolocation} title="Location access is blocked — check your browser's site settings to allow it" className="text-sm text-stone-400 hover:text-stone-600">
+            <button
+              type="button"
+              onClick={attemptGeolocation}
+              title="Location access is blocked — check your browser's site settings to allow it"
+              className="w-10 h-10 flex items-center justify-center text-sm text-stone-400 hover:text-stone-600"
+            >
               📍
             </button>
           )}
+
+          {/* ⋮ overflow menu: signed-in email (read-only — testers use this
+              to confirm which Google account they're on) and Sign out,
+              moved here to fit the reduced header height. */}
+          <div ref={menuRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setMenuOpen((open) => !open)}
+              className="w-10 h-10 flex items-center justify-center text-xl leading-none text-stone-500 hover:text-stone-800"
+              title="Menu"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+            >
+              ⋮
+            </button>
+            {menuOpen && (
+              <div role="menu" className="absolute right-0 top-full mt-1 w-56 rounded-lg bg-white border border-stone-200 shadow-lg py-2 z-40">
+                <div className="px-3 py-1.5 text-xs text-stone-400 truncate" title={user?.email ?? undefined}>
+                  {user?.email ?? "Signed in"}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    void signOut();
+                  }}
+                  className="w-full text-left px-3 py-1.5 text-sm text-stone-600 hover:bg-stone-50 hover:text-stone-900"
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 

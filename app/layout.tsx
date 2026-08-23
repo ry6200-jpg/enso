@@ -28,19 +28,28 @@ export const viewport: Viewport = {
 };
 
 /**
- * `h-dvh` (not `h-full`) on <html>, `h-dvh flex flex-col` on <body> —
- * EN-036's original fix used `h-full`, which is a fine, stable cap on
- * desktop but doesn't participate in a mobile browser's dynamic viewport
- * (address bar show/hide, keyboard open/close) at all; `h-dvh` does, and
- * is what makes the keyboard-safe behavior above actually take effect. The
- * chat page's message list still depends on this being a hard, page-level
- * cap so IT scrolls (flex-1 overflow-y-auto) while the header/input stay
- * pinned, rather than the whole page scrolling as one unit.
+ * `h-dvh` (not `h-full`) on <html>, `h-dvh flex flex-col overflow-hidden`
+ * on <body> — EN-036's original fix used `h-full`, which is a fine, stable
+ * cap on desktop but doesn't participate in a mobile browser's dynamic
+ * viewport (address bar show/hide, keyboard open/close) at all; `h-dvh`
+ * does, and is what makes the keyboard-safe behavior above actually take
+ * effect. The chat page's message list still depends on this being a
+ * hard, page-level cap so IT scrolls (flex-1 min-h-0 overflow-y-auto)
+ * while the header/composer stay pinned, rather than the whole page
+ * scrolling as one unit.
+ *
+ * Mobile layout and scroll fixes batch: `overflow-hidden` added here is
+ * the root of that same shell — the document itself must never scroll as
+ * a whole; the message list inside app/page.tsx is the ONLY scroll
+ * container on the page. Without this, a momentary height mismatch during
+ * composer growth or a keyboard transition could let the whole page
+ * rubber-band, which is exactly the kind of "scroll into a broken-looking
+ * half-state" this batch exists to close off.
  */
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="h-dvh antialiased">
-      <body className="h-dvh flex flex-col">{children}</body>
+      <body className="h-dvh flex flex-col overflow-hidden">{children}</body>
     </html>
   );
 }
