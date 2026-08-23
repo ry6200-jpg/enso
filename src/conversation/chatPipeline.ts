@@ -15,6 +15,7 @@ import { assembleContext, DEFAULT_CONTEXT_BUDGETS, type AssembledContext, type C
 import { decideRetrievalInvocation, type RetrievalInvocation, type RetrievalMode } from "./retrievalInvocation.js";
 import { buildAttachmentContextBlock, buildSelfProfileBlock, type RecentTurnForPrompt, type VoiceMode } from "../persona/systemPrompt.js";
 import { buildSelfProfile } from "../projections/peopleView.js";
+import { getSessionTurnsForPrompt } from "./conversationHistory.js";
 import { buildConnectDotDirective, buildCuriosityAskDirective, findCuriosityAskCandidates, isCuriosityTurnEligible, verifyCuriosityAskExecuted } from "./circleBack.js";
 import type { CuriosityAskCandidate } from "./router/routerTypes.js";
 import { buildSelfBirthdateDirective, isSelfBirthdateEligible, verifySelfBirthdateAskExecuted } from "./selfBirthdateGate.js";
@@ -41,6 +42,8 @@ export interface ReplySentPayload {
     candidateChunkCount: number;
     injectedChunkIds: string[];
     retrievalTruncated: boolean;
+    /** Part B-0: how many retrieval candidates were skipped because they duplicated a message already sitting verbatim in the (now much larger) recent window — never counted against retrievalTruncated, since skipping a genuine duplicate isn't a budget cut. */
+    retrievalDedupedCount: number;
     recentWindowAvailableTurns: number;
     recentWindowInjectedTurns: number;
     recentWindowTruncated: boolean;
@@ -143,8 +146,20 @@ export interface SendMessageDeps {
 export interface SendMessageInput {
   userId: string;
   text: string;
-  /** The conversation window since the last /new (or process start) — caller-tracked, since there's no conversation-scoping concept in the event log itself (EN-050: events are user-scoped only). */
-  recentTurns: RecentTurnForPrompt[];
+  /**
+   * Part B-0: OPTIONAL — omit it and sendMessage computes the real window
+   * itself, server-side, from the event log (getSessionTurnsForPrompt),
+   * which is what production (app/api/chat/route.ts) now does. The event
+   * log — not a caller's own idea of recent history — is the source of
+   * truth for what Enso can see of the current session; a caller
+   * overriding this is a deliberate escape hatch (tests wanting direct
+   * control over exactly what's in the window), never the normal path.
+   * There's still no conversation-scoping concept in the event log itself
+   * (EN-050: events are user-scoped only) — "the current session" is
+   * simply this user's whole history, per Part B-0's decision that this
+   * project has no multi-session boundary concept to split on yet.
+   */
+  recentTurns?: RecentTurnForPrompt[];
   /** Test/Phase-6 hook — same shape as hybridSearch's temporalWeight override (see retrievalInvocation.ts). */
   retrievalOverride?: RetrievalInvocation;
   budgets?: ContextBudgets;
@@ -257,6 +272,13 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   // crashes provider chat APIs").
   const effectiveText = (messageEvent.payload as MessageSentPayload).text;
 
+  // Part B-0: the event log, not the caller, is the source of truth for
+  // session history — recentTurns is computed here whenever the caller
+  // doesn't supply its own (production never does anymore; see
+  // app/api/chat/route.ts). Excludes the message just captured above,
+  // which is the live input to this reply, not history.
+  const recentTurns = input.recentTurns ?? getSessionTurnsForPrompt(deps.eventLog, input.userId, messageEvent.id);
+
   // Part B (R38): deterministic, code-computed, never a router decision —
   // unlike retrieval/gates below, this doesn't branch on deps.intentRouter
   // or input.retrievalOverride, so every path (router, no-router fallback,
@@ -283,14 +305,20 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     // EN-030 item B: the open-loop/winding-down precondition is computed
     // once here, in code, and short-circuits candidate lookup entirely
     // when false — never left to the router to notice or ignore.
-    curiosityTurnEligible = !selfBirthdateEligible && isCuriosityTurnEligible(deps.eventLog, input.userId, effectiveText, input.recentTurns);
+    curiosityTurnEligible = !selfBirthdateEligible && isCuriosityTurnEligible(deps.eventLog, input.userId, effectiveText, recentTurns);
     curiosityCandidates = curiosityTurnEligible ? findCuriosityAskCandidates(deps.eventLog, deps.projectionsDb, input.userId, effectiveText) : [];
     const knownEntities = deps.projectionsDb.listEntities(input.userId).map((e) => ({ entityId: e.id, name: e.name }));
     claims = recentAttributeClaims(deps.eventLog, deps.projectionsDb, input.userId);
 
     routerResult = await deps.intentRouter.route({
       message: effectiveText,
-      recentTurns: input.recentTurns,
+      // Deliberately NOT the full Part B-0 window: this is a separate paid
+      // API call the router makes, out of scope for this fix (which
+      // targeted the main reply prompt specifically) — kept at the same
+      // small slice it always used, so the router's own cost/behavior is
+      // unchanged. Attestation/register judgment needs recent context, not
+      // the whole session.
+      recentTurns: recentTurns.slice(-6),
       knownEntities,
       curiosityTurnEligible,
       curiosityCandidates,
@@ -342,7 +370,7 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   const assembled = assembleContext(
     candidateChunks,
     { mode: invocation.mode, query: invocation.query },
-    input.recentTurns,
+    recentTurns,
     input.budgets ?? DEFAULT_CONTEXT_BUDGETS,
     gateDirective,
     attachmentBlock,
@@ -377,6 +405,7 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       candidateChunkCount: assembled.retrieval.candidateCount,
       injectedChunkIds: assembled.retrieval.injectedChunkIds,
       retrievalTruncated: assembled.retrieval.truncated,
+      retrievalDedupedCount: assembled.retrieval.dedupedCount,
       recentWindowAvailableTurns: assembled.recentWindow.availableTurns,
       recentWindowInjectedTurns: assembled.recentWindow.injectedTurns,
       recentWindowTruncated: assembled.recentWindow.truncated,

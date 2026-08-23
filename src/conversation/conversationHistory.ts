@@ -1,4 +1,5 @@
 import type { EventLog } from "../events/eventLog.js";
+import type { RecentTurnForPrompt } from "../persona/systemPrompt.js";
 
 export interface ConversationMessage {
   id: string;
@@ -25,4 +26,26 @@ export function getConversationHistory(eventLog: EventLog, userId: string): Conv
       role: e.type === "message_sent" ? "user" : "enso",
       text: (e.payload as { text: string }).text
     }));
+}
+
+/**
+ * Part B-0: the server-computed default for chatPipeline.ts's `sendMessage`
+ * — the ENTIRE current session's turns, WITH each turn's source event id
+ * attached (contextAssembly.ts's retrieval-dedup needs it; the prompt text
+ * itself never shows it). This is what makes the event log — not whatever
+ * a browser tab happens to have in React state — the actual source of
+ * truth for what Enso can see of the current session: the client no longer
+ * decides this by slicing its own message array (see app/page.tsx before
+ * this fix, which sent `messages.slice(-6)` regardless of what the server
+ * actually held).
+ *
+ * `excludeEventId` is the message_sent event just captured for THIS turn —
+ * it's the live input to the reply being generated, not history, so it's
+ * left out of the window the same way it always was (the caller passes it
+ * separately as the chat call's latestMessage).
+ */
+export function getSessionTurnsForPrompt(eventLog: EventLog, userId: string, excludeEventId?: string): RecentTurnForPrompt[] {
+  return getConversationHistory(eventLog, userId)
+    .filter((m) => m.id !== excludeEventId)
+    .map((m) => ({ role: m.role, text: m.text, eventId: m.id }));
 }

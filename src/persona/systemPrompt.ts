@@ -136,6 +136,17 @@ export function buildRetrievedMemoryBlock(chunks: RetrievedChunkForPrompt[]): st
 export interface RecentTurnForPrompt {
   role: "user" | "enso";
   text: string;
+  /**
+   * Part B-0: the source message_sent event ULID, when known — used
+   * ONLY for retrieval dedup (contextAssembly.ts skips a candidate chunk
+   * whose source_event_id is already sitting in this window verbatim, so
+   * it never wastes one of the 8 retrieval slots on something already
+   * shown). Never rendered into the prompt text itself. Optional because
+   * hand-built turns (most FAST tests, any future caller not sourcing
+   * from the real event log) legitimately have no event to point to —
+   * dedup simply never fires for those, which is the safe default.
+   */
+  eventId?: string;
 }
 
 /**
@@ -143,13 +154,22 @@ export interface RecentTurnForPrompt {
  * Separate from the retrieved-memory block on purpose — one is "what's
  * being said right now," the other is "what's been said historically and
  * happened to match this turn's query" (EN-035's retrieval, not a window).
+ *
+ * Part B-0: this is now the ENTIRE current session by default (governed by
+ * a character budget, not a fixed turn count — contextAssembly.ts), so
+ * `truncated` is genuinely rare (only a pathologically long single
+ * session), but when it happens the memory-honesty principle applies to
+ * the window itself, not just to retrieval: the block says so explicitly,
+ * so Enso can tell the owner "that's beyond what I can see right now"
+ * instead of silently implying earlier material never existed.
  */
-export function buildRecentWindowBlock(turns: RecentTurnForPrompt[]): string {
+export function buildRecentWindowBlock(turns: RecentTurnForPrompt[], truncated: boolean = false): string {
   if (turns.length === 0) {
     return "=== RECENT CONVERSATION (begin) ===\n(This is the first message of the conversation.)\n=== RECENT CONVERSATION (end) ===";
   }
   const lines = turns.map((t) => `${t.role === "user" ? "Owner" : "Enso"}: ${t.text}`);
-  return `=== RECENT CONVERSATION (begin) ===\n${lines.join("\n")}\n=== RECENT CONVERSATION (end) ===`;
+  const truncationNote = truncated ? "\n(Earlier turns from this same session exist but aren't shown above — they've been trimmed to fit. If asked about something from further back, say plainly that it's beyond what's visible right now rather than implying it never happened.)" : "";
+  return `=== RECENT CONVERSATION (begin) ===\n${lines.join("\n")}${truncationNote}\n=== RECENT CONVERSATION (end) ===`;
 }
 
 /**

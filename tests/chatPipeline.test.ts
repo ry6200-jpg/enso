@@ -342,3 +342,75 @@ describe("sendMessage — self-profile block reaches the prompt (Part B, R38)", 
     expect(payload.contextProvenance.selfProfile).toEqual({ included: false, attributeCount: 0, bondCount: 0, truncated: false });
   });
 });
+
+describe("sendMessage — recentTurns omitted: the event log is the source of truth (Part B-0)", () => {
+  it("with no recentTurns supplied, pulls the real session history from the event log itself, past what any 6-turn cap would have shown", async () => {
+    // Seed 8 prior turns directly on the event log — more than the old
+    // hardcoded 6-turn window ever showed, and more than the client used
+    // to resend (app/page.tsx's old `messages.slice(-6)`).
+    for (let i = 0; i < 8; i++) {
+      eventLog.append({ type: "message_sent", actor: "user", payload: { text: `old message ${i}`, attachmentOnly: false }, userId: PRIMARY_USER_ID });
+      eventLog.append({ type: "reply_sent", actor: "enso", payload: { text: `old reply ${i}` }, userId: PRIMARY_USER_ID });
+    }
+
+    let receivedSystem = "";
+    deps.chatRouter = {
+      async reply(request) {
+        receivedSystem = request.system;
+        return CANNED_REPLY;
+      }
+    };
+
+    const result = await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "what's the oldest thing I told you?",
+      retrievalOverride: { mode: "recency", query: "oldest", n: 0 }
+      // recentTurns intentionally omitted
+    });
+
+    expect(receivedSystem).toContain("old message 0"); // the very oldest turn — a 6-turn cap would have dropped it
+    expect(receivedSystem).toContain("old reply 7");
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.contextProvenance.recentWindowAvailableTurns).toBe(16); // 8 pairs, not capped to 6
+    expect(payload.contextProvenance.recentWindowInjectedTurns).toBe(16);
+  });
+
+  it("the just-captured current message is excluded from its own recent window — it's the live input, not history", async () => {
+    let receivedSystem = "";
+    deps.chatRouter = {
+      async reply(request) {
+        receivedSystem = request.system;
+        return CANNED_REPLY;
+      }
+    };
+
+    await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "a genuinely unique marker string xyzq",
+      retrievalOverride: { mode: "recency", query: "xyzq", n: 0 }
+    });
+
+    // Appears once — as the live message to the model, never duplicated into the recent-window block too.
+    const occurrences = receivedSystem.split("a genuinely unique marker string xyzq").length - 1;
+    expect(occurrences).toBe(0); // the message itself is the chat call's latestMessage, not part of the system prompt at all
+  });
+
+  it("an explicit recentTurns override still works — the escape hatch for direct test control is preserved", async () => {
+    let receivedSystem = "";
+    deps.chatRouter = {
+      async reply(request) {
+        receivedSystem = request.system;
+        return CANNED_REPLY;
+      }
+    };
+
+    await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "hello",
+      recentTurns: [{ role: "user", text: "explicitly overridden turn" }],
+      retrievalOverride: { mode: "recency", query: "hello", n: 0 }
+    });
+
+    expect(receivedSystem).toContain("explicitly overridden turn");
+  });
+});

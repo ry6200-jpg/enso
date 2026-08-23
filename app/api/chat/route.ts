@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { sendMessage } from "../../../src/conversation/chatPipeline.js";
 import { refreshMemoryAfterTurn } from "../../../src/conversation/turnMemoryRefresh.js";
-import type { RecentTurnForPrompt } from "../../../src/persona/systemPrompt.js";
 import { getChatRouter, getDevUserId, getEmbedder, getExtractionRouter, getIntentRouter, getStores } from "../../../lib/serverPipeline.js";
 
 /**
@@ -10,9 +9,18 @@ import { getChatRouter, getDevUserId, getEmbedder, getExtractionRouter, getInten
  * scripts/chat.ts (the REPL) calls. No chat/extraction/routing logic
  * lives in this file; it only adapts an HTTP request into the same
  * SendMessageDeps shape the REPL builds.
+ *
+ * Part B-0: this route no longer reads or forwards a client-supplied
+ * `recentTurns` — the client used to resend `messages.slice(-6)` from its
+ * own React state regardless of what the server actually held (app/
+ * page.tsx before this fix), which meant the browser tab, not the event
+ * log, was deciding what Enso could see of the session. sendMessage now
+ * computes the real window itself from the event log whenever the caller
+ * omits it (getSessionTurnsForPrompt), so the client only ever needs to
+ * say what was just typed — the event log is the one source of truth.
  */
 export async function POST(request: Request): Promise<Response> {
-  const body = (await request.json()) as { text: string; recentTurns: RecentTurnForPrompt[]; attachmentEventId?: string };
+  const body = (await request.json()) as { text: string; attachmentEventId?: string };
   const hasText = typeof body.text === "string" && body.text.trim() !== "";
   const hasAttachment = typeof body.attachmentEventId === "string" && body.attachmentEventId.length > 0;
   // Item 8: text alone was required before, which made "attach a file and
@@ -34,7 +42,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     result = await sendMessage(
       { eventLog, projectionsDb, retrievalDb, embedder, chatRouter, intentRouter },
-      { userId, text: body.text ?? "", recentTurns: body.recentTurns ?? [], attachmentEventId: body.attachmentEventId }
+      { userId, text: body.text ?? "", attachmentEventId: body.attachmentEventId }
     );
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 502 });

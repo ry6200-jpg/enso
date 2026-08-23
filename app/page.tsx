@@ -165,7 +165,6 @@ export default function Page() {
     setSending(true);
     setInput("");
     setPendingFile(null);
-    const recentTurns = messages.slice(-6).map((m) => ({ role: m.role, text: m.text }));
     setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", text, attachmentFilename: file?.name }]);
 
     try {
@@ -183,7 +182,13 @@ export default function Page() {
         setAttachmentStatus({ filename: file.name, extractionSucceeded: uploadJson.extractionSucceeded, extractionError: uploadJson.extractionError });
       }
 
-      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, recentTurns, attachmentEventId }) });
+      // Part B-0: recentTurns is no longer sent — the server derives the
+      // current session's window itself from the event log, which is the
+      // real source of truth (see app/api/chat/route.ts). The client's own
+      // message state was never guaranteed to reflect what the server
+      // actually held, and hardcoding "last 6" here was the reason Enso
+      // used to be blind past 6 turns within a single long session.
+      const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, attachmentEventId }) });
       const json = await res.json();
       if (!res.ok) {
         setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "enso", text: `(reply failed — your message was still saved: ${json.error})` }]);

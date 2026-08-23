@@ -7,8 +7,29 @@ export interface ContextBudgets {
   maxRetrievedChunks: number;
   /** Max total characters of retrieved-chunk text injected — a cumulative budget applied on top of the chunk-count cap, since chunk sizes vary (documents vs. short messages). */
   maxRetrievedChars: number;
-  /** Max recent conversation turns injected (mirrors the old repo's MAX_HISTORY_TURNS = 6). */
-  maxRecentTurns: number;
+  /**
+   * Part B-0: max total characters of the recent conversation window,
+   * REPLACING the old fixed maxRecentTurns cap (mirrored the old repo's
+   * MAX_HISTORY_TURNS = 6). A hard turn count made Enso blind past 6 turns
+   * regardless of session length — the widest remaining memory gap this
+   * project had (a fact said 20 turns ago was reachable only through
+   * hybridSearch, which structurally loses the ranking competition for
+   * short/sparse content — see R38). The window is now the ENTIRE current
+   * session by default, governed by this character budget instead: kept
+   * verbatim from the MOST RECENT end, oldest turns dropped first when it
+   * doesn't fit — never from the middle, never interleaved with retrieval.
+   *
+   * 40,000 chars (~10,000 estimated tokens at ~4 chars/token) — set from
+   * real measurement against the actual 79-reply/158-message dev-data
+   * session: its ENTIRE raw history is 28,369 chars (~7,093 estimated
+   * tokens), so this budget comfortably covers a real full session with
+   * ~40% headroom before ever truncating, while still bounding worst-case
+   * cost/latency for a pathologically long single session. Persona
+   * (~35,600 chars fixed) + retrieval (6,000) + self-profile (1,000) +
+   * this budget tops out around 82,600 chars (~20,650 tokens) even at the
+   * ceiling — nowhere near any modern model's context window.
+   */
+  maxRecentWindowChars: number;
   /** Part B (R38): max characters of the always-on self-profile block (src/persona/systemPrompt.ts's buildSelfProfileBlock, called by chatPipeline.ts before assembleContext). Deliberately generous relative to actual content — the profile is bounded by construction (3 attributes, direct bonds only) — but still an explicit, documented cap, never an unbounded block. */
   maxSelfProfileChars: number;
 }
@@ -16,7 +37,7 @@ export interface ContextBudgets {
 export const DEFAULT_CONTEXT_BUDGETS: ContextBudgets = {
   maxRetrievedChunks: 8,
   maxRetrievedChars: 6000,
-  maxRecentTurns: 6,
+  maxRecentWindowChars: 40000,
   maxSelfProfileChars: 1000
 };
 
@@ -27,8 +48,17 @@ export interface RetrievalProvenance {
   candidateCount: number;
   /** How many chunks actually made it into the prompt. */
   injectedChunkIds: string[];
-  /** True if the chunk-count or character budget cut anything — recorded explicitly, per Part 1: truncation is never silent. */
+  /** True if the chunk-count or character budget cut anything (after dedup below) — recorded explicitly, per Part 1: truncation is never silent. */
   truncated: boolean;
+  /**
+   * Part B-0: how many candidates were skipped because their source
+   * message is already sitting verbatim in the recent window — these
+   * never consume one of the maxRetrievedChunks slots, and never counted
+   * against `truncated` above (skipping a genuine duplicate isn't a
+   * budget cut). Distinct from `truncated` so a reader can tell "nothing
+   * relevant was cut" from "some things were cut, but they were dupes."
+   */
+  dedupedCount: number;
 }
 
 export interface RecentWindowProvenance {
@@ -41,6 +71,27 @@ export interface AssembledContext {
   systemPrompt: string;
   retrieval: RetrievalProvenance;
   recentWindow: RecentWindowProvenance;
+}
+
+/**
+ * Part B-0: keeps the MOST RECENT turns verbatim under a character budget,
+ * dropping from the OLDEST end only — never the middle. Mirrors the
+ * retrieval char-budget's own precedent one line down: a single turn that
+ * alone exceeds the budget is dropped entirely rather than partially
+ * included (same as "a single chunk that alone exceeds the character
+ * budget is dropped entirely, not injected partially").
+ */
+function truncateRecentTurnsToCharBudget(recentTurns: RecentTurnForPrompt[], maxChars: number): { injectedTurns: RecentTurnForPrompt[]; truncated: boolean } {
+  let runningChars = 0;
+  let cutoffIndex = recentTurns.length;
+  for (let i = recentTurns.length - 1; i >= 0; i--) {
+    const turnChars = recentTurns[i]!.text.length;
+    if (runningChars + turnChars > maxChars) break;
+    runningChars += turnChars;
+    cutoffIndex = i;
+  }
+  const injectedTurns = recentTurns.slice(cutoffIndex);
+  return { injectedTurns, truncated: injectedTurns.length < recentTurns.length };
 }
 
 /**
@@ -67,6 +118,14 @@ export interface AssembledContext {
  * Its own budget (`maxSelfProfileChars`) is enforced by buildSelfProfileBlock
  * itself, before this function ever sees the resulting string — not
  * re-enforced here, same as attachmentBlock has no size cap here either.
+ *
+ * Part B-0 dedup: a candidate chunk whose `source_event_id` is already one
+ * of the turns kept in the (now much larger) recent window is dropped
+ * BEFORE the retrieval count/char budget runs — it would only ever have
+ * repeated something already shown verbatim, wasting one of the 8 slots on
+ * a non-answer. recentTurns' `eventId` (systemPrompt.ts) is what makes this
+ * possible; a turn with no eventId (hand-built in most FAST tests) simply
+ * never matches, which is the safe no-op default.
  */
 export function assembleContext(
   candidateChunks: ContentChunkRow[],
@@ -78,7 +137,13 @@ export function assembleContext(
   voiceMode: VoiceMode = "natural",
   selfProfileBlock: string | null = null
 ): AssembledContext {
-  const countCapped = candidateChunks.slice(0, budgets.maxRetrievedChunks);
+  const { injectedTurns, truncated: recentTruncated } = truncateRecentTurnsToCharBudget(recentTurns, budgets.maxRecentWindowChars);
+
+  const injectedEventIds = new Set(injectedTurns.map((t) => t.eventId).filter((id): id is string => Boolean(id)));
+  const dedupedChunks = candidateChunks.filter((c) => !injectedEventIds.has(c.source_event_id));
+  const dedupedCount = candidateChunks.length - dedupedChunks.length;
+
+  const countCapped = dedupedChunks.slice(0, budgets.maxRetrievedChunks);
   let runningChars = 0;
   const injectedChunks: ContentChunkRow[] = [];
   for (const chunk of countCapped) {
@@ -86,15 +151,12 @@ export function assembleContext(
     runningChars += chunk.text.length;
     injectedChunks.push(chunk);
   }
-  const retrievalTruncated = injectedChunks.length < candidateChunks.length;
-
-  const injectedTurns = recentTurns.slice(-budgets.maxRecentTurns);
-  const recentTruncated = injectedTurns.length < recentTurns.length;
+  const retrievalTruncated = injectedChunks.length < dedupedChunks.length;
 
   const retrievedBlock = buildRetrievedMemoryBlock(
     injectedChunks.map((c) => ({ id: c.id, text: c.text, occurredAt: c.occurred_at, recordedAt: c.recorded_at }))
   );
-  const recentWindowBlock = buildRecentWindowBlock(injectedTurns);
+  const recentWindowBlock = buildRecentWindowBlock(injectedTurns, recentTruncated);
   const baseSystemPrompt = buildSystemPrompt(retrievedBlock, recentWindowBlock, attachmentBlock, voiceMode, selfProfileBlock);
   // EN-071 stage 3: a gate directive, when present, is injected at the END
   // of the system prompt — highest-salience position, named action only.
@@ -107,7 +169,8 @@ export function assembleContext(
       query: retrievalMeta.query,
       candidateCount: candidateChunks.length,
       injectedChunkIds: injectedChunks.map((c) => c.id),
-      truncated: retrievalTruncated
+      truncated: retrievalTruncated,
+      dedupedCount
     },
     recentWindow: {
       availableTurns: recentTurns.length,
