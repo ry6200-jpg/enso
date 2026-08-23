@@ -36,7 +36,16 @@ export type ElicitationLayer3ProbeType = "howMet" | "earliestMemory" | "highPoin
  */
 export type ElicitationCandidate =
   | { kind: "elicitation"; layer: 1; probeType: ElicitationLayer1ProbeType }
-  | { kind: "elicitation"; layer: 3; probeType: ElicitationLayer3ProbeType; anchorEntityId: string; anchorName: string };
+  | {
+      kind: "elicitation";
+      layer: 3;
+      probeType: ElicitationLayer3ProbeType;
+      /** The entity's CURRENT projection id — valid for this turn's router selection only, same caveat as CircleBackCandidate.entityId above. Never persisted for cross-turn matching. */
+      anchorEntityId: string;
+      anchorName: string;
+      /** The anchor entity's earliest provenance event ULID — stable across rebuilds (unlike anchorEntityId), so this is what cross-turn (probeType, anchor) attempt-history actually keys on (R44: elicitation.ts previously keyed on anchorEntityId directly and silently lost its own attempt cap across rebuilds). */
+      anchorStableKey: string;
+    };
 
 /**
  * EN-030 item A: the self-initiated-curiosity candidate pool, generalized

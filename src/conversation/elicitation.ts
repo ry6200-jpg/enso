@@ -103,7 +103,7 @@ function userMessageTurns(eventLog: EventLog, userId: string): EventRecord[] {
 interface FiredElicitation {
   layer: 1 | 3;
   probeType: string;
-  anchorEntityId?: string;
+  anchorStableKey?: string;
   turnIndex: number;
 }
 
@@ -193,25 +193,37 @@ function findLayer1Candidate(eventLog: EventLog, userId: string): ElicitationCan
  * "how you met" before "what would you want remembered," going deep on one
  * person before spreading to the next, matching the brief's framing of
  * Layer 3 as depth, not breadth.
+ *
+ * R44: `askedPairs` keys on each anchor's STABLE key (earliest provenance
+ * event ULID — sourceIds[0], the same pattern circleBack.ts's stableKey
+ * already uses), never the ephemeral projection entityId, which is
+ * reassigned on every rebuild (EN-054). A real bug found live: three
+ * separate "how did you meet" askings for the SAME real person, each
+ * recording a DIFFERENT anchorEntityId, because the projection had been
+ * rebuilt between them — the (probeType, anchor) cap never actually
+ * engaged. This is the identical bug class CircleBackCandidate's own doc
+ * comment already names as fixed once in circleBack.ts; it had never been
+ * applied here.
  */
-function findLayer3Candidate(eventLog: EventLog, projections: ProjectionsDb, userId: string): ElicitationCandidate | null {
+export function findLayer3Candidate(eventLog: EventLog, projections: ProjectionsDb, userId: string): ElicitationCandidate | null {
   const userTurns = userMessageTurns(eventLog, userId);
   const history = firedElicitationHistory(eventLog, userId, userTurns);
-  const askedPairs = new Set(history.filter((h) => h.layer === 3).map((h) => `${h.anchorEntityId}:${h.probeType}`));
+  const askedPairs = new Set(history.filter((h) => h.layer === 3).map((h) => `${h.anchorStableKey}:${h.probeType}`));
 
   const anchors = projections
     .listEntities(userId)
     .filter((e) => isEstablished(projections, userId, e.id))
     .map((e) => {
       const sourceIds = (JSON.parse(e.source_event_ids) as string[]).slice().sort();
-      return { entity: e, mostRecentSourceId: sourceIds[sourceIds.length - 1] ?? "" };
+      return { entity: e, stableKey: sourceIds[0] ?? "", mostRecentSourceId: sourceIds[sourceIds.length - 1] ?? "" };
     })
+    .filter((a) => a.stableKey !== "") // no provenance at all — nothing to key attempts on
     .sort((a, b) => (a.mostRecentSourceId < b.mostRecentSourceId ? 1 : -1)); // most-recently-mentioned first
 
-  for (const { entity } of anchors) {
+  for (const { entity, stableKey } of anchors) {
     for (const probeType of LAYER3_PROBE_TYPES) {
-      if (askedPairs.has(`${entity.id}:${probeType}`)) continue;
-      return { kind: "elicitation", layer: 3, probeType, anchorEntityId: entity.id, anchorName: entity.name };
+      if (askedPairs.has(`${stableKey}:${probeType}`)) continue;
+      return { kind: "elicitation", layer: 3, probeType, anchorEntityId: entity.id, anchorName: entity.name, anchorStableKey: stableKey };
     }
   }
   return null; // every established anchor has exhausted all six scene types

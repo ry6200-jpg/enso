@@ -9,6 +9,7 @@ import {
   buildElicitationDirective,
   domainCoverage,
   findElicitationCandidate,
+  findLayer3Candidate,
   justOpenedUpFromElicitation,
   LAYER1_PROBE_TYPES,
   LAYER3_PROBE_TYPES,
@@ -150,7 +151,33 @@ describe("EN-097 acceptance fixture: anchor exists -> Layer 3 available; no anch
     }
 
     const candidate = findElicitationCandidate(eventLog, projections, PRIMARY_USER_ID);
-    expect(candidate).toEqual({ kind: "elicitation", layer: 3, probeType: LAYER3_PROBE_TYPES[0], anchorEntityId: marcusId, anchorName: "Marcus" });
+    expect(candidate).toEqual({ kind: "elicitation", layer: 3, probeType: LAYER3_PROBE_TYPES[0], anchorEntityId: marcusId, anchorName: "Marcus", anchorStableKey: msg.id });
+  });
+});
+
+describe("R44: Layer 3's attempt cap keys on the anchor's stable id, not the ephemeral projection entityId", () => {
+  it("real-transcript case: the SAME anchor reassigned a new projection entityId on every rebuild (EN-054) must not look like a fresh candidate — only the underlying gap's first fire counts, however many times the entity was re-inserted under a new id", () => {
+    const msg = userTurn("I went to Saigon in May to visit a childhood friend.");
+    const stableKey = msg.id; // the anchor's earliest provenance event — stable across every rebuild below
+
+    // Turn 1: the anchor exists under entityId A, and the first Layer 3 "howMet" ask fires and is recorded against the real stable key.
+    const entityIdA = insertEntity("Childhood Friend", [stableKey]);
+    establishAsFriend(entityIdA);
+    recordReply(msg.id, { elicitationFired: { layer: 3, probeType: "howMet", anchorEntityId: entityIdA, anchorStableKey: stableKey } });
+
+    // Turns 2-5: four more rebuilds, each reassigning a brand-new entityId to the SAME real person (same source_event_ids, same stableKey) —
+    // reproducing the real live failure (three distinct anchorEntityIds recorded for one real childhood friend across a single session).
+    for (let i = 0; i < 4; i++) {
+      projections = new ProjectionsDb(freshTestDbPath(import.meta.url, `projections-rebuild-${i}`));
+      const churnedEntityId = insertEntity("Childhood Friend", [stableKey]);
+      establishAsFriend(churnedEntityId);
+
+      // Test findLayer3Candidate directly, not the full orchestrator: with an otherwise-empty archive, Layer 2's
+      // breadth-first tiebreak would prefer Layer 1 regardless of whether this bug is present or fixed, masking the result.
+      const candidate = findLayer3Candidate(eventLog, projections, PRIMARY_USER_ID);
+      const layer3Reoffered = candidate?.layer === 3 && candidate.probeType === "howMet";
+      expect(layer3Reoffered).toBe(false);
+    }
   });
 });
 
@@ -190,7 +217,7 @@ describe("buildElicitationDirective / verifyElicitationExecuted", () => {
   });
 
   it("Layer 3 directive names the anchor and the scene concept", () => {
-    const directive = buildElicitationDirective({ kind: "elicitation", layer: 3, probeType: "howMet", anchorEntityId: "e1", anchorName: "Marcus" });
+    const directive = buildElicitationDirective({ kind: "elicitation", layer: 3, probeType: "howMet", anchorEntityId: "e1", anchorName: "Marcus", anchorStableKey: "e1-stable" });
     expect(directive).toMatch(/Marcus/);
     expect(directive).toMatch(/how they first met this person/);
   });
@@ -198,8 +225,8 @@ describe("buildElicitationDirective / verifyElicitationExecuted", () => {
   it("verification requires a real question; Layer 3 also requires the anchor's name to appear", () => {
     expect(verifyElicitationExecuted({ kind: "elicitation", layer: 1, probeType: "goodNews" }, "Who would you tell first?")).toBe(true);
     expect(verifyElicitationExecuted({ kind: "elicitation", layer: 1, probeType: "goodNews" }, "That sounds nice.")).toBe(false);
-    expect(verifyElicitationExecuted({ kind: "elicitation", layer: 3, probeType: "howMet", anchorEntityId: "e1", anchorName: "Marcus" }, "How did you and Marcus first meet?")).toBe(true);
-    expect(verifyElicitationExecuted({ kind: "elicitation", layer: 3, probeType: "howMet", anchorEntityId: "e1", anchorName: "Marcus" }, "How did you two first meet?")).toBe(false);
+    expect(verifyElicitationExecuted({ kind: "elicitation", layer: 3, probeType: "howMet", anchorEntityId: "e1", anchorName: "Marcus", anchorStableKey: "e1-stable" }, "How did you and Marcus first meet?")).toBe(true);
+    expect(verifyElicitationExecuted({ kind: "elicitation", layer: 3, probeType: "howMet", anchorEntityId: "e1", anchorName: "Marcus", anchorStableKey: "e1-stable" }, "How did you two first meet?")).toBe(false);
   });
 });
 

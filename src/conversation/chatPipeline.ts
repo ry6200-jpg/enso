@@ -125,12 +125,17 @@ export interface ReplySentPayload {
      * EN-097: non-null only when the elicitation gate fired AND EN-073-style
      * verification confirmed the reply actually asked something (see
      * elicitation.ts's verifyElicitationExecuted for why that check is
-     * looser than circle-back's/self-fact's). anchorEntityId is set only
-     * for a Layer 3 probe; elicitation.ts's own attempt-cap scans (one-shot
-     * per Layer 1 probeType; one-shot per Layer 3 (probeType, anchor) pair)
-     * both derive from a scan of this field, never a new event type.
+     * looser than circle-back's/self-fact's). anchorEntityId/anchorStableKey
+     * are set only for a Layer 3 probe; elicitation.ts's own attempt-cap
+     * scans (one-shot per Layer 1 probeType; one-shot per Layer 3
+     * (probeType, anchor) pair) both derive from a scan of this field,
+     * never a new event type. R44: the Layer 3 cap keys on anchorStableKey
+     * (the anchor's earliest provenance event ULID), never anchorEntityId —
+     * entityId is reassigned on every projection rebuild (EN-054) and is
+     * carried here for display/debug only, same split as circleBackFired's
+     * entityId vs. stableKey above.
      */
-    elicitationFired: { layer: 1 | 3; probeType: string; anchorEntityId?: string } | null;
+    elicitationFired: { layer: 1 | 3; probeType: string; anchorEntityId?: string; anchorStableKey?: string } | null;
   };
   /**
    * Item 8 round-trip survival: non-null whenever this turn had an
@@ -490,7 +495,7 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
         curiosityAskFired?.kind === "elicitation"
           ? curiosityAskFired.layer === 1
             ? { layer: 1, probeType: curiosityAskFired.probeType }
-            : { layer: 3, probeType: curiosityAskFired.probeType, anchorEntityId: curiosityAskFired.anchorEntityId }
+            : { layer: 3, probeType: curiosityAskFired.probeType, anchorEntityId: curiosityAskFired.anchorEntityId, anchorStableKey: curiosityAskFired.anchorStableKey }
           : null
     },
     attachmentContext: attachmentInfo
