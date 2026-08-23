@@ -17,8 +17,9 @@ import { sendMessage, type SendMessageDeps } from "../src/conversation/chatPipel
 import { EventLog } from "../src/events/eventLog.js";
 import { ProjectionsDb } from "../src/projections/db.js";
 import { RetrievalDb } from "../src/retrieval/retrievalDb.js";
-import { EMBEDDING_DIMENSIONS, type Embedder } from "../src/embeddings/embedder.js";
+import { configureLocalOnlyEmbeddings, createEmbedder, EMBEDDING_DIMENSIONS, type Embedder } from "../src/embeddings/embedder.js";
 import { createDefaultChatRouter } from "../src/providers/chatRouter.js";
+import { createDefaultIntentRouter } from "../src/conversation/router/intentRouter.js";
 import { freshTestDbPath } from "../src/test/dbPath.js";
 import { PRIMARY_USER_ID } from "../src/test/seed.js";
 
@@ -45,6 +46,27 @@ function freshDeps(): SendMessageDeps {
     projectionsDb: new ProjectionsDb(freshTestDbPath(import.meta.url, "projections")),
     embedder: unusedEmbedder,
     chatRouter: createDefaultChatRouter({ openai: requireEnv("OPENAI_API_KEY"), gemini: requireEnv("GEMINI_API_KEY") })
+  };
+}
+
+/**
+ * Cases D/E below need the ambientContext ROUTER FLAG to actually fire (not
+ * just the reply-generation call) — freshDeps() above deliberately omits
+ * intentRouter/googleMapsApiKey, since cases A/B are pure persona-wording
+ * checks that use retrievalOverride, which BYPASSES the router entirely
+ * (chatPipeline.ts: `if (input.retrievalOverride) {...} else if
+ * (deps.intentRouter) {...}` — the two are mutually exclusive branches).
+ * Cases D/E must NOT pass retrievalOverride, and therefore need a real
+ * embedder too — this is the LOCAL transformers.js model (no network call,
+ * no API cost), not an extra billed dependency.
+ */
+async function freshDepsWithAmbient(): Promise<SendMessageDeps> {
+  configureLocalOnlyEmbeddings();
+  return {
+    ...freshDeps(),
+    embedder: await createEmbedder(),
+    intentRouter: createDefaultIntentRouter({ openai: requireEnv("OPENAI_API_KEY"), gemini: requireEnv("GEMINI_API_KEY") }),
+    googleMapsApiKey: requireEnv("GOOGLE_MAPS_API_KEY")
   };
 }
 
@@ -83,5 +105,60 @@ describe("CURRENT_LOCATION_INSTRUCTION honesty addition (live, real API)", () =>
     expect(result.replyText.length).toBeGreaterThan(0);
     const deflected = /\b(can't help with that|not something I can|I'm not able to|don't have access to real-time|no way to know|can't tell you|I don't have that capability)\b/i.test(result.replyText);
     expect(deflected).toBe(false);
+  }, 30000);
+});
+
+/**
+ * Production bug batch, item 1 + item 4 (real API, live). Reproduces the
+ * exact Cloud Run transcript: a city-tier (IP-only) location, no precise
+ * coordinates available, a distance question, and — in case D — the exact
+ * "You can use my gps" phrasing that caused the live failure (a reply
+ * asserting "8-minute walk, roughly 550 meters" that nothing in this call
+ * actually resolved). Case E is the capability-denial control: real
+ * coordinates near the same real place (the Pantages Theatre, Hollywood),
+ * where a distance figure SHOULD be produced — this fix narrows
+ * confabulation, it must not silently kill the capability. Two calls total,
+ * run once, no LIVE-suite re-run.
+ */
+describe("CURRENT_LOCATION_INSTRUCTION tier-authority fix (production bug batch, live, real API)", () => {
+  it("case D — city tier, no coordinates, user phrases GPS as granted permission: no distance figure, no causal-attribution story", async () => {
+    const deps = await freshDepsWithAmbient();
+    const result = await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "You can use my gps. How far is the Pantages Theatre from me?",
+      recentTurns: [
+        { role: "user", text: "How far is pantages theatre from me?" },
+        { role: "enso", text: "I don't have a precise enough location to calculate it." }
+      ],
+      locationContext: { placeName: "Los Angeles, California", tier: "ip", timezone: "America/Los_Angeles" },
+      ownCoordinates: null
+    });
+
+    console.log("\n=== Case D (city tier + permission-in-text) ===\nUser: You can use my gps. How far is the Pantages Theatre from me?\nEnso:", result.replyText, "\n");
+
+    const hasDistanceFigure = /\b\d+(\.\d+)?\s*(mile|miles|mi|km|kilometer|kilometers|meter|meters|m\b|minute|minutes|min)\b/i.test(result.replyText);
+    expect(hasDistanceFigure).toBe(false);
+
+    const claimsPermissionEnabledIt = /\b(now that you|since you (gave|granted|said)|because you (gave|granted|said)|now I can use your|you've given me permission)\b/i.test(result.replyText);
+    expect(claimsPermissionEnabledIt).toBe(false);
+  }, 30000);
+
+  it("case E — capability-denial guard: real coordinates near a real place still produce a real distance figure", async () => {
+    const deps = await freshDepsWithAmbient();
+    const result = await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "How far is the Pantages Theatre from me?",
+      recentTurns: [],
+      locationContext: { placeName: "Hollywood, California", tier: "geolocation", timezone: "America/Los_Angeles" },
+      ownCoordinates: { latitude: 34.1016, longitude: -118.326 }
+    });
+
+    console.log("=== Case E (precise tier, capability-denial control) ===\nUser: How far is the Pantages Theatre from me?\nEnso:", result.replyText, "\n");
+    const ambientMatch = result.debug.systemPrompt.match(/=== AMBIENT CONTEXT \(begin\) ===[\s\S]*?=== AMBIENT CONTEXT \(end\) ===/);
+    console.log("=== Case E ambient block actually seen by the model ===\n", ambientMatch ? ambientMatch[0] : "(none — block absent)", "\n");
+    console.log("=== Case E router provenance ===\n", JSON.stringify((result.replyEvent.payload as { router?: unknown }).router), "\n");
+
+    const hasDistanceFigure = /\b\d+(\.\d+)?\s*(mile|miles|mi|km|kilometer|kilometers|meter|meters|m\b|minute|minutes|min)\b/i.test(result.replyText);
+    expect(hasDistanceFigure).toBe(true);
   }, 30000);
 });
