@@ -125,6 +125,14 @@ export default function Page() {
   // context, resent with every /api/chat call, never stored beyond state.
   const [locationContext, setLocationContext] = useState<LocationContextState>({ placeName: null, timezone: null });
   const [locationBlocked, setLocationBlocked] = useState(false);
+  // Confirmed live: this ref only guards ONE attempt per PAGE LOAD, not per
+  // browser-permission-lifetime — a tab left open across a server restart
+  // that newly enabled Tier 1 (e.g. GOOGLE_MAPS_API_KEY added) will NOT
+  // retry on its own even though permission was already Allow, because
+  // this ref was already tripped from an earlier attempt in that same
+  // still-open tab. A hard reload is what re-runs the first-send attempt.
+  // Looks like a bug to anyone who hits it without this context — it
+  // isn't one; the browser's own permission memory was never the problem.
   const geolocationAttemptedRef = useRef(false);
   const listRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -182,6 +190,22 @@ export default function Page() {
     textareaRef.current?.focus();
   }, [refocusInputSignal]);
 
+  // Diagnostic-only record of the last permission decision this browser
+  // actually made — granted/denied with a timestamp, "never-asked" simply
+  // being the absence of any entry. NOT an event, not entity_attributes,
+  // never sent to /api/chat or seen by extraction — this exists solely so
+  // a future diagnosis (like the last one) doesn't have to infer whether
+  // permission was ever granted from indirect evidence. Read it directly
+  // from a browser devtools console: localStorage.getItem("enso:locationPermissionLog").
+  const LOCATION_PERMISSION_LOG_KEY = "enso:locationPermissionLog";
+  function logLocationPermissionDecision(status: "granted" | "denied") {
+    try {
+      localStorage.setItem(LOCATION_PERMISSION_LOG_KEY, JSON.stringify({ status, timestamp: new Date().toISOString() }));
+    } catch {
+      // localStorage unavailable (private browsing, disabled) — diagnostic-only, never blocks anything.
+    }
+  }
+
   // Tier 1 (browser geolocation -> server-side reverse geocode -> place
   // name). Fire-and-forget: never blocks a send, never awaited by the
   // caller — the very first message of a session simply goes out without
@@ -200,6 +224,7 @@ export default function Page() {
         // clears a stale "blocked" state from an earlier denial that was
         // since reversed in the browser's own site settings.
         setLocationBlocked(false);
+        logLocationPermissionDecision("granted");
         const { latitude, longitude } = position.coords; // read once, never stored — discarded the instant this callback returns
         fetch("/api/location", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ latitude, longitude }) })
           .then((res) => res.json())
@@ -209,8 +234,11 @@ export default function Page() {
           .catch(() => {}); // Tier 2/3 take over server-side regardless
       },
       (error) => {
-        if (error.code === error.PERMISSION_DENIED) setLocationBlocked(true);
-        // POSITION_UNAVAILABLE / TIMEOUT: transient, not a denial — locationBlocked stays false so a later click (or session) can retry.
+        if (error.code === error.PERMISSION_DENIED) {
+          setLocationBlocked(true);
+          logLocationPermissionDecision("denied");
+        }
+        // POSITION_UNAVAILABLE / TIMEOUT: transient, not a denial — locationBlocked stays false so a later click (or session) can retry, and no permission decision is logged (none was actually made).
       },
       { timeout: 5000, maximumAge: 300000 }
     );
