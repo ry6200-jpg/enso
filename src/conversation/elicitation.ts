@@ -48,6 +48,69 @@ import { buildEntityDensityByMessageId, buildMessageTextById, computeInterestSco
 export const LAYER1_PROBE_TYPES: readonly ElicitationLayer1ProbeType[] = ["goodNews", "call2am", "seeVsMatter", "lostTouch", "dependsOnThem", "knownLongest"];
 export const LAYER3_PROBE_TYPES: readonly ElicitationLayer3ProbeType[] = ["howMet", "earliestMemory", "highPoint", "lowPoint", "turningPoint", "wantRemembered"];
 
+/**
+ * Production bug batch, item 1(a): a topic can be dismissed in prose
+ * ("you keep asking about this," Enso agreeing to drop it) without ever
+ * touching a gate — MAX_LAYER3_ATTEMPTS_PER_PAIR already caps a single
+ * probeType at one GATED fire, but organic (ungated) curiosity about the
+ * same anchor is uncapped by anything, so a real dismissal or Enso's own
+ * self-correction was pure conversation text with nothing to persist it.
+ * Live-caught: the owner explicitly called out Enso repeatedly circling
+ * back to one relationship's origin story mid-session, Enso agreed to
+ * drop it, and the very next SESSION's opening reply led with the exact
+ * same topic — the "leave it alone" only ever held within that one live
+ * context window.
+ *
+ * Same fix shape as circleBack.ts's own principle, reused rather than
+ * reinvented — not "classify whether that was a dismissal" (circleBack's
+ * own header comment explicitly rejects that for identity-clarification,
+ * since silence/dismissal/anything-in-between are genuinely
+ * indistinguishable there), but a short, explicit signal list checked
+ * structurally, the exact same technique this codebase already trusts for
+ * isWindingDown's DEPLETION_SIGNALS/PERMISSION_TO_STOP_SIGNALS (both
+ * roles' text, no free-form judgment). Unlike isWindingDown's whole-axis
+ * suppression, this is attributed to whichever established anchor is
+ * actually named in the SAME turn as the signal, so dismissing one
+ * person's topic never silences curiosity about anyone else.
+ */
+export const TOPIC_DISMISSAL_SIGNALS = [
+  "keep asking",
+  "already told you",
+  "already answered",
+  "asked me this before",
+  "asked this already",
+  "we've been over this",
+  "we already covered this",
+  "drop it",
+  "leave it alone",
+  "let it go",
+  "let this go",
+  "stop asking",
+  "move on from that",
+  "i'll leave it",
+  "i'll let it go",
+  "i'll drop it"
+];
+
+/**
+ * True when a dismissal-shaped phrase (TOPIC_DISMISSAL_SIGNALS) appears in
+ * the SAME turn as this anchor's own name. Scans the FULL event log, not
+ * a session window — the same cross-session derivation discipline every
+ * other gate-state function in this file already uses (firedElicitationHistory,
+ * askedPairs) — which is what makes a dismissal survive into the NEXT
+ * session's candidate ranking, the actual bug this closes.
+ */
+export function wasTopicDismissed(eventLog: EventLog, userId: string, anchorName: string): boolean {
+  const lowerName = anchorName.toLowerCase();
+  for (const event of eventLog.listForUser(userId)) {
+    if (event.type !== "message_sent" && event.type !== "reply_sent") continue;
+    const text = ((event.payload as { text?: string }).text ?? "").toLowerCase();
+    if (!text.includes(lowerName)) continue;
+    if (TOPIC_DISMISSAL_SIGNALS.some((signal) => text.includes(signal))) return true;
+  }
+  return false;
+}
+
 /** Each Layer 1 subtype fires at most once ever — six greatest-hits onboarding questions, not a repeatable rotation (repeating "who would you call at 2am" verbatim months later would be exactly the near-verbatim-repetition defect R22 already names for a different gate). Once all six are spent, Layer 1 goes permanently dormant and Layer 3/third-party carry the relationship forward. */
 export const MAX_LAYER1_ATTEMPTS_PER_PROBE_TYPE = 1;
 /** Each (probeType, anchor) pair is a distinct question about a distinct person — "how you met Marcus" and "how you met Elena" are not duplicates — so this caps per-pair, not per-probeType globally. */
@@ -231,6 +294,7 @@ export function findLayer3Candidate(eventLog: EventLog, projections: Projections
 
   const anchors = allEntities
     .filter((e) => isEstablished(projections, userId, e.id))
+    .filter((e) => !wasTopicDismissed(eventLog, userId, e.name))
     .map((e) => {
       const sourceIds = (JSON.parse(e.source_event_ids) as string[]).slice().sort();
       const stableKey = sourceIds[0] ?? "";
@@ -251,17 +315,38 @@ export function findLayer3Candidate(eventLog: EventLog, projections: Projections
 }
 
 /**
+ * Production bug batch, item 1(b): a THIN POOL — effectively one person
+ * established at all — is a distinct condition from "many candidates,
+ * ranked badly." domainCoverage is binary (any friend at all marks
+ * closeFriendship "covered"), so an owner with exactly one close local
+ * relationship looks identical to the tiebreak as one with five, and
+ * favors depth (Layer 3) over breadth (Layer 1) either way — live-caught
+ * circling back to the one relationship on record instead of ever
+ * broadening the pool. Same "established" test as findLayer3Candidate,
+ * not a new one.
+ */
+export const THIN_POOL_ANCHOR_THRESHOLD = 1;
+
+function establishedAnchorCount(projections: ProjectionsDb, userId: string): number {
+  return projections.listEntities(userId).filter((e) => isEstablished(projections, userId, e.id)).length;
+}
+
+/**
  * Orchestrator: Layer 1 and Layer 3 candidates computed independently,
  * then Layer 2's coverage signal breaks the tie ONLY when both exist this
  * turn — it never gates either layer's own eligibility (the user's
  * explicit correction mid-build). High uncovered-relationship-domain count
  * favors breadth (Layer 1: surface a new name); low count favors depth
- * (Layer 3: deepen an anchor already established).
+ * (Layer 3: deepen an anchor already established) — EXCEPT when the pool
+ * itself is thin (THIN_POOL_ANCHOR_THRESHOLD), which forces breadth
+ * regardless of domain coverage, since coverage alone can't tell "one
+ * friend" from "five."
  */
 export function findElicitationCandidate(eventLog: EventLog, projections: ProjectionsDb, userId: string): ElicitationCandidate | null {
   const layer1 = findLayer1Candidate(eventLog, userId);
   const layer3 = findLayer3Candidate(eventLog, projections, userId);
   if (layer1 && layer3) {
+    if (establishedAnchorCount(projections, userId) <= THIN_POOL_ANCHOR_THRESHOLD) return layer1;
     return uncoveredRelationshipDomainCount(projections, userId) >= 2 ? layer1 : layer3;
   }
   return layer1 ?? layer3;

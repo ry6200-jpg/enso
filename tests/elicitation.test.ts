@@ -14,7 +14,9 @@ import {
   LAYER1_PROBE_TYPES,
   LAYER3_PROBE_TYPES,
   MAX_LAYER1_ATTEMPTS_PER_PROBE_TYPE,
-  verifyElicitationExecuted
+  THIN_POOL_ANCHOR_THRESHOLD,
+  verifyElicitationExecuted,
+  wasTopicDismissed
 } from "../src/conversation/elicitation.js";
 import { findCuriosityAskCandidates, isCuriosityTurnEligible } from "../src/conversation/circleBack.js";
 import { isSelfBirthdateEligible } from "../src/conversation/selfBirthdateGate.js";
@@ -56,6 +58,21 @@ function establishAsFriend(entityId: string) {
     to_entity_id: primaryEntityId(PRIMARY_USER_ID),
     qualifier: null,
     opened_basis: "stated",
+    interval_start: null,
+    interval_end: null,
+    source_event_ids: JSON.stringify([]),
+    created_at: new Date().toISOString()
+  });
+}
+
+function establishAsSpouse(entityId: string) {
+  projections.insertStructuralAtom({
+    id: newId(),
+    user_id: PRIMARY_USER_ID,
+    type: "spouse_of",
+    from_entity_id: entityId,
+    to_entity_id: primaryEntityId(PRIMARY_USER_ID),
+    basis: "stated",
     interval_start: null,
     interval_end: null,
     source_event_ids: JSON.stringify([]),
@@ -201,6 +218,118 @@ describe("R44: Layer 3's attempt cap keys on the anchor's stable id, not the eph
       const layer3Reoffered = candidate?.layer === 3 && candidate.probeType === "howMet";
       expect(layer3Reoffered).toBe(false);
     }
+  });
+});
+
+describe("wasTopicDismissed (production bug batch, item 1a: dismissal persists cross-session)", () => {
+  it("false when nothing in the log mentions the anchor at all", () => {
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa")).toBe(false);
+  });
+
+  it("false when the anchor is mentioned but never alongside a dismissal-shaped phrase", () => {
+    userTurn("Annissa and I met up for lunch again today.");
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa")).toBe(false);
+  });
+
+  it("false when a dismissal phrase appears but never in the same turn as the anchor's name", () => {
+    userTurn("Please drop it for now, I'm tired.");
+    userTurn("Anyway, work has been busy.");
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa")).toBe(false);
+  });
+
+  it("true when the user's own turn names the anchor and pushes back explicitly", () => {
+    userTurn("You keep asking about how I met Annissa — can we drop it?");
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa")).toBe(true);
+  });
+
+  it("true when it's ENSO's own reply that self-corrects and names the anchor — the self-corrected-repetition case, not just explicit user dismissal", () => {
+    const msg = userTurn("How did you and Naveen meet again?");
+    recordReply(msg.id, {});
+    eventLog.append({ type: "reply_sent", actor: "enso", payload: { text: "You're right, I keep circling back to how you and Naveen met — I'll leave it alone.", inReplyToEventId: msg.id }, userId: PRIMARY_USER_ID });
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Naveen")).toBe(true);
+  });
+
+  it("dismissing one anchor's topic never silences curiosity about a DIFFERENT anchor", () => {
+    userTurn("You keep asking about Annissa's origin story, drop it.");
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa")).toBe(true);
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Marcus")).toBe(false);
+  });
+});
+
+describe("findLayer3Candidate honors topic dismissal, and it persists past what any single session would hold (production bug batch, item 1a)", () => {
+  it("a dismissed anchor's Layer 3 probing is excluded even for probe types that never fired — not just the one probe that was asked", () => {
+    const msg = userTurn("My friend Annissa and I have known each other for years.");
+    const annissaId = insertEntity("Annissa", [msg.id]);
+    establishAsFriend(annissaId);
+    // howMet fired once (structurally capped already), then the owner explicitly dismissed the whole topic —
+    // a real live transcript would have several more organic (ungated) asks between these two turns.
+    const askTurn = userTurn("filler between the ask and the dismissal");
+    recordReply(askTurn.id, { elicitationFired: { layer: 3, probeType: "howMet", anchorEntityId: annissaId, anchorStableKey: msg.id } });
+    userTurn("You keep asking about Annissa's story — I told you to leave it alone.");
+
+    // Directly exercising findLayer3Candidate with an otherwise-single-anchor archive: were dismissal not
+    // honored, earliestMemory (the next unasked probe type in LAYER3_PROBE_TYPES) would still be offered.
+    const candidate = findLayer3Candidate(eventLog, projections, PRIMARY_USER_ID);
+    expect(candidate).toBeNull();
+  });
+
+  it("reproduces the real failure shape: dismissed mid-session, a FRESH call (simulating the next session's opener, no session-scoped state anywhere in this function) never re-offers that anchor", () => {
+    const msg = userTurn("My friend Annissa and I have known each other for years.");
+    const annissaId = insertEntity("Annissa", [msg.id]);
+    establishAsFriend(annissaId);
+    userTurn("Enough about how Annissa and I met, please drop it.");
+
+    // No session boundary concept exists anywhere in this call — it derives purely from the full event
+    // log every time, which is exactly what makes the dismissal survive into a later, independent call.
+    const nextSessionCandidate = findLayer3Candidate(eventLog, projections, PRIMARY_USER_ID);
+    expect(nextSessionCandidate?.layer === 3 ? nextSessionCandidate.anchorEntityId : null).not.toBe(annissaId);
+  });
+});
+
+describe("findElicitationCandidate: thin candidate pool forces breadth over depth (production bug batch, item 1b)", () => {
+  it("a single established anchor covering MULTIPLE domains by relation type alone (spouse: family + partnership, plus occupation for work) still yields Layer 1, not Layer 3 — domainCoverage's binary signal alone would have picked Layer 3 here", () => {
+    const msg = userTurn("My spouse and I talked about it.");
+    const spouseId = insertEntity("Alex", [msg.id]);
+    establishAsSpouse(spouseId);
+    projections.insertEntityAttribute({
+      id: newId(),
+      user_id: PRIMARY_USER_ID,
+      entity_id: primaryEntityId(PRIMARY_USER_ID),
+      attribute: "occupation",
+      value: "engineer",
+      source_event_ids: JSON.stringify(["seed"]),
+      created_at: new Date().toISOString()
+    });
+
+    // Confirms the premise: only closeFriendship is uncovered (count 1), so the OLD domainCoverage-only
+    // tiebreak (uncovered >= 2 ? layer1 : layer3) would have picked layer3 here.
+    const coverage = domainCoverage(projections, PRIMARY_USER_ID);
+    expect(coverage).toEqual({ work: true, family: true, closeFriendship: false, partnership: true, homePlace: false });
+
+    expect(THIN_POOL_ANCHOR_THRESHOLD).toBe(1);
+    const candidate = findElicitationCandidate(eventLog, projections, PRIMARY_USER_ID);
+    expect(candidate?.layer).toBe(1);
+  });
+
+  it("control: the SAME low-uncovered-domain shape with TWO established anchors is not thin, and keeps the ordinary domain-coverage tiebreak (Layer 3)", () => {
+    const msg1 = userTurn("My spouse and I talked about it.");
+    const spouseId = insertEntity("Alex", [msg1.id]);
+    establishAsSpouse(spouseId);
+    const msg2 = userTurn("My friend Marcus helped me move a couch.");
+    const marcusId = insertEntity("Marcus", [msg2.id]);
+    establishAsFriend(marcusId);
+    projections.insertEntityAttribute({
+      id: newId(),
+      user_id: PRIMARY_USER_ID,
+      entity_id: primaryEntityId(PRIMARY_USER_ID),
+      attribute: "occupation",
+      value: "engineer",
+      source_event_ids: JSON.stringify(["seed"]),
+      created_at: new Date().toISOString()
+    });
+
+    const candidate = findElicitationCandidate(eventLog, projections, PRIMARY_USER_ID);
+    expect(candidate?.layer).toBe(3);
   });
 });
 
