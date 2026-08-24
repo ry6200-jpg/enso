@@ -5,6 +5,7 @@ import type { User } from "firebase/auth";
 import ZodiacSidebar from "./components/ZodiacSidebar";
 import { authFetch, signInWithGoogle, signOut, watchAuthState } from "./lib/firebaseClient";
 import { isPinnedToBottom } from "./lib/chatScroll";
+import { downloadTranscript } from "./lib/transcriptDownload";
 
 interface ChatMessage {
   id: string;
@@ -183,6 +184,12 @@ export default function Page() {
   // handler below.
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  // "Download my transcript" (production bug batch, item 5 follow-up): the
+  // actual fetch/response-handling logic lives in app/lib/transcriptDownload.ts
+  // (FAST-tested there) — this state is purely the button's own loading/error
+  // presentation, owned here since it's UI, not logic.
+  const [transcriptDownloadStatus, setTranscriptDownloadStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [transcriptDownloadError, setTranscriptDownloadError] = useState<string | null>(null);
   // Below md (Tailwind's breakpoint, matching ZodiacSidebar's own `hidden
   // md:flex`), the desktop placeholder's parenthetical wraps to three lines
   // and explains a keyboard shortcut a phone doesn't have. matchMedia, not
@@ -714,6 +721,34 @@ export default function Page() {
     setRefocusInputSignal((n) => n + 1);
   }
 
+  /**
+   * DOM side effect only (blob URL + a synthetic, never-appended-to-the-
+   * page <a download>, then revoke) — needs a real browser, so it's kept
+   * here rather than in app/lib/transcriptDownload.ts, which stays FAST-
+   * testable by never touching the DOM itself. The actual fetch/response
+   * handling this calls into (downloadTranscript) IS FAST-tested there.
+   */
+  function triggerBrowserDownload(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleDownloadTranscript() {
+    setTranscriptDownloadStatus("loading");
+    setTranscriptDownloadError(null);
+    try {
+      await downloadTranscript({ authFetch, triggerDownload: triggerBrowserDownload });
+      setTranscriptDownloadStatus("idle");
+    } catch (err) {
+      setTranscriptDownloadStatus("error");
+      setTranscriptDownloadError(err instanceof Error ? err.message : "Couldn't download your transcript. Try again.");
+    }
+  }
+
   if (authStatus !== "signedIn") {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-4 px-6">
@@ -833,6 +868,16 @@ export default function Page() {
                 <div className="px-3 py-1.5 text-xs text-stone-400 truncate" title={user?.email ?? undefined}>
                   {user?.email ?? "Signed in"}
                 </div>
+                <button
+                  type="button"
+                  onClick={() => void handleDownloadTranscript()}
+                  disabled={transcriptDownloadStatus === "loading"}
+                  className="w-full text-left px-3 py-1.5 text-sm text-stone-600 hover:bg-stone-50 hover:text-stone-900 disabled:text-stone-400 disabled:hover:bg-transparent"
+                >
+                  {transcriptDownloadStatus === "loading" ? "Downloading..." : "Download my transcript"}
+                </button>
+                {transcriptDownloadStatus === "error" && transcriptDownloadError && <p className="px-3 py-1 text-xs text-red-600">{transcriptDownloadError}</p>}
+                <div className="my-1 border-t border-stone-100" />
                 <button
                   type="button"
                   onClick={() => {
