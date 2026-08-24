@@ -106,6 +106,24 @@ describe("buildEntityDossier (Part D, R40) — direct injection, no search or ra
     expect(dossier.relationshipsToOwner).toEqual([]);
   });
 
+  it("production bug batch, item 2: a stated 'friend' relationship survives a fresh open of the projections DB, no session/conversation state involved at all — this is the durable, cross-session source STATED_RELATIONSHIP_FRAMING_INSTRUCTION treats as authoritative", () => {
+    const dbPath = freshTestDbPath(import.meta.url, "cross-session-projections");
+    const firstSession = new ProjectionsDb(dbPath);
+    const friendId = newId();
+    firstSession.insertEntity({ id: friendId, user_id: PRIMARY_USER_ID, name: "Annissa", confirmed: 1, source_event_ids: "[]", extractor_version: "v1", pending_disambiguation: null, created_at: new Date().toISOString() });
+    firstSession.insertSocialBond({ id: newId(), user_id: PRIMARY_USER_ID, type: "friend", from_entity_id: friendId, to_entity_id: primary, qualifier: null, opened_basis: "stated", interval_start: null, interval_end: null, source_event_ids: "[]", created_at: new Date().toISOString() });
+    firstSession.close();
+
+    // A brand-new ProjectionsDb instance against the SAME underlying file, in a completely separate
+    // connection — simulating exactly what a fresh session's checkout opens (src/storage/userSession.ts:
+    // fresh connections every request, never one held open across turns), never the `firstSession` object
+    // still in scope above.
+    const nextSession = new ProjectionsDb(dbPath);
+    const dossier = buildEntityDossier(nextSession, PRIMARY_USER_ID, friendId)!;
+    expect(dossier.relationshipsToOwner).toEqual(["friend"]);
+    nextSession.close();
+  });
+
   it("never includes a third party's relationship to ANOTHER third party — only to the owner", () => {
     const aId = newId();
     const bId = newId();

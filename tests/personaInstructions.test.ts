@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ANTI_SYCOPHANCY_INSTRUCTION, buildPersonaInstruction, CURRENT_LOCATION_INSTRUCTION, NATURAL_VOICE_INSTRUCTION } from "../src/persona/instructions.js";
+import { ANTI_SYCOPHANCY_INSTRUCTION, buildPersonaInstruction, CURRENT_LOCATION_INSTRUCTION, NATURAL_VOICE_INSTRUCTION, STATED_RELATIONSHIP_FRAMING_INSTRUCTION } from "../src/persona/instructions.js";
 
 // EN-047/048: PERSONA_INSTRUCTION is now a function (the voice text used to
 // vary per-turn) — these tests exercise its content with the natural voice,
@@ -212,5 +212,39 @@ describe("CURRENT_LOCATION_INSTRUCTION (ambient/register/zodiac batch, item 1: r
       // The stricter standard is scoped to "from general knowledge" / estimating — it must not read as a blanket ban on ever stating a distance figure at all.
       expect(CURRENT_LOCATION_INSTRUCTION).not.toMatch(/never (state|give|provide|share) a distance/i);
     });
+  });
+});
+
+describe("STATED_RELATIONSHIP_FRAMING_INSTRUCTION (production bug batch, item 2)", () => {
+  it("treats a stated non-romantic relationship label as authoritative, anchored to the real incident (first-move / what one noticed in the other)", () => {
+    expect(STATED_RELATIONSHIP_FRAMING_INSTRUCTION).toMatch(/STATED RELATIONSHIP FRAMING IS AUTHORITATIVE/);
+    expect(STATED_RELATIONSHIP_FRAMING_INSTRUCTION).toMatch(/who made the first move/);
+    expect(STATED_RELATIONSHIP_FRAMING_INSTRUCTION).toMatch(/what one noticed in the other/);
+  });
+
+  it("hard-excludes romantic framing rather than merely reducing its likelihood", () => {
+    expect(STATED_RELATIONSHIP_FRAMING_INSTRUCTION).toMatch(/HARD EXCLUDED, not merely made less likely/);
+  });
+
+  it("holds regardless of how many turns pass or how plausible a romantic read comes to feel — the exact failure mode from the live incident (self-corrected once, drifted back in the same session)", () => {
+    expect(STATED_RELATIONSHIP_FRAMING_INSTRUCTION).toMatch(/no matter how many turns pass/);
+    expect(STATED_RELATIONSHIP_FRAMING_INSTRUCTION).toMatch(/doesn't quietly drift back toward "maybe more"/);
+  });
+
+  it("lifts only via a new stated fact, never Enso's own inference or narrative reading", () => {
+    expect(STATED_RELATIONSHIP_FRAMING_INSTRUCTION).toMatch(/the owner themselves saying something that actually changes it, never Enso's own read of the story/);
+  });
+
+  it("capability-denial guard: this is SUBJECT not TOPIC — the relationship, the person, and even romance the owner raises themselves stay completely normal to talk about; only Enso-initiated romantic framing is excluded", () => {
+    expect(STATED_RELATIONSHIP_FRAMING_INSTRUCTION).toMatch(/THIS IS NOT A TOPIC BAN/);
+    expect(STATED_RELATIONSHIP_FRAMING_INSTRUCTION).toMatch(/SUBJECT, not TOPIC/);
+    expect(STATED_RELATIONSHIP_FRAMING_INSTRUCTION).toMatch(/A directly asked question is still answered plainly and for real/);
+  });
+
+  it("is included in the assembled persona block actually sent to the model", () => {
+    expect(PERSONA_INSTRUCTION).not.toMatch(/STATED RELATIONSHIP FRAMING IS AUTHORITATIVE/);
+    // STATED_RELATIONSHIP_FRAMING_INSTRUCTION is assembled into buildPersonaBlock (systemPrompt.ts),
+    // a separate block from buildPersonaInstruction's own return value — this just documents that split
+    // rather than asserting something false about where it actually lives.
   });
 });
