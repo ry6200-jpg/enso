@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { ANTI_SYCOPHANCY_INSTRUCTION, buildPersonaInstruction, CURRENT_LOCATION_INSTRUCTION, NATURAL_VOICE_INSTRUCTION, STATED_RELATIONSHIP_FRAMING_INSTRUCTION } from "../src/persona/instructions.js";
+import {
+  ANTI_SYCOPHANCY_INSTRUCTION,
+  buildPersonaInstruction,
+  CONVERSATION_INITIATIVE_INSTRUCTION,
+  CURRENT_LOCATION_INSTRUCTION,
+  NATURAL_VOICE_INSTRUCTION,
+  REGISTER_CALIBRATION_INSTRUCTION,
+  STATED_RELATIONSHIP_FRAMING_INSTRUCTION
+} from "../src/persona/instructions.js";
 
 // EN-047/048: PERSONA_INSTRUCTION is now a function (the voice text used to
 // vary per-turn) — these tests exercise its content with the natural voice,
@@ -246,5 +254,68 @@ describe("STATED_RELATIONSHIP_FRAMING_INSTRUCTION (production bug batch, item 2)
     // STATED_RELATIONSHIP_FRAMING_INSTRUCTION is assembled into buildPersonaBlock (systemPrompt.ts),
     // a separate block from buildPersonaInstruction's own return value — this just documents that split
     // rather than asserting something false about where it actually lives.
+  });
+});
+
+describe("PERSONA_INSTRUCTION: THE CONTINUER RULE carve-out (passive-mode batch, finding 1: vague answer is not opening up)", () => {
+  it("explicitly distinguishes a vague/thin reply from genuinely opening up, anchored to both real transcripts", () => {
+    expect(PERSONA_INSTRUCTION).toMatch(/A VAGUE OR THIN ANSWER IS NOT OPENING UP — DO NOT CONFUSE THE TWO/);
+    expect(PERSONA_INSTRUCTION).toMatch(/going through the adjusting period/);
+    expect(PERSONA_INSTRUCTION).toMatch(/just a lot going on/);
+  });
+
+  it("directs a different, more specific question rather than silence on a thin answer", () => {
+    expect(PERSONA_INSTRUCTION).toMatch(/The right move on a thin answer is a DIFFERENT, more specific question — not silence/);
+  });
+
+  it("only sustained signals across multiple turns (never a single vague reply) justify actually backing off", () => {
+    expect(PERSONA_INSTRUCTION).toMatch(/several short\/low-content replies IN A ROW across multiple turns/);
+    expect(PERSONA_INSTRUCTION).toMatch(/a single vague reply is never enough on its own/);
+  });
+});
+
+describe("REGISTER_CALIBRATION_INSTRUCTION carve-out (passive-mode batch, finding 1: one turn is not a standing pattern)", () => {
+  it("distinguishes a standing pattern (many turns) from a single data point", () => {
+    expect(REGISTER_CALIBRATION_INSTRUCTION).toMatch(/THIS IS ABOUT A STANDING PATTERN, NOT ONE TURN/);
+    expect(REGISTER_CALIBRATION_INSTRUCTION).toMatch(/a single short or vague reply is one data point, never proof of a style to now mirror/);
+  });
+
+  it("names the live-caught failure of amplifying one quiet turn into the whole rest of the conversation", () => {
+    expect(REGISTER_CALIBRATION_INSTRUCTION).toMatch(/closing the conversation on a bare emoji/);
+    expect(REGISTER_CALIBRATION_INSTRUCTION).toMatch(/amplifying a single quiet moment into the whole rest of the conversation/);
+  });
+});
+
+describe("CONVERSATION_INITIATIVE_INSTRUCTION (passive-mode batch, findings 2-4)", () => {
+  it("finding 2: ending the conversation is never Enso's call, anchored to the real 'Take care tonight, Rick' incident", () => {
+    expect(CONVERSATION_INITIATIVE_INSTRUCTION).toMatch(/ENDING THE CONVERSATION IS NEVER YOUR CALL/);
+    expect(CONVERSATION_INITIATIVE_INSTRUCTION).toMatch(/Take care tonight, Rick/);
+    expect(CONVERSATION_INITIATIVE_INSTRUCTION).toMatch(/the owner was still actively replying/);
+  });
+
+  it("finding 2: distinguishes giving space (sometimes right) from ending the conversation (never Enso's call) as two separate decisions", () => {
+    expect(CONVERSATION_INITIATIVE_INSTRUCTION).toMatch(/Giving someone space within a conversation and ending that conversation are two completely different decisions/);
+  });
+
+  it("finding 3: never a bare emoji or silence as the fallback when backing off a question", () => {
+    expect(CONVERSATION_INITIATIVE_INSTRUCTION).toMatch(/WHEN YOU DO BACK OFF A QUESTION, BACK OFF INTO SOMETHING, NEVER INTO NOTHING/);
+    expect(CONVERSATION_INITIATIVE_INSTRUCTION).toMatch(/never a bare emoji standing in for words/);
+  });
+
+  it("finding 4: backing off re-evaluates every turn from the owner's most recent message only — never sticky", () => {
+    expect(CONVERSATION_INITIATIVE_INSTRUCTION).toMatch(/BACKING OFF IS NEVER STICKY — RE-EVALUATE EVERY TURN, FROM THE OWNER'S MOST RECENT MESSAGE ONLY/);
+  });
+
+  it("finding 4: a direct question from the user is itself sufficient to resume active questioning immediately, anchored to the real 'are you instructed to ask questions?' incident", () => {
+    expect(CONVERSATION_INITIATIVE_INSTRUCTION).toMatch(/the owner asking Enso anything at all that takes more than a yes\/no to answer/);
+    expect(CONVERSATION_INITIATIVE_INSTRUCTION).toMatch(/active questioning should resume on the very next reply, immediately/);
+    expect(CONVERSATION_INITIATIVE_INSTRUCTION).toMatch(/are you instructed to ask questions/);
+  });
+
+  it("is included in the assembled persona block actually sent to the model", () => {
+    // CONVERSATION_INITIATIVE_INSTRUCTION is assembled into buildPersonaBlock (systemPrompt.ts), a
+    // separate block from buildPersonaInstruction's own return value, same split as
+    // STATED_RELATIONSHIP_FRAMING_INSTRUCTION above — documenting that split, not asserting it's absent.
+    expect(PERSONA_INSTRUCTION).not.toMatch(/ENDING THE CONVERSATION IS NEVER YOUR CALL/);
   });
 });
