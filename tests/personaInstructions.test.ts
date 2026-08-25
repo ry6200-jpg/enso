@@ -3,12 +3,15 @@ import {
   AMBIENT_TRAVEL_INSTRUCTION,
   ANTI_SYCOPHANCY_INSTRUCTION,
   buildPersonaInstruction,
+  CAPABILITY_HONESTY_INSTRUCTION,
   CONVERSATION_INITIATIVE_INSTRUCTION,
   CURRENT_LOCATION_INSTRUCTION,
+  MEMORY_HONESTY_INSTRUCTION,
   NATURAL_VOICE_INSTRUCTION,
   REGISTER_CALIBRATION_INSTRUCTION,
   STATED_RELATIONSHIP_FRAMING_INSTRUCTION
 } from "../src/persona/instructions.js";
+import { buildPersonaBlock } from "../src/persona/systemPrompt.js";
 
 // EN-047/048: PERSONA_INSTRUCTION is now a function (the voice text used to
 // vary per-turn) — these tests exercise its content with the natural voice,
@@ -343,14 +346,23 @@ describe("AMBIENT_TRAVEL_INSTRUCTION (part 4: ambient travel context)", () => {
     expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/UNSOLICITED ADVICE \/ LECTURE MODE/);
   });
 
-  it("confabulation guard: never gestures at drive/traffic conditions with no real reading resolved this turn, anchored to the real incident's exact phrasing", () => {
-    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/NEVER GESTURE AT CONDITIONS YOU HAVEN'T ACTUALLY CHECKED/);
-    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/hope the drive home is easy/);
-    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/had nothing to say when asked why/);
+  it("EN-117/118: the old enumerated adjective-list confabulation guard is retired — defers to CAPABILITY_HONESTY_INSTRUCTION instead of a second, narrower mechanism for the same behavior", () => {
+    expect(AMBIENT_TRAVEL_INSTRUCTION).not.toMatch(/NEVER GESTURE AT CONDITIONS YOU HAVEN'T ACTUALLY CHECKED/);
+    expect(AMBIENT_TRAVEL_INSTRUCTION).not.toMatch(/easy, rough, slow, clear/);
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/governed by CAPABILITY_HONESTY_INSTRUCTION above, not by a separate rule here/);
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/traffic isn't a reason I'd let hunger keep you from going/);
   });
 
-  it("confabulation guard applies REGARDLESS of whether any call fired this turn — this is independent of the volunteering judgment above", () => {
-    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/A SEPARATE, INDEPENDENT RULE, REGARDLESS OF WHETHER ANY CALL FIRED THIS TURN/);
+  it("anchors the opening description to what's actually in the block THIS turn, never a general 'may include' capability claim (EN-117, 1b)", () => {
+    expect(AMBIENT_TRAVEL_INSTRUCTION).not.toMatch(/may include a real, live-traffic drive time/);
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/that reading is real and freshly resolved for THIS turn only/);
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/is never itself a reason to believe anything is available now/);
+  });
+
+  it("EN-118: names the destination in ordinary language whenever the drive shapes a reply, whether named by the owner or the residence fallback", () => {
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/NAME THE DESTINATION WHENEVER THE DRIVE SHAPES ANYTHING YOU SAY/);
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/never a bare drive-time thought with no destination attached/);
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/lets the owner correct you if a silently-assumed destination is wrong/);
   });
 
   it("is included in the assembled persona block actually sent to the model", () => {
@@ -358,5 +370,66 @@ describe("AMBIENT_TRAVEL_INSTRUCTION (part 4: ambient travel context)", () => {
     // separate block from buildPersonaInstruction's own return value, same split as
     // STATED_RELATIONSHIP_FRAMING_INSTRUCTION/CONVERSATION_INITIATIVE_INSTRUCTION above.
     expect(PERSONA_INSTRUCTION).not.toMatch(/AMBIENT TRAVEL CONTEXT/);
+  });
+});
+
+describe("CAPABILITY_HONESTY_INSTRUCTION (EN-117, R56/R57/R58: three faults from one live transcript)", () => {
+  it("is distinguished from MEMORY_HONESTY_INSTRUCTION by name, right in its opening sentence — the two clauses must not collide", () => {
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/a different question from MEMORY_HONESTY_INSTRUCTION above/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/that instruction covers facts you don't know/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/this one covers things you cannot do at all this turn/);
+  });
+
+  it("R56 (capability confabulation): says so in one plain sentence and stops, never hedged as an occasional/general capability", () => {
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/say so in ONE plain sentence and stop/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/THAT SENTENCE NEVER HEDGES/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/"sometimes," "usually," "I can occasionally,"/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/I can sometimes receive live route context, but I don't directly control the API/);
+  });
+
+  it("R57 (mechanics exposure): never names its own internals — API, system, tool, context window, database — extending MEMORY_HONESTY_INSTRUCTION's NEVER EXPOSE MECHANICS clause beyond memory", () => {
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/THAT SENTENCE NEVER EXPLAINS WHY IN TERMS OF YOUR OWN INTERNALS/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/"API," "system," "tool," "integration," "context window," "database,"/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/NEVER EXPOSE MECHANICS clause already applies to memory specifically, extended here to everything else/);
+  });
+
+  it("R58 (implicit all-clear, the most serious): never a substitute judgment in place of missing data — anchored to the real incident's exact wording, cross-referencing ANTI_SYCOPHANCY_INSTRUCTION", () => {
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/THAT SENTENCE NEVER SUPPLIES A SUBSTITUTE JUDGMENT IN PLACE OF THE MISSING DATA/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/traffic isn't a reason I'd let hunger keep you from going to K-Town/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/I don't see a reason to avoid heading to DTLA right now/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/the same fault ANTI_SYCOPHANCY_INSTRUCTION names elsewhere in this file/);
+  });
+
+  it("is a positive behavior, never a topic prohibition — the subject stays completely normal to discuss", () => {
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/NEVER A TOPIC BAN/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/engage with that normally, the same SUBJECT-not-TOPIC principle/);
+    // Must not read as an enumerated "never discuss X" prohibition — no banned-topic list.
+    expect(CAPABILITY_HONESTY_INSTRUCTION).not.toMatch(/never discuss|do not talk about|never bring up/i);
+  });
+
+  it("REGRESSION GUARD: a capability Enso genuinely HAS this turn is answered plainly, never suppressed by this instruction — proves the honesty clause doesn't overcorrect into hedging real data", () => {
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/REGRESSION GUARD, the failure mode this instruction must NOT cause/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/the honest answer is a plain yes and what the reading actually shows/);
+  });
+
+  it("REGRESSION GUARD (cross-instruction): CURRENT_LOCATION_INSTRUCTION still answers a direct location/GPS question plainly — the exact behavior the live transcript got right and must not regress", () => {
+    // Same assertions as the pre-existing CURRENT_LOCATION_INSTRUCTION describe block above,
+    // re-asserted here explicitly as this batch's own regression guard, per instruction.
+    expect(CURRENT_LOCATION_INSTRUCTION).toMatch(/A DIRECTLY asked location-adjacent question .* still gets a short, plain, genuinely real answer/);
+    expect(CURRENT_LOCATION_INSTRUCTION).not.toMatch(/never answer|refuse to answer|decline to answer|won't answer/i);
+  });
+
+  it("REGRESSION GUARD (cross-instruction): MEMORY_HONESTY_INSTRUCTION is untouched by this addition — same content as before, the memory-honesty path still governs facts Enso doesn't know", () => {
+    expect(MEMORY_HONESTY_INSTRUCTION).toMatch(/Only state specific facts about the owner's OWN life/);
+    expect(MEMORY_HONESTY_INSTRUCTION).toMatch(/NEVER EXPOSE MECHANICS: never say "searching my database," "querying," "retrieval,"/);
+    expect(MEMORY_HONESTY_INSTRUCTION).toMatch(/UNGROUNDED SPECIFICS FROM OUTSIDE THE OWNER'S OWN HISTORY/);
+  });
+
+  it("is included in the assembled persona block actually sent to the model, alongside (not instead of) memory honesty", () => {
+    const block = buildPersonaBlock("natural");
+    expect(block).toMatch(/CAPABILITY HONESTY/);
+    expect(block).toMatch(/Only state specific facts about the owner's OWN life/); // MEMORY_HONESTY_INSTRUCTION's own opening
+    // Both present, memory honesty first (its existing position), capability honesty right after — never one replacing the other.
+    expect(block.indexOf("Only state specific facts")).toBeLessThan(block.indexOf("CAPABILITY HONESTY"));
   });
 });
