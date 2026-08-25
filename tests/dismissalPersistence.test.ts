@@ -204,3 +204,53 @@ describe("holds across projection rebuilds — never keyed on a volatile entityI
     }
   });
 });
+
+/**
+ * EN-126 follow-up item 1: was keying on entity NAME (rather than the
+ * requested provenance ULID) a real rejection or a judgment call? Judgment
+ * call, said plainly rather than reconstructed after the fact — the name
+ * choice was forced for HALF of what this mechanism does (wasTopicDismissed
+ * scans conversation TEXT for a dismissal signal, and a ULID never appears
+ * in what someone actually types, so the text-matching half has no other
+ * option), but for the OTHER half — which entity a suppression state
+ * belongs to, across however many names it might have — name was an
+ * unexamined extension of "text-matching needs a name" into "identity
+ * tracking can use the same name," never a considered choice against the
+ * ULID the instruction actually asked for.
+ *
+ * That gap matters exactly because of the confirmed, still-open co-
+ * reference finding (EN-101/R49): this codebase has no field anywhere
+ * that can express "this new name is the same person as an already-known
+ * name," which produces either a silent drop or a phantom, unlinked
+ * duplicate entity depending on phrasing. These fixtures prove — not
+ * argue — that dismissal-suppression inherits that exact gap, since it is
+ * built entirely on the same per-entity-row identity.
+ */
+describe("EN-126 follow-up item 1: the co-reference gap (EN-101/R49) reaches dismissal-suppression too", () => {
+  it("PROVEN: a phantom duplicate (same real person, unlinked second entity row under a different name) is NOT suppressed, even though the person WAS dismissed under her other name", () => {
+    const mention = userTurn("My friend Annissa and I go way back.");
+    insertEstablishedEntity("Annissa", [mention.id]);
+    userTurn("Stop bringing Annissa up, please.");
+    expect(getDismissedEstablishedEntityNames(eventLog, projections, PRIMARY_USER_ID)).toEqual(["Annissa"]);
+
+    // A phantom duplicate: the SAME real person, extracted under a nickname into a SECOND,
+    // structurally unlinked entity row — exactly the EN-101/R49 finding, simulated directly
+    // (no code path in this codebase can produce the link that would prevent this).
+    const secondMention = userTurn("Annie and I met up again today.");
+    insertEstablishedEntity("Annie", [secondMention.id]);
+
+    // The real person is still being raised on Enso's own initiative — under her other name.
+    expect(getDismissedEstablishedEntityNames(eventLog, projections, PRIMARY_USER_ID)).toEqual(["Annissa"]); // "Annie" is absent — not suppressed
+    const candidate = findLayer3Candidate(eventLog, projections, PRIMARY_USER_ID);
+    expect(candidate?.layer === 3 ? candidate.anchorName : null).toBe("Annie"); // freely offered as a candidate
+  });
+
+  it("PROVEN: dismissing the entity under a nickname does not suppress her full/formal name either — symmetric, not name-specific", () => {
+    const mention = userTurn("My coworker Annissa mentioned a promotion.");
+    insertEstablishedEntity("Annissa Delacroix", [mention.id]);
+    userTurn("Stop bringing Annie up, I've said this enough times.");
+    // The dismissal signal named "Annie", not "Annissa Delacroix" — no structural link between the two
+    // strings, so the established entity's own full name is untouched by a dismissal of her nickname.
+    expect(getDismissedEstablishedEntityNames(eventLog, projections, PRIMARY_USER_ID)).toEqual([]);
+  });
+});

@@ -260,6 +260,33 @@ export function wasTopicDismissed(eventLog: EventLog, userId: string, anchorName
  * id — so this survives a rebuild by construction, verified directly in
  * tests/dismissalPersistence.test.ts across repeated rebuilds.
  *
+ * EN-126 follow-up item 1: the original brief asked for the earliest
+ * provenance event ULID specifically (35560f4's own stable key), not just
+ * "something stable" — this function uses the entity's NAME instead, and
+ * that was only half a considered choice, said plainly rather than
+ * reconstructed after the fact. Name was FORCED for wasTopicDismissed's
+ * text-matching half (a ULID never appears in what someone actually
+ * types, so scanning conversation text for a dismissal signal has no
+ * other option) — but for the OTHER half, WHICH ENTITY a suppression
+ * state belongs to, name was never weighed against the ULID the
+ * instruction actually named; it was an unexamined extension of "text-
+ * matching needs a name" into "identity tracking can reuse the same
+ * name." That gap is real, not hypothetical, because of the confirmed,
+ * still-open co-reference finding (EN-101/R49): this codebase has no
+ * field anywhere expressing "this new name is the same person as an
+ * already-known name," producing a silent drop or a phantom, unlinked
+ * duplicate entity depending on phrasing. PROVEN, not argued
+ * (tests/dismissalPersistence.test.ts): a phantom duplicate under a
+ * nickname is NOT suppressed even though the same real person was
+ * dismissed under her other name, symmetrically in both directions.
+ * ACCEPTED as a known gap rather than fixed: closing it would mean
+ * keying suppression on the entity's stable IDENTITY across however many
+ * names it has, which requires the identity-LINKING EN-101 already
+ * named as needed and explicitly deferred — a schema decision bigger
+ * than this function, not a per-case patch to make here. Suppression
+ * only ever protects the specific name it was actually raised/dismissed
+ * under, until EN-101 is resolved.
+ *
  * EN-126 follow-up item 2: `currentMessageText` closes a real,
  * demonstrated coexistence window, not a hypothetical one. Confirmed by
  * tracing the actual pipeline: `app/api/chat/route.ts` runs `sendMessage`
