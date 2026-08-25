@@ -9,7 +9,17 @@ import type { AttributeMention, ExtractedEntity, EpisodeMarker, SocialBondMentio
 import { classifyPersonalVsDocument, type ClassifierDecision } from "./personalDocumentClassifier.js";
 import { DEFAULT_RETRY_CONFIG, retryWithBackoff, type RetryConfig } from "./retry.js";
 
-export const MESSAGE_EXTRACTOR_VERSION = "message-v1";
+// EN-114 (this batch) widened TAXONOMY_JSON_SCHEMA's attribute enum to
+// accept gender/sexual_orientation/life_stage — a real change to the
+// extraction schema sent to the model, even though the prompt TEXT (what
+// actually drives extraction behavior) is unchanged, so real extraction
+// output is unaffected today. Bumped per CLAUDE.md's "any change to the
+// extraction schema MUST bump MESSAGE_EXTRACTOR_VERSION" maxim regardless:
+// a cached entry keyed on the OLD version string carries no information about
+// whether it was produced under a schema that could even represent these
+// three fields, and letting that ambiguity persist is exactly what the
+// version-bump discipline exists to prevent.
+export const MESSAGE_EXTRACTOR_VERSION = "message-v2";
 export const ATTACHMENT_EXTRACTOR_VERSION = "attachment-v1";
 
 export interface MessageExtractionCompletedPayload {

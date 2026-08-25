@@ -4,7 +4,7 @@
 
 Enso is a private relationship journal with an AI companion, built to help its user remember people, incidents, relationships, and emotion — including as memory fades. This is a ground-up rebuild on an event-sourced foundation.
 
-**The specification is `enso-rebuild-requirements.md` (v1.31) in the repo root. It is canonical.** Every requirement has an EN-number. Reference EN-numbers in all reports, commits, and discussions. If an instruction here conflicts with the spec, the spec wins; if a task conflicts with both, stop and ask. If this pin and the spec's own version line disagree, the spec's version line wins — update this file.
+**The specification is `enso-rebuild-requirements.md` (v1.32) in the repo root. It is canonical.** Every requirement has an EN-number. Reference EN-numbers in all reports, commits, and discussions. If an instruction here conflicts with the spec, the spec wins; if a task conflicts with both, stop and ask. If this pin and the spec's own version line disagree, the spec's version line wins — update this file.
 
 Do not re-litigate settled decisions. Section 12 questions marked RESOLVED are closed. The regression ledger (Section 11) is a list of bugs already paid for once — reintroducing any of them is a failed build.
 
@@ -20,6 +20,7 @@ Do not re-litigate settled decisions. Section 12 questions marked RESOLVED are c
 - Silence never closes a relationship interval (EN-013).
 - File bytes never go into SQLite as blobs (EN-051).
 - Round-trip survival: any input that influences a supersedable observation's output (e.g. `knownPeopleNames` injected into extraction) must be recorded in that observation's own payload — the record must be self-describing for future reprocess diffs, never dependent on reconstructing ambient state that only existed at call time.
+- Any change to the extraction schema MUST bump `MESSAGE_EXTRACTOR_VERSION` (`src/extraction/resilientExtraction.ts`). `ExtractionCache` keys on `(content_hash, extractor_version, model_id)` and has no knowledge of the extraction shape, so a schema change without a version bump will silently serve stale cached output missing the new fields. Nothing enforces this automatically.
 
 ## Testing policy
 
