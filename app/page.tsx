@@ -9,6 +9,7 @@ import { authFetch, signInWithGoogle, signOut, watchAuthState } from "./lib/fire
 import { isPinnedToBottom } from "./lib/chatScroll";
 import { downloadTranscript } from "./lib/transcriptDownload";
 import { daySeparatorLabel, formatExactTimestamp, formatInlineTime, isNewLocalDay, shouldShowInlineTime } from "./lib/chatTimestamps";
+import { classifyHistoryFetchStatus } from "./lib/historyFetch";
 
 interface ChatMessage {
   id: string;
@@ -169,6 +170,12 @@ export default function Page() {
   const [authStatus, setAuthStatus] = useState<"checking" | "signedOut" | "signedIn">("checking");
   const [authError, setAuthError] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Stale-tab investigation fix: distinct from an account that genuinely
+  // has no history yet (messages.length === 0 with this false) — set true
+  // only when GET /api/history itself couldn't be completed (hang/timeout,
+  // network error, or a non-auth non-2xx status), so the chat can say so
+  // plainly instead of silently rendering as an empty conversation.
+  const [historyLoadFailed, setHistoryLoadFailed] = useState(false);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [attachmentStatus, setAttachmentStatus] = useState<AttachmentStatus | null>(null);
@@ -300,7 +307,14 @@ export default function Page() {
     let cancelled = false;
     authFetch("/api/history")
       .then(async (r) => {
-        if (r.status === 403) {
+        // Stale-tab investigation fix: 401 (token missing/expired/invalid)
+        // now gets the SAME treatment as 403 (not on the allowlist) — both
+        // are real auth failures, and both used to only be handled for
+        // 403, so an expired token that failed FAST (rather than hanging)
+        // fell into the generic branch below and was logged to the
+        // console only, never shown to the user.
+        const outcome = classifyHistoryFetchStatus(r.status);
+        if (outcome === "authFailure") {
           const json = await r.json().catch(() => ({}));
           if (!cancelled) {
             setAuthError(json.error ?? "This account is not authorized for this closed test.");
@@ -308,7 +322,7 @@ export default function Page() {
           }
           return null;
         }
-        if (!r.ok) {
+        if (outcome === "loadFailure") {
           // Fail loud, per the same discipline every other route on this
           // page already follows (see sendMessage's !res.ok branch) — a
           // blank chat with nothing in the console is its own bug. This
@@ -318,17 +332,26 @@ export default function Page() {
           const body = await r.json().catch(() => ({}));
           // eslint-disable-next-line no-console
           console.error(`GET /api/history failed (${r.status}): ${body.error ?? "no error message in response body"}`);
+          if (!cancelled) setHistoryLoadFailed(true);
           return null;
         }
         return r.json();
       })
       .then((json: { messages: ChatMessage[] } | null) => {
         if (cancelled || !json) return;
+        setHistoryLoadFailed(false);
         setMessages(json.messages);
       })
       .catch((err) => {
+        // Reached by a genuine network error AND by getCurrentIdToken's
+        // own timeout rejection (firebaseClient.ts's withTimeout) — the
+        // fix for the actual stale-tab hang: that promise used to never
+        // settle at all, so this .catch() (and the loadFailure branch
+        // above) never ran, and the chat just stayed empty forever with
+        // nothing in the console either.
         // eslint-disable-next-line no-console
         console.error("GET /api/history threw before a response was received:", err);
+        if (!cancelled) setHistoryLoadFailed(true);
       });
     return () => {
       cancelled = true;
@@ -1013,73 +1036,90 @@ export default function Page() {
           <div className="flex-1 min-h-0 relative">
             <div ref={listRef} className="h-full overflow-y-auto overscroll-contain">
               <div ref={contentRef} className="p-4 flex flex-col gap-3">
-                {messages.map((m, i) => {
-                  // Chat timestamps (part 3): rendered in the owner's own local timezone via the
-                  // ambient Tier 3 timezone that's already always-on (see the timezone effect
-                  // above) — falls back to UTC only on the rare page load where it hasn't resolved
-                  // yet. Day separators and gap-based inline times are computed from each message's
-                  // own recordedAt against the PREVIOUS message's, never a running/mutated total.
-                  const timezone = locationContext.timezone ?? "UTC";
-                  const prevRecordedAt = i > 0 ? messages[i - 1]!.recordedAt : null;
-                  const newDay = isNewLocalDay(prevRecordedAt, m.recordedAt, timezone);
-                  const showTime = newDay || shouldShowInlineTime(prevRecordedAt, m.recordedAt);
-                  const exactTimestamp = formatExactTimestamp(m.recordedAt, timezone);
+                {historyLoadFailed ? (
+                  // Stale-tab investigation fix: say the true thing
+                  // plainly instead of rendering an empty conversation —
+                  // same standard as ReportPanel's own empty states. A
+                  // reload is the real fix (it re-runs the whole sign-in
+                  // + fetch sequence from scratch), never an automatic
+                  // retry here — see this batch's own instruction not to
+                  // add silent self-healing in this pass.
+                  <p className="text-sm text-stone-500 text-center mt-8">
+                    Couldn&apos;t load your conversation —{" "}
+                    <button type="button" onClick={() => window.location.reload()} className="underline hover:text-stone-700">
+                      reload
+                    </button>{" "}
+                    to try again.
+                  </p>
+                ) : (
+                  messages.map((m, i) => {
+                    // Chat timestamps (part 3): rendered in the owner's own local timezone via the
+                    // ambient Tier 3 timezone that's already always-on (see the timezone effect
+                    // above) — falls back to UTC only on the rare page load where it hasn't resolved
+                    // yet. Day separators and gap-based inline times are computed from each message's
+                    // own recordedAt against the PREVIOUS message's, never a running/mutated total.
+                    const timezone = locationContext.timezone ?? "UTC";
+                    const prevRecordedAt = i > 0 ? messages[i - 1]!.recordedAt : null;
+                    const newDay = isNewLocalDay(prevRecordedAt, m.recordedAt, timezone);
+                    const showTime = newDay || shouldShowInlineTime(prevRecordedAt, m.recordedAt);
+                    const exactTimestamp = formatExactTimestamp(m.recordedAt, timezone);
 
-                  return (
-                    <div key={m.id}>
-                      {newDay && <div className="text-center text-xs text-stone-400 my-2">{daySeparatorLabel(m.recordedAt, timezone)}</div>}
-                      {/* UI batch (visual only): this flex column is what actually
-                          aligns and sizes the bubble — self-end/self-start on the
-                          bubble itself did nothing, because the bubble was a
-                          GRANDCHILD of the message list's flex container (this
-                          wrapper div sat between them), and align-self only has
-                          effect on a direct flex item. Wrapping just the timestamp
-                          + bubble in their own items-end/items-start column fixes
-                          both at once: the bubble becomes a flex child with no
-                          explicit width, so it shrinks to its own content (capped
-                          by max-w-lg) instead of the block-level full-width
-                          stretch it was getting before, and the timestamp — now a
-                          sibling inside the SAME small aligned box — sits directly
-                          above its own bubble at the same edge, instead of
-                          spanning the full row disconnected from it. */}
-                      <div className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}>
-                        {showTime && <div className="text-[0.7rem] text-stone-400 mb-0.5">{formatInlineTime(m.recordedAt, timezone)}</div>}
-                        <div
-                          className={`max-w-lg rounded-lg px-4 py-3 text-[1.0625rem] leading-[1.45] whitespace-pre-wrap ${
-                            m.role === "user" ? "text-white" : "bg-white border border-stone-200"
-                          }`}
-                          style={m.role === "user" ? { backgroundColor: "var(--enso-red)", color: "#faf7f2" } : { color: "var(--enso-ink)" }}
-                          title={exactTimestamp}
-                          onTouchStart={() => {
-                            longPressTimerRef.current = setTimeout(() => setExactTimestampForMessageId(m.id), 500);
-                          }}
-                          onTouchEnd={() => {
-                            if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-                            setExactTimestampForMessageId(null);
-                          }}
-                          onTouchMove={() => {
-                            if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-                          }}
-                        >
-                          {/* Secondary text, scaled proportionally to the 17px
-                              body above (0.75rem was proportional to the old
-                              16px body — 0.75 * 17/16 ≈ 0.8rem keeps the same
-                              relative weight against the new size, not just an
-                              unscaled leftover). No explicit leading override:
-                              a unitless line-height (leading-[1.45] above) is
-                              inherited as the RATIO, not the computed pixel
-                              value, so this recomputes correctly against its
-                              own smaller font-size automatically. */}
-                          {m.filename && <div className="text-[0.8rem] opacity-80 mb-1">Attached: {m.filename}</div>}
-                          {m.text}
-                          {exactTimestampForMessageId === m.id && (
-                            <div className="text-[0.7rem] opacity-80 mt-1 border-t border-white/20 pt-1">{exactTimestamp}</div>
-                          )}
+                    return (
+                      <div key={m.id}>
+                        {newDay && <div className="text-center text-xs text-stone-400 my-2">{daySeparatorLabel(m.recordedAt, timezone)}</div>}
+                        {/* UI batch (visual only): this flex column is what actually
+                            aligns and sizes the bubble — self-end/self-start on the
+                            bubble itself did nothing, because the bubble was a
+                            GRANDCHILD of the message list's flex container (this
+                            wrapper div sat between them), and align-self only has
+                            effect on a direct flex item. Wrapping just the timestamp
+                            + bubble in their own items-end/items-start column fixes
+                            both at once: the bubble becomes a flex child with no
+                            explicit width, so it shrinks to its own content (capped
+                            by max-w-lg) instead of the block-level full-width
+                            stretch it was getting before, and the timestamp — now a
+                            sibling inside the SAME small aligned box — sits directly
+                            above its own bubble at the same edge, instead of
+                            spanning the full row disconnected from it. */}
+                        <div className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}>
+                          {showTime && <div className="text-[0.7rem] text-stone-400 mb-0.5">{formatInlineTime(m.recordedAt, timezone)}</div>}
+                          <div
+                            className={`max-w-lg rounded-lg px-4 py-3 text-[1.0625rem] leading-[1.45] whitespace-pre-wrap ${
+                              m.role === "user" ? "text-white" : "bg-white border border-stone-200"
+                            }`}
+                            style={m.role === "user" ? { backgroundColor: "var(--enso-red)", color: "#faf7f2" } : { color: "var(--enso-ink)" }}
+                            title={exactTimestamp}
+                            onTouchStart={() => {
+                              longPressTimerRef.current = setTimeout(() => setExactTimestampForMessageId(m.id), 500);
+                            }}
+                            onTouchEnd={() => {
+                              if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+                              setExactTimestampForMessageId(null);
+                            }}
+                            onTouchMove={() => {
+                              if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+                            }}
+                          >
+                            {/* Secondary text, scaled proportionally to the 17px
+                                body above (0.75rem was proportional to the old
+                                16px body — 0.75 * 17/16 ≈ 0.8rem keeps the same
+                                relative weight against the new size, not just an
+                                unscaled leftover). No explicit leading override:
+                                a unitless line-height (leading-[1.45] above) is
+                                inherited as the RATIO, not the computed pixel
+                                value, so this recomputes correctly against its
+                                own smaller font-size automatically. */}
+                            {m.filename && <div className="text-[0.8rem] opacity-80 mb-1">Attached: {m.filename}</div>}
+                            {m.text}
+                            {exactTimestampForMessageId === m.id && (
+                              <div className="text-[0.7rem] opacity-80 mt-1 border-t border-white/20 pt-1">{exactTimestamp}</div>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })
+                )}
               </div>
             </div>
 

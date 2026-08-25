@@ -58,6 +58,36 @@ export function signOut(): Promise<void> {
  */
 const AUTH_STATE_TIMEOUT_MS = 4000;
 
+/**
+ * Bounded wait on a promise Firebase's SDK controls but this app doesn't —
+ * same shape as AUTH_STATE_TIMEOUT_MS above (never let the UI wait
+ * indefinitely on an external call it doesn't control), reused below for
+ * getCurrentIdToken's own call to the SDK's getIdToken(), which had no
+ * guard at all (stale-tab investigation: this was the actual hang — a tab
+ * left open long enough for its cached ID token to need a network refresh,
+ * where that refresh call could stall forever with no timeout, no error,
+ * and nothing to log). REJECTS on timeout, deliberately never resolves a
+ * fallback value: a silent empty resolve here would just move the hang
+ * one level up instead of fixing it — callers need a real rejection to
+ * reach their existing .catch() branches and become a visible failure
+ * state, not another value that looks like success.
+ */
+export function withTimeout<T>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(timeoutMessage)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
 export function watchAuthState(onChange: (user: User | null) => void): () => void {
   const auth = getAuth(getFirebaseApp());
   let fired = false;
@@ -105,7 +135,7 @@ export async function getCurrentIdToken(): Promise<string | null> {
   await auth.authStateReady();
   const user = auth.currentUser;
   if (!user) return null;
-  return user.getIdToken();
+  return withTimeout(user.getIdToken(), AUTH_STATE_TIMEOUT_MS, "Timed out waiting for a fresh ID token — the tab may have been idle too long.");
 }
 
 /** Every authenticated fetch in this app goes through this — one place to attach the Bearer token, never duplicated per call site. Throws if signed out; callers only ever use this after confirming a user is present. */

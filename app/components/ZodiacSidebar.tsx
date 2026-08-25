@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { authFetch } from "../lib/firebaseClient";
+import { resolveZodiacSidebarResponse, type ZodiacSidebarData } from "../lib/zodiacSidebarFetch";
 
 /**
  * Batch 2, item 6: the standalone /horoscope and /people pages (and the
@@ -39,13 +40,6 @@ import { authFetch } from "../lib/firebaseClient";
  * yet available" panel.
  */
 
-interface ZodiacSidebarData {
-  available: boolean;
-  date?: string;
-  chinese?: { sign: string; iconUrl: string; reflection: string };
-  western?: { sign: string; iconUrl: string; reflection: string };
-}
-
 function ZodiacSection({ sign, iconUrl, reflection }: { sign: string; iconUrl: string; reflection: string }) {
   return (
     <div className="flex gap-3 items-start">
@@ -73,9 +67,16 @@ export default function ZodiacSidebar({ refreshSignal = 0, onAvailabilityChange,
 
   useEffect(() => {
     let cancelled = false;
+    // Stale-tab investigation fix: resolveZodiacSidebarResponse checks
+    // `ok` before parsing, so an auth failure (401/403) rejects into the
+    // .catch() below instead of its JSON error body getting parsed and
+    // cast straight to ZodiacSidebarData — see that function's own
+    // comment for why the old `.then((r) => r.json())` made a real
+    // failure invisible, rendering as the same message a genuine empty
+    // state shows.
     authFetch("/api/zodiac-sidebar")
-      .then((r) => r.json())
-      .then((json: ZodiacSidebarData) => {
+      .then(resolveZodiacSidebarResponse)
+      .then((json) => {
         if (!cancelled) setData(json);
       })
       .catch(() => {
