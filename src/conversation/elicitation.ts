@@ -259,11 +259,35 @@ export function wasTopicDismissed(eventLog: EventLog, userId: string, anchorName
  * wasTopicDismissed itself only ever matches on name-in-text, never an
  * id — so this survives a rebuild by construction, verified directly in
  * tests/dismissalPersistence.test.ts across repeated rebuilds.
+ *
+ * EN-126 follow-up item 2: `currentMessageText` closes a real,
+ * demonstrated coexistence window, not a hypothetical one. Confirmed by
+ * tracing the actual pipeline: `app/api/chat/route.ts` runs `sendMessage`
+ * (the reply this function's own output feeds into) BEFORE
+ * `refreshMemoryAfterTurn` (extraction/touchEntity). So the FIRST turn
+ * the owner re-mentions a suppressed person by name, that mention is not
+ * yet in her `source_event_ids` when THIS reply is generated —
+ * wasTopicDismissed would still say "dismissed" even though
+ * findAllMentionedEntityIds (retrievalInvocation.ts, a plain text match
+ * against the SAME raw current-turn message, no extraction dependency)
+ * correctly includes her for the entity-dossier block on that exact same
+ * turn. Without this check, the assembled prompt would carry BOTH "don't
+ * raise her" and her full dossier in the same window, on precisely the
+ * turn the owner is asking about her — the prompt-prohibition/capability-
+ * denial shape this batch's own constraint forbids. Matching
+ * findAllMentionedEntityIds's own mechanism (plain substring match
+ * against the current turn's raw text) closes it structurally: a
+ * same-turn direct mention is excluded from suppression immediately,
+ * before extraction ever runs, so recall and restraint never coexist for
+ * the same person in the same turn by construction — not merely by
+ * instruction wording. Verified in tests/dismissalPersistence.test.ts.
  */
-export function getDismissedEstablishedEntityNames(eventLog: EventLog, projections: ProjectionsDb, userId: string): string[] {
+export function getDismissedEstablishedEntityNames(eventLog: EventLog, projections: ProjectionsDb, userId: string, currentMessageText = ""): string[] {
+  const lowerCurrentText = currentMessageText.toLowerCase();
   return projections
     .listEntities(userId)
     .filter((e) => isEstablished(projections, userId, e.id))
+    .filter((e) => !lowerCurrentText.includes(e.name.toLowerCase()))
     .filter((e) => wasTopicDismissed(eventLog, userId, e.name, JSON.parse(e.source_event_ids) as string[]))
     .map((e) => e.name);
 }

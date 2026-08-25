@@ -98,7 +98,7 @@ export interface ReplySentPayload {
     ambientContext?: { ownWeatherKnown: boolean; ownLocalTimeKnown: boolean; thirdPartyName: string | null; distancePlaceName: string | null } | null;
     /** Part 4: same "reflects what actually reached the block, not what the router merely judged relevant" discipline as ambientContext above. Null when nothing resolved (never relevant, or the fetch/lookup chain failed anywhere) — indistinguishable from "never asked," same honesty as ambientContext. */
     travelContext?: { destinationLabel: string } | null;
-    /** EN-126 item 4: established entities under a terminal dismissal this turn — i.e. what the SUPPRESSED SUBJECTS directive (if any) actually named, for the same debuggability every other block here gets ("why didn't it ask about X?"). Empty array, never omitted, when nothing is currently suppressed — same never-omit-just-empty discipline retrieval's own injectedChunkIds already follows. */
+    /** EN-126 item 4: established entities under a terminal dismissal this turn — i.e. what the suppression GATE DIRECTIVE (if any) actually named, for the same debuggability every other block here gets ("why didn't it ask about X?"). Empty array, never omitted, when nothing is currently suppressed — same never-omit-just-empty discipline retrieval's own injectedChunkIds already follows. */
     suppressedEntities: string[];
   };
   /**
@@ -523,7 +523,7 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   // even on a turn where nothing else fires (including, deliberately, the
   // very first turn of a session — the exact shape item 6's transcript
   // showed, an ordinary turn like any other, not a special "opener" path).
-  const dismissedEntityNames = getDismissedEstablishedEntityNames(deps.eventLog, deps.projectionsDb, input.userId);
+  const dismissedEntityNames = getDismissedEstablishedEntityNames(deps.eventLog, deps.projectionsDb, input.userId, effectiveText);
   const suppressedEntitiesDirective = buildSuppressedEntitiesDirective(dismissedEntityNames);
 
   const assembled = assembleContext(

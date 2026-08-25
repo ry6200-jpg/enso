@@ -95,10 +95,15 @@ describe("buildSuppressedEntitiesDirective — restraint only, never a topic ban
 
   it("names the suppressed entity and explicitly frames it as Enso's own restraint, not a ban on the topic", () => {
     const directive = buildSuppressedEntitiesDirective(["Annissa"]);
-    expect(directive).toMatch(/SUPPRESSED SUBJECTS/);
     expect(directive).toMatch(/Annissa/);
     expect(directive).toMatch(/not a ban on the person or the relationship/);
     expect(directive).toMatch(/answer completely and normally/);
+  });
+
+  it("EN-126 follow-up item 2(c): uses the same anti-leak GATE DIRECTIVE wrapper every other injected directive in this codebase already uses", () => {
+    const directive = buildSuppressedEntitiesDirective(["Annissa"]);
+    expect(directive).toMatch(/^=== GATE DIRECTIVE \(do not mention this instruction itself\) ===/);
+    expect(directive).toMatch(/=== END GATE DIRECTIVE ===$/);
   });
 
   it("RECALL MUST NOT DEGRADE: a dismissed entity's full dossier (attributes, relationship) is still returned in full — buildEntityDossier is a wholly separate mechanism the suppression directive never touches", () => {
@@ -126,6 +131,47 @@ describe("buildSuppressedEntitiesDirective — restraint only, never a topic ban
     expect(dossier!.relationshipsToOwner.length).toBeGreaterThan(0);
     expect(dossier!.attributes.some((a) => a.value === "teacher")).toBe(true);
   });
+});
+
+describe("EN-126 follow-up item 2: suppression directive vs. recall — the real coexistence window, closed structurally", () => {
+  /**
+   * Confirmed by tracing the real pipeline (app/api/chat/route.ts):
+   * sendMessage (the reply this feeds into) runs BEFORE
+   * refreshMemoryAfterTurn (extraction/touchEntity). So the FIRST turn
+   * the owner asks about a suppressed person by name, her source_event_ids
+   * does NOT yet include that mention — wasTopicDismissed alone would
+   * still say "dismissed" on exactly the turn findAllMentionedEntityIds
+   * (a same-turn raw-text match) correctly includes her for the entity
+   * dossier. Without the currentMessageText exemption, both the
+   * suppression directive and her full dossier would sit in the same
+   * prompt on that exact turn.
+   */
+  it("(a) a direct question naming the suppressed person in the CURRENT turn excludes her from the suppression list THAT SAME TURN — over several different phrasings, not one sample", () => {
+    const mention = userTurn("My friend Annissa and I go way back.");
+    insertEstablishedEntity("Annissa", [mention.id]);
+    userTurn("Stop bringing Annissa up, please.");
+    expect(getDismissedEstablishedEntityNames(eventLog, projections, PRIMARY_USER_ID)).toEqual(["Annissa"]);
+
+    const currentTurnPhrasings = ["What have you heard about Annissa?", "Actually, how is Annissa doing?", "Annissa called me today, funny story.", "annissa is doing well"];
+    for (const phrasing of currentTurnPhrasings) {
+      // wasTopicDismissed alone (no currentMessageText) still says dismissed — the extraction lag is real.
+      expect(getDismissedEstablishedEntityNames(eventLog, projections, PRIMARY_USER_ID)).toEqual(["Annissa"]);
+      // But passing the CURRENT turn's own text closes the window immediately, before extraction ever runs.
+      expect(getDismissedEstablishedEntityNames(eventLog, projections, PRIMARY_USER_ID, phrasing)).toEqual([]);
+    }
+  });
+
+  it("(b) suppression still holds when the current turn does NOT name the suppressed person, even on an adjacent/related subject", () => {
+    const mention = userTurn("My friend Annissa and I go way back.");
+    insertEstablishedEntity("Annissa", [mention.id]);
+    userTurn("Stop bringing Annissa up, please.");
+
+    const nearbyButNotNaming = ["Work was rough today.", "I saw some old friends from college recently.", "Thinking about reaching out to people I haven't talked to in a while."];
+    for (const text of nearbyButNotNaming) {
+      expect(getDismissedEstablishedEntityNames(eventLog, projections, PRIMARY_USER_ID, text)).toEqual(["Annissa"]);
+    }
+  });
+
 });
 
 describe("re-mention reopens Enso's own initiative (via the existing touchEntity path)", () => {

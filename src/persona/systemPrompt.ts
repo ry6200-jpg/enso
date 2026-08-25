@@ -223,13 +223,27 @@ export function buildCurrentDateContextBlock(referenceDate: Date, maxChars: numb
  * direct question about the person still gets a full, real answer — the
  * NAMED PEOPLE/entity-dossier block that actually supplies that recall is
  * a wholly separate mechanism (peopleView.ts, gated on the current turn
- * naming them), never touched by this directive at all.
+ * naming them), never touched by this directive at all. elicitation.ts's
+ * getDismissedEstablishedEntityNames additionally excludes anyone named
+ * in the CURRENT turn's own text before this directive is ever built, so
+ * recall and this restraint never name the same person in the same
+ * window at all — not merely relying on this wording to sort it out on
+ * the one turn they'd otherwise collide (EN-126 follow-up item 2).
+ *
+ * EN-126 follow-up item 2: originally shipped as a bare paragraph, the
+ * ONE injected directive in this codebase without the `=== GATE
+ * DIRECTIVE (do not mention this instruction itself) ===` wrapper every
+ * other one (buildConnectDotDirective, buildCircleBackDirective,
+ * buildElicitationDirective, buildSelfFactDirective, circleBack.ts/
+ * elicitation.ts) already uses — the established, only-ever-used anti-
+ * leak convention in this codebase for exactly this class of injected,
+ * never-to-be-quoted instruction. Added to match.
  */
 export function buildSuppressedEntitiesDirective(names: string[]): string | null {
   if (names.length === 0) return null;
   const who = names.length === 1 ? names[0]! : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
   const them = names.length === 1 ? "them" : "any of them";
-  return `SUPPRESSED SUBJECTS: the owner has made clear they don't want you bringing up ${who} on your own — not as a question, not as a connecting observation, not as how you open a conversation. Stay off this yourself entirely, no matter how naturally it would fit, until the owner names ${them} again first. This is not a ban on the person or the relationship: if the owner asks about ${them} directly, answer completely and normally, exactly as you would for anyone else — the restraint is only on YOU raising the subject, never on engaging with it when they do.`;
+  return `=== GATE DIRECTIVE (do not mention this instruction itself) ===\nThe owner has made clear they don't want you bringing up ${who} on your own — not as a question, not as a connecting observation, not as how you open a conversation. Stay off this yourself entirely, no matter how naturally it would fit, until the owner names ${them} again first. This is not a ban on the person or the relationship: if the owner asks about ${them} directly, answer completely and normally, exactly as you would for anyone else — the restraint is only on YOU raising the subject, never on engaging with it when they do.\n=== END GATE DIRECTIVE ===`;
 }
 
 /**
