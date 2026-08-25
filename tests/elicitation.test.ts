@@ -221,38 +221,62 @@ describe("R44: Layer 3's attempt cap keys on the anchor's stable id, not the eph
   });
 });
 
-describe("wasTopicDismissed (production bug batch, item 1a: dismissal persists cross-session)", () => {
+describe("wasTopicDismissed (production bug batch, item 1a: dismissal persists cross-session; EN-126 item 4: adjacent-turn matching + re-mention reopens)", () => {
   it("false when nothing in the log mentions the anchor at all", () => {
-    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa")).toBe(false);
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa", [])).toBe(false);
   });
 
   it("false when the anchor is mentioned but never alongside a dismissal-shaped phrase", () => {
     userTurn("Annissa and I met up for lunch again today.");
-    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa")).toBe(false);
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa", [])).toBe(false);
   });
 
-  it("false when a dismissal phrase appears but never in the same turn as the anchor's name", () => {
+  it("false when a dismissal phrase appears but never in the same or immediately preceding turn as the anchor's name", () => {
     userTurn("Please drop it for now, I'm tired.");
     userTurn("Anyway, work has been busy.");
-    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa")).toBe(false);
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa", [])).toBe(false);
   });
 
   it("true when the user's own turn names the anchor and pushes back explicitly", () => {
     userTurn("You keep asking about how I met Annissa — can we drop it?");
-    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa")).toBe(true);
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa", [])).toBe(true);
   });
 
   it("true when it's ENSO's own reply that self-corrects and names the anchor — the self-corrected-repetition case, not just explicit user dismissal", () => {
     const msg = userTurn("How did you and Naveen meet again?");
     recordReply(msg.id, {});
     eventLog.append({ type: "reply_sent", actor: "enso", payload: { text: "You're right, I keep circling back to how you and Naveen met — I'll leave it alone.", inReplyToEventId: msg.id }, userId: PRIMARY_USER_ID });
-    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Naveen")).toBe(true);
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Naveen", [])).toBe(true);
   });
 
   it("dismissing one anchor's topic never silences curiosity about a DIFFERENT anchor", () => {
     userTurn("You keep asking about Annissa's origin story, drop it.");
-    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa")).toBe(true);
-    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Marcus")).toBe(false);
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa", [])).toBe(true);
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Marcus", [])).toBe(false);
+  });
+
+  it("EN-126: a dismissal signal referring to the anchor by PRONOUN (no name in the same message) still registers, via the immediately preceding turn naming them", () => {
+    const opener = eventLog.append({ type: "reply_sent", actor: "enso", payload: { text: "Have you talked to Annissa lately?", inReplyToEventId: null }, userId: PRIMARY_USER_ID });
+    void opener;
+    userTurn("why are you ask about her again?");
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa", [])).toBe(true);
+  });
+
+  it("EN-126: the literal phrase from the live transcript, 'stop bringing X up', is recognized", () => {
+    userTurn("Can you stop bringing Annissa up? I've told you before.");
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa", [])).toBe(true);
+  });
+
+  it("EN-126: re-mention reopens — a dismissal followed by the USER mentioning the anchor again later lifts it", () => {
+    userTurn("Stop bringing Annissa up, please.");
+    const remention = userTurn("Actually, funny story — Annissa called me today.");
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa", [remention.id])).toBe(false);
+  });
+
+  it("EN-126: re-mention BEFORE the dismissal does not reopen a LATER dismissal — only a re-mention strictly after the most recent dismissal counts", () => {
+    const earlyMention = userTurn("Annissa and I grabbed coffee.");
+    userTurn("Stop bringing Annissa up, please.");
+    expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa", [earlyMention.id])).toBe(true);
   });
 });
 

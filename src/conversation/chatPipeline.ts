@@ -13,7 +13,8 @@ import { recencyMode } from "../retrieval/recencyMode.js";
 import type { ContentChunkRow, RetrievalDb } from "../retrieval/retrievalDb.js";
 import { assembleContext, DEFAULT_CONTEXT_BUDGETS, type AssembledContext, type ContextBudgets } from "./contextAssembly.js";
 import { decideRetrievalInvocation, findAllMentionedEntityIds, type RetrievalInvocation, type RetrievalMode } from "./retrievalInvocation.js";
-import { buildAmbientContextBlock, buildAttachmentContextBlock, buildCurrentDateContextBlock, buildEntityDossierBlock, buildLocationContextBlock, buildSelfProfileBlock, type RecentTurnForPrompt, type VoiceMode } from "../persona/systemPrompt.js";
+import { buildAmbientContextBlock, buildAttachmentContextBlock, buildCurrentDateContextBlock, buildEntityDossierBlock, buildLocationContextBlock, buildSelfProfileBlock, buildSuppressedEntitiesDirective, type RecentTurnForPrompt, type VoiceMode } from "../persona/systemPrompt.js";
+import { getDismissedEstablishedEntityNames } from "./elicitation.js";
 import { buildEntityDossier, buildSelfProfile, getPrimaryUserAttribute, MAX_ENTITY_DOSSIERS_PER_TURN } from "../projections/peopleView.js";
 import type { CurrentLocationContext } from "../location/currentLocation.js";
 import { getSessionTurnsForPrompt } from "./conversationHistory.js";
@@ -97,6 +98,8 @@ export interface ReplySentPayload {
     ambientContext?: { ownWeatherKnown: boolean; ownLocalTimeKnown: boolean; thirdPartyName: string | null; distancePlaceName: string | null } | null;
     /** Part 4: same "reflects what actually reached the block, not what the router merely judged relevant" discipline as ambientContext above. Null when nothing resolved (never relevant, or the fetch/lookup chain failed anywhere) — indistinguishable from "never asked," same honesty as ambientContext. */
     travelContext?: { destinationLabel: string } | null;
+    /** EN-126 item 4: established entities under a terminal dismissal this turn — i.e. what the SUPPRESSED SUBJECTS directive (if any) actually named, for the same debuggability every other block here gets ("why didn't it ask about X?"). Empty array, never omitted, when nothing is currently suppressed — same never-omit-just-empty discipline retrieval's own injectedChunkIds already follows. */
+    suppressedEntities: string[];
   };
   /**
    * Phase 6 round-trip survival: the router's own decision shaped this
@@ -515,6 +518,14 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     (input.budgets ?? DEFAULT_CONTEXT_BUDGETS).maxAmbientContextChars
   );
 
+  // EN-126 item 4: unconditional, every turn — never gated on the router
+  // or any curiosity eligibility check above, since suppression must hold
+  // even on a turn where nothing else fires (including, deliberately, the
+  // very first turn of a session — the exact shape item 6's transcript
+  // showed, an ordinary turn like any other, not a special "opener" path).
+  const dismissedEntityNames = getDismissedEstablishedEntityNames(deps.eventLog, deps.projectionsDb, input.userId);
+  const suppressedEntitiesDirective = buildSuppressedEntitiesDirective(dismissedEntityNames);
+
   const assembled = assembleContext(
     candidateChunks,
     { mode: invocation.mode, query: invocation.query },
@@ -527,7 +538,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     entityDossierBlock,
     locationContextBlock,
     dateContextBlock,
-    ambientContextBlock
+    ambientContextBlock,
+    suppressedEntitiesDirective
   );
 
   const callResult = await deps.chatRouter.reply({ system: assembled.systemPrompt, history: [], latestMessage: effectiveText });
@@ -589,7 +601,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
         : null,
       // Part 4: same "reflects the block, not the router's mere judgment" discipline as
       // ambientContext above — null whenever travelData never resolved, for any reason.
-      travelContext: ambientContextBlock && travelData ? { destinationLabel: travelData.destinationLabel } : null
+      travelContext: ambientContextBlock && travelData ? { destinationLabel: travelData.destinationLabel } : null,
+      suppressedEntities: dismissedEntityNames
     },
     router: {
       used: routerResult !== null,

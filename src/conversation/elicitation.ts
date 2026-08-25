@@ -86,6 +86,9 @@ export const TOPIC_DISMISSAL_SIGNALS = [
   "let it go",
   "let this go",
   "stop asking",
+  "stop bringing",
+  "why do you keep",
+  "why are you ask",
   "move on from that",
   "i'll leave it",
   "i'll let it go",
@@ -93,22 +96,143 @@ export const TOPIC_DISMISSAL_SIGNALS = [
 ];
 
 /**
- * True when a dismissal-shaped phrase (TOPIC_DISMISSAL_SIGNALS) appears in
- * the SAME turn as this anchor's own name. Scans the FULL event log, not
- * a session window — the same cross-session derivation discipline every
- * other gate-state function in this file already uses (firedElicitationHistory,
- * askedPairs) — which is what makes a dismissal survive into the NEXT
- * session's candidate ranking, the actual bug this closes.
+ * EN-126 (capability-denial-and-echo batch), item 4: two fixes to the R52/
+ * EN-106 mechanism this function already was, found by tracing every path
+ * that can put an established entity into a reply as a self-initiated
+ * subject (see getDismissedEstablishedEntityNames below for the full
+ * trace). Both gaps were found live in one transcript: dismissed 3+ times
+ * across sessions ("stop bringing Annissa up" — the name literal, an
+ * earlier session), Enso raised her again anyway at the start of a later
+ * session, and when asked "why are you ask about her again?" (a pronoun,
+ * not the name) that objection ALSO wouldn't have registered under the
+ * original same-message-name-plus-signal rule.
+ *
+ * FIX 1 — ADJACENT-TURN MATCHING, not pronoun resolution: a dismissal
+ * signal in a user message also counts if the name appears in the event
+ * immediately BEFORE it (Enso's own reply, or the user's own prior
+ * message — whichever came right before). This is a structural adjacency
+ * check, not NLU: "the entity was the subject of the turn right before
+ * the objection" is a fact about turn order, not a judgment call, the
+ * same "short, explicit signal, no free-form classification" discipline
+ * TOPIC_DISMISSAL_SIGNALS itself was already built on. Also broadened the
+ * signal list itself: "stop bringing" (the literal phrase used in the
+ * live transcript) and "why are you ask"/"why do you keep" (the pronoun
+ * objection shape) were both simply absent before.
+ *
+ * FIX 2 — RE-MENTION REOPENS, which the original never implemented at
+ * all: once ANY dismissal signal was ever found, this returned true
+ * forever, with no way for the user re-raising the person themselves to
+ * lift it — directly contradicting the terminal-dismissal rule's own
+ * design ("may be raised again only when the user mentions them first").
+ * Reuses the SAME derivation circleBack.ts's hasBeenMentionedSince
+ * already established for exactly this class of check: sourceEventIds is
+ * an entity's own touchEntity-derived provenance (EVERY message a mention
+ * of this entity was ever extracted from — user messages only, since
+ * extraction never runs on Enso's own replies), so "did the user mention
+ * this entity again after the dismissal" is answered by the SAME data
+ * circleback's cooldown logic already reads — compared by event ID (ULID
+ * generation order), not recordedAt/turn index; this function has no
+ * turn-index map to work with, and a plain ULID comparison is both
+ * sufficient and strictly ordered even within the same millisecond,
+ * unlike a raw timestamp compare would be.
+ *
+ * Scans the FULL event log, not a session window, same cross-session
+ * derivation discipline as this file's other gate-state functions
+ * (firedElicitationHistory, askedPairs) — a dismissal survives into a
+ * LATER session's candidate ranking, and a re-mention in a later session
+ * lifts it, exactly like every other derived state here.
  */
-export function wasTopicDismissed(eventLog: EventLog, userId: string, anchorName: string): boolean {
+export function wasTopicDismissed(eventLog: EventLog, userId: string, anchorName: string, sourceEventIds: string[]): boolean {
   const lowerName = anchorName.toLowerCase();
-  for (const event of eventLog.listForUser(userId)) {
-    if (event.type !== "message_sent" && event.type !== "reply_sent") continue;
-    const text = ((event.payload as { text?: string }).text ?? "").toLowerCase();
-    if (!text.includes(lowerName)) continue;
-    if (TOPIC_DISMISSAL_SIGNALS.some((signal) => text.includes(signal))) return true;
+  const events = eventLog.listForUser(userId).filter((e) => e.type === "message_sent" || e.type === "reply_sent");
+  const textOf = (e: EventRecord): string => ((e.payload as { text?: string }).text ?? "").toLowerCase();
+
+  // Either role can establish a dismissal — the owner objecting explicitly,
+  // or Enso itself self-correcting/apologizing ("I'll leave it alone") —
+  // unchanged from the original R52/EN-106 behavior, verified by existing
+  // fixtures. Only RE-MENTION (below) is scoped to the user specifically,
+  // per the terminal-dismissal rule's own wording ("only when the USER
+  // mentions them first").
+  //
+  // Ordered by event ID (ULID), never recordedAt: ids come from newId()'s
+  // monotonic factory (src/ids.ts) and sort strictly in generation order
+  // even within the same millisecond; recordedAt is a separate
+  // `new Date().toISOString()` call with only millisecond resolution and
+  // no such guarantee — two events genuinely created in the same
+  // millisecond would compare equal and silently break the "strictly
+  // after" check below.
+  let lastDismissalId: string | null = null;
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i]!;
+    const text = textOf(event);
+    if (!TOPIC_DISMISSAL_SIGNALS.some((signal) => text.includes(signal))) continue;
+    const namedHere = text.includes(lowerName);
+    const namedJustBefore = i > 0 && textOf(events[i - 1]!).includes(lowerName);
+    if (namedHere || namedJustBefore) lastDismissalId = event.id;
   }
-  return false;
+  if (lastDismissalId === null) return false;
+
+  // sourceEventIds is this entity's own touchEntity-derived provenance —
+  // every message a mention was ever extracted FROM, which is always a
+  // user message_sent event (extraction never runs on Enso's own replies)
+  // — so this is already inherently a user-re-mention check with no
+  // separate actor filter needed.
+  const reMentioned = sourceEventIds.some((id) => id > lastDismissalId!);
+  return !reMentioned;
+}
+
+/**
+ * EN-126 item 4 (primary item of the batch). Every established entity
+ * currently under a terminal dismissal — Enso must never raise them as a
+ * self-initiated subject until the user mentions them again.
+ *
+ * THE TRACE, done before writing this (report-first, per instruction):
+ * three paths can put a known entity into a reply as the SUBJECT of a
+ * question or observation, only one of which had any dismissal check at
+ * all. (1) circleBack.ts's findEligibleCircleBackCandidates — the OTHER
+ * gated third-party mechanism — structurally EXCLUDES established
+ * entities outright (`if (isEstablished(...)) continue`, circleBack.ts):
+ * it is the name-CLARIFICATION path (an unknown name, "who is this"),
+ * never a path that can raise a known person's life/wellbeing, so it was
+ * never a candidate for this bug and needed no change. (2) elicitation.ts's
+ * own findLayer3Candidate (KEY SCENES: howMet/earliestMemory/etc.) DOES
+ * target established entities and ALREADY called wasTopicDismissed before
+ * this batch — its gap was wasTopicDismissed's own narrowness, fixed
+ * above, not a missing call. (3) connectDot (router-decided kind, EN-041)
+ * and pure ORGANIC curiosity (R47/BREADTH_BEFORE_DEPTH_INSTRUCTION: model
+ * curiosity with no gate or candidate object at all, confirmed by that
+ * requirement's own live-caught finding that three of six real askings in
+ * ITS transcript never touched a gate) are the two paths that actually
+ * explain the live transcript — connectDot's own entity choice is never
+ * code-selected (buildConnectDotDirective "needs no candidate" by design)
+ * and organic curiosity never touches a candidate object to begin with,
+ * so NEITHER has anything a code-level filter could exclude from. Those
+ * two are covered instead by rendering a restraint directive
+ * (buildSuppressedEntitiesDirective, systemPrompt.ts) naming exactly
+ * these entities, the same prompt-injection mechanism gateDirective
+ * already uses, extended to a restraint rather than an action.
+ *
+ * WHAT IS ACTUALLY RECORDED when the user says "stop bringing X up" about
+ * an established person: nothing NEW — no event, no side table. It's
+ * derived the same way circle-back cooldowns already are, by scanning
+ * recorded message_sent/reply_sent text (wasTopicDismissed above). The
+ * existing data expresses this fully; no new event type was needed, so
+ * none was added, per instruction.
+ *
+ * STABLE, never keyed on a projection entityId: returns plain entity
+ * NAMES (a name string is not a volatile projection id — EN-054's own
+ * bug class, fixed once in circleBack.ts's stableKey and again in this
+ * file's own R44 fix, doesn't apply to a name at all), and
+ * wasTopicDismissed itself only ever matches on name-in-text, never an
+ * id — so this survives a rebuild by construction, verified directly in
+ * tests/dismissalPersistence.test.ts across repeated rebuilds.
+ */
+export function getDismissedEstablishedEntityNames(eventLog: EventLog, projections: ProjectionsDb, userId: string): string[] {
+  return projections
+    .listEntities(userId)
+    .filter((e) => isEstablished(projections, userId, e.id))
+    .filter((e) => wasTopicDismissed(eventLog, userId, e.name, JSON.parse(e.source_event_ids) as string[]))
+    .map((e) => e.name);
 }
 
 /** Each Layer 1 subtype fires at most once ever — six greatest-hits onboarding questions, not a repeatable rotation (repeating "who would you call at 2am" verbatim months later would be exactly the near-verbatim-repetition defect R22 already names for a different gate). Once all six are spent, Layer 1 goes permanently dormant and Layer 3/third-party carry the relationship forward. */
@@ -294,7 +418,7 @@ export function findLayer3Candidate(eventLog: EventLog, projections: Projections
 
   const anchors = allEntities
     .filter((e) => isEstablished(projections, userId, e.id))
-    .filter((e) => !wasTopicDismissed(eventLog, userId, e.name))
+    .filter((e) => !wasTopicDismissed(eventLog, userId, e.name, JSON.parse(e.source_event_ids) as string[]))
     .map((e) => {
       const sourceIds = (JSON.parse(e.source_event_ids) as string[]).slice().sort();
       const stableKey = sourceIds[0] ?? "";

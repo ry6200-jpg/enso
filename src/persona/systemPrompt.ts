@@ -202,6 +202,35 @@ export function buildCurrentDateContextBlock(referenceDate: Date, maxChars: numb
 }
 
 /**
+ * EN-126 item 4 (capability-denial-and-echo batch, primary item): the
+ * restraint half of dismissal persistence for established entities. The
+ * code-level filter in elicitation.ts's findLayer3Candidate covers ONE of
+ * the three paths that can raise a known entity as a self-initiated
+ * subject; the other two — connectDot (router-decided, but the entity
+ * choice itself is never code-selected, buildConnectDotDirective "needs
+ * no candidate" by design) and pure organic curiosity (no gate, no
+ * candidate object at all, R47's own finding) — have nothing a code
+ * filter could exclude from, since neither ever produces a candidate to
+ * filter. This directive is how those two are reached instead: the same
+ * prompt-injection mechanism gateDirective already uses for an ACTION,
+ * extended here to a RESTRAINT, always appended (independent of whatever
+ * gate, if any, fires the same turn — see contextAssembly.ts).
+ *
+ * Deliberately never a topic ban (the constraint spanning all six items
+ * in this batch): explicitly tells the model recall is unaffected and a
+ * direct question about the person still gets a full, real answer — the
+ * NAMED PEOPLE/entity-dossier block that actually supplies that recall is
+ * a wholly separate mechanism (peopleView.ts, gated on the current turn
+ * naming them), never touched by this directive at all.
+ */
+export function buildSuppressedEntitiesDirective(names: string[]): string | null {
+  if (names.length === 0) return null;
+  const who = names.length === 1 ? names[0]! : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  const them = names.length === 1 ? "them" : "any of them";
+  return `SUPPRESSED SUBJECTS: the owner has made clear they don't want you bringing up ${who} on your own — not as a question, not as a connecting observation, not as how you open a conversation. Stay off this yourself entirely, no matter how naturally it would fit, until the owner names ${them} again first. This is not a ban on the person or the relationship: if the owner asks about ${them} directly, answer completely and normally, exactly as you would for anyone else — the restraint is only on YOU raising the subject, never on engaging with it when they do.`;
+}
+
+/**
  * Ambient context batch, item 1: renders whatever src/conversation/
  * ambientContextFetch.ts's fetchAmbientContext actually resolved this
  * turn — never what the router merely judged relevant (a failed API call

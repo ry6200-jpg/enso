@@ -187,7 +187,8 @@ export function assembleContext(
   entityDossierBlock: string | null = null,
   locationContextBlock: string | null = null,
   dateContextBlock: string | null = null,
-  ambientContextBlock: string | null = null
+  ambientContextBlock: string | null = null,
+  suppressedEntitiesDirective: string | null = null
 ): AssembledContext {
   const { injectedTurns, truncated: recentTruncated } = truncateRecentTurnsToCharBudget(recentTurns, budgets.maxRecentWindowChars);
 
@@ -212,7 +213,12 @@ export function assembleContext(
   const baseSystemPrompt = buildSystemPrompt(retrievedBlock, recentWindowBlock, attachmentBlock, voiceMode, selfProfileBlock, entityDossierBlock, locationContextBlock, dateContextBlock, ambientContextBlock);
   // EN-071 stage 3: a gate directive, when present, is injected at the END
   // of the system prompt — highest-salience position, named action only.
-  const systemPrompt = gateDirective ? `${baseSystemPrompt}\n\n${gateDirective}` : baseSystemPrompt;
+  // EN-126 item 4: suppressedEntitiesDirective is appended the same way,
+  // independently of gateDirective — a restraint, not an action, so it
+  // must apply regardless of which (if any) gate fires the same turn,
+  // never mutually exclusive with one.
+  const trailingDirectives = [gateDirective, suppressedEntitiesDirective].filter((d): d is string => d !== null);
+  const systemPrompt = trailingDirectives.length > 0 ? `${baseSystemPrompt}\n\n${trailingDirectives.join("\n\n")}` : baseSystemPrompt;
 
   return {
     systemPrompt,
