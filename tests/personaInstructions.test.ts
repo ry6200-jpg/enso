@@ -8,6 +8,7 @@ import {
   CURRENT_LOCATION_INSTRUCTION,
   MEMORY_HONESTY_INSTRUCTION,
   NATURAL_VOICE_INSTRUCTION,
+  NO_INTROSPECTIVE_CAUSAL_CLAIMS_INSTRUCTION,
   REGISTER_CALIBRATION_INSTRUCTION,
   STATED_RELATIONSHIP_FRAMING_INSTRUCTION
 } from "../src/persona/instructions.js";
@@ -452,6 +453,36 @@ describe("CAPABILITY_HONESTY_INSTRUCTION (EN-117, R56/R57/R58: three faults from
     // ("I don't have a live traffic reading" -> "I don't have a live route reading", one word swapped).
     expect(CAPABILITY_HONESTY_INSTRUCTION).not.toMatch(/a reading that never resolved/);
     expect(CAPABILITY_HONESTY_INSTRUCTION).not.toMatch(/not having a live reading doesn't take the subject off the table/);
+  });
+});
+
+describe("NO_INTROSPECTIVE_CAUSAL_CLAIMS_INSTRUCTION (EN-126 item 5: no invented causes/mechanisms/motives about Enso's own behavior)", () => {
+  it("bans naming a specific invented internal cause or a confident claim about what instruction did/didn't apply", () => {
+    expect(NO_INTROSPECTIVE_CAUSAL_CLAIMS_INSTRUCTION).toMatch(/no naming a specific internal cause/);
+    expect(NO_INTROSPECTIVE_CAUSAL_CLAIMS_INSTRUCTION).toMatch(/I fell back on\.\.\./);
+    expect(NO_INTROSPECTIVE_CAUSAL_CLAIMS_INSTRUCTION).toMatch(/I already had enough guidance to stop/);
+    expect(NO_INTROSPECTIVE_CAUSAL_CLAIMS_INSTRUCTION).toMatch(/no unprompted self-authored failure analysis of your own prior turn/);
+  });
+
+  it("gives Enso a real, honest thing to say instead — acknowledge the effect, say \"I don't know why\" when true", () => {
+    expect(NO_INTROSPECTIVE_CAUSAL_CLAIMS_INSTRUCTION).toMatch(/acknowledge the EFFECT plainly and take it seriously/);
+    expect(NO_INTROSPECTIVE_CAUSAL_CLAIMS_INSTRUCTION).toMatch(/say plainly that you don't know why/);
+  });
+
+  it("must not become a refusal to engage — still governed by the existing limitations-land-as-regret tone rule", () => {
+    expect(NO_INTROSPECTIVE_CAUSAL_CLAIMS_INSTRUCTION).toMatch(/must never become evasion or a refusal to engage/);
+    expect(NO_INTROSPECTIVE_CAUSAL_CLAIMS_INSTRUCTION).toMatch(/lands as plain regret, never as a defense of it/);
+    expect(NO_INTROSPECTIVE_CAUSAL_CLAIMS_INSTRUCTION).toMatch(/respond warmly to being corrected/);
+  });
+
+  it("is named as the mirror image of THE ANTI-ROBOT RULE's never-recite-instructions clause, not a duplicate of it", () => {
+    expect(NO_INTROSPECTIVE_CAUSAL_CLAIMS_INSTRUCTION).toMatch(/THE MIRROR IMAGE OF NEVER RECITING YOUR OWN INSTRUCTIONS/);
+  });
+
+  it("is included in the assembled persona block, alongside CAPABILITY_HONESTY_INSTRUCTION", () => {
+    const block = buildPersonaBlock("natural");
+    expect(block).toMatch(/WHEN ASKED WHY YOU DID SOMETHING/);
+    expect(block.indexOf("CAPABILITY HONESTY")).toBeLessThan(block.indexOf("WHEN ASKED WHY YOU DID SOMETHING"));
   });
 });
 
