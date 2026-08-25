@@ -78,3 +78,31 @@ export async function getVerifiedUserId(request: Request, verifier: TokenVerifie
 
   return verified.uid;
 }
+
+/**
+ * Admin-only entity view (report/entity-view batch, part 2). A SEPARATE
+ * check from getVerifiedUserId above, not layered on top of it — an
+ * admin route's identity requirement is "verified token AND on the
+ * admin list," never "already passed the general allowlist AND also on
+ * the admin list," so a misconfigured/narrower ALLOWED_EMAILS can never
+ * accidentally widen or narrow who counts as admin. Reuses
+ * isEmailAllowed's exact case-insensitive, trimmed comparison — the
+ * admin check is not a second, differently-behaved comparator, just a
+ * different list. Fails the SAME way as an unrecognized route would
+ * (the caller — lib/requireUser.ts's requireAdminUserId — turns any
+ * thrown error here into a bare 404, never a 401/403 that would confirm
+ * the route exists at all to a non-admin).
+ */
+export async function getVerifiedAdminUserId(request: Request, verifier: TokenVerifier, adminEmails: readonly string[]): Promise<string> {
+  const token = extractBearerToken(request);
+  if (!token) throw new UnauthenticatedError("No Authorization: Bearer token present.");
+
+  const verified = await verifier(token);
+  if (!verified) throw new UnauthenticatedError("Token is missing, expired, or invalid.");
+
+  if (!isEmailAllowed(verified.email, adminEmails)) {
+    throw new ForbiddenError("Not an admin.");
+  }
+
+  return verified.uid;
+}

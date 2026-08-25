@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { ForbiddenError, getVerifiedUserId, UnauthenticatedError } from "../src/auth/verifyRequest.js";
+import { ForbiddenError, getVerifiedAdminUserId, getVerifiedUserId, UnauthenticatedError } from "../src/auth/verifyRequest.js";
 import { verifyFirebaseIdToken } from "../src/auth/firebaseAdmin.js";
 
 /**
@@ -24,6 +24,30 @@ function allowedEmails(): string[] {
 
 export function requireUserId(request: Request): Promise<string> {
   return getVerifiedUserId(request, verifyFirebaseIdToken, allowedEmails());
+}
+
+/**
+ * ADMIN_EMAILS: same shape as ALLOWED_EMAILS (comma-separated, .env
+ * locally, set separately in the Cloud Run console for production —
+ * never committed) but a DELIBERATELY DIFFERENT failure mode: absent or
+ * empty means no admin at all, not everyone. Where allowedEmails() above
+ * throws on a missing var (the app cannot run at all without a general
+ * allowlist), this one degrades silently to an empty list — a forgotten
+ * ADMIN_EMAILS must never accidentally open the admin view to every
+ * allowed user, the way a thrown "fail loud" error pattern would risk if
+ * some caller ever caught and ignored it.
+ */
+export function adminEmails(): string[] {
+  const raw = process.env.ADMIN_EMAILS;
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((e) => e.trim())
+    .filter((e) => e.length > 0);
+}
+
+export function requireAdminUserId(request: Request): Promise<string> {
+  return getVerifiedAdminUserId(request, verifyFirebaseIdToken, adminEmails());
 }
 
 /** Every route's uniform catch: an auth failure becomes 401/403, never a 500 and never a fallthrough to any default identity. */
