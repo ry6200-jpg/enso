@@ -143,8 +143,11 @@ interface LocationContextState {
  * "resizes-content"` + `h-dvh`), not anything here — this page's existing
  * flex-1/shrink-0 pinning (EN-036, above) already does the right thing
  * once the viewport itself resizes correctly under the keyboard.
- * isNarrowScreen (item 5) swaps the placeholder text only — a plain
- * string prop can't respond to a CSS media query on its own.
+ * UI batch (visual only): the placeholder's keyboard-shortcut hint
+ * ("Enter to send, Shift+Enter for a new line") is removed entirely —
+ * permanent hint text that means nothing on a phone keyboard — so the
+ * isNarrowScreen state this section used to reference for that swap no
+ * longer exists; one plain placeholder now serves both widths.
  *
  * Scroll/history/focus/zodiac batch: the native `autoFocus` prop this
  * mobile batch left alone turned out to never reliably work at all — see
@@ -211,11 +214,6 @@ export default function Page() {
   // ends/moves before it fires never shows anything (a tap must stay a tap, not a delayed popup).
   const [exactTimestampForMessageId, setExactTimestampForMessageId] = useState<string | null>(null);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Below md (Tailwind's breakpoint, matching ZodiacSidebar's own `hidden
-  // md:flex`), the desktop placeholder's parenthetical wraps to three lines
-  // and explains a keyboard shortcut a phone doesn't have. matchMedia, not
-  // a resize listener — fires on rotation/resize alike with no polling.
-  const [isNarrowScreen, setIsNarrowScreen] = useState(false);
   // Ambient current-location (see enso-rebuild-requirements.md's CORE
   // DISTINCTION) — timezone is computed once on mount (zero permission
   // cost); placeName stays null until/unless geolocation resolves. Neither
@@ -560,14 +558,6 @@ export default function Page() {
   }, [menuOpen]);
 
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 767px)");
-    setIsNarrowScreen(mq.matches);
-    const handleChange = (e: MediaQueryListEvent) => setIsNarrowScreen(e.matches);
-    mq.addEventListener("change", handleChange);
-    return () => mq.removeEventListener("change", handleChange);
-  }, []);
-
-  useEffect(() => {
     if (!attachmentStatus) return;
     const timer = setTimeout(() => setAttachmentStatus(null), 6000);
     return () => clearTimeout(timer);
@@ -595,8 +585,9 @@ export default function Page() {
   // opening the keyboard the instant the app loads would cover the
   // conversation the user came here to read, which the requirement
   // explicitly forbids. Checked directly via matchMedia at the moment
-  // this fires, not the isNarrowScreen state (set by its own separate
-  // mount effect, not guaranteed to have settled before this one runs).
+  // this fires, not a media-query state variable set by some other
+  // mount effect, which isn't guaranteed to have settled before this
+  // one runs.
   // The send-focus effect right below is intentionally NOT gated the same
   // way — by the time a send completes, the user was just typing with the
   // keyboard already open, so refocusing there never newly summons it.
@@ -873,10 +864,15 @@ export default function Page() {
           message list, never vh-sized) is what keeps this row's height
           fixed regardless of keyboard open/close — nothing here reacts to
           the viewport at all, which is the point. */}
-      <header className="shrink-0 h-14 flex items-center gap-3 px-4 border-b border-stone-200">
+      {/* UI batch (visual only): md: sizing only, mobile untouched — this
+          row was sized for the phone and read small at full-browser width.
+          Height/padding/gap scale up alongside the logo/wordmark so the
+          larger row doesn't look cramped, not just the mark and text in
+          isolation. */}
+      <header className="shrink-0 h-14 md:h-20 flex items-center gap-3 md:gap-4 px-4 md:px-6 border-b border-stone-200">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/assets/enso-mark.png" alt="" className="w-8 h-8" />
-        <span className="text-[1.0625rem] font-bold tracking-wide" style={{ color: "var(--enso-ink)" }}>
+        <img src="/assets/enso-mark.png" alt="" className="w-8 h-8 md:w-11 md:h-11" />
+        <span className="text-[1.0625rem] md:text-2xl font-bold tracking-wide" style={{ color: "var(--enso-ink)" }}>
           Enso
         </span>
 
@@ -1032,38 +1028,54 @@ export default function Page() {
                   return (
                     <div key={m.id}>
                       {newDay && <div className="text-center text-xs text-stone-400 my-2">{daySeparatorLabel(m.recordedAt, timezone)}</div>}
-                      {showTime && <div className={`text-[0.7rem] text-stone-400 mb-0.5 ${m.role === "user" ? "text-right" : "text-left"}`}>{formatInlineTime(m.recordedAt, timezone)}</div>}
-                      <div
-                        className={`max-w-lg rounded-lg px-4 py-3 text-[1.0625rem] leading-[1.45] whitespace-pre-wrap ${
-                          m.role === "user" ? "self-end text-white" : "self-start bg-white border border-stone-200"
-                        }`}
-                        style={m.role === "user" ? { backgroundColor: "var(--enso-red)", color: "#faf7f2" } : { color: "var(--enso-ink)" }}
-                        title={exactTimestamp}
-                        onTouchStart={() => {
-                          longPressTimerRef.current = setTimeout(() => setExactTimestampForMessageId(m.id), 500);
-                        }}
-                        onTouchEnd={() => {
-                          if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-                          setExactTimestampForMessageId(null);
-                        }}
-                        onTouchMove={() => {
-                          if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-                        }}
-                      >
-                        {/* Secondary text, scaled proportionally to the 17px
-                            body above (0.75rem was proportional to the old
-                            16px body — 0.75 * 17/16 ≈ 0.8rem keeps the same
-                            relative weight against the new size, not just an
-                            unscaled leftover). No explicit leading override:
-                            a unitless line-height (leading-[1.45] above) is
-                            inherited as the RATIO, not the computed pixel
-                            value, so this recomputes correctly against its
-                            own smaller font-size automatically. */}
-                        {m.filename && <div className="text-[0.8rem] opacity-80 mb-1">Attached: {m.filename}</div>}
-                        {m.text}
-                        {exactTimestampForMessageId === m.id && (
-                          <div className="text-[0.7rem] opacity-80 mt-1 border-t border-white/20 pt-1">{exactTimestamp}</div>
-                        )}
+                      {/* UI batch (visual only): this flex column is what actually
+                          aligns and sizes the bubble — self-end/self-start on the
+                          bubble itself did nothing, because the bubble was a
+                          GRANDCHILD of the message list's flex container (this
+                          wrapper div sat between them), and align-self only has
+                          effect on a direct flex item. Wrapping just the timestamp
+                          + bubble in their own items-end/items-start column fixes
+                          both at once: the bubble becomes a flex child with no
+                          explicit width, so it shrinks to its own content (capped
+                          by max-w-lg) instead of the block-level full-width
+                          stretch it was getting before, and the timestamp — now a
+                          sibling inside the SAME small aligned box — sits directly
+                          above its own bubble at the same edge, instead of
+                          spanning the full row disconnected from it. */}
+                      <div className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}>
+                        {showTime && <div className="text-[0.7rem] text-stone-400 mb-0.5">{formatInlineTime(m.recordedAt, timezone)}</div>}
+                        <div
+                          className={`max-w-lg rounded-lg px-4 py-3 text-[1.0625rem] leading-[1.45] whitespace-pre-wrap ${
+                            m.role === "user" ? "text-white" : "bg-white border border-stone-200"
+                          }`}
+                          style={m.role === "user" ? { backgroundColor: "var(--enso-red)", color: "#faf7f2" } : { color: "var(--enso-ink)" }}
+                          title={exactTimestamp}
+                          onTouchStart={() => {
+                            longPressTimerRef.current = setTimeout(() => setExactTimestampForMessageId(m.id), 500);
+                          }}
+                          onTouchEnd={() => {
+                            if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+                            setExactTimestampForMessageId(null);
+                          }}
+                          onTouchMove={() => {
+                            if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+                          }}
+                        >
+                          {/* Secondary text, scaled proportionally to the 17px
+                              body above (0.75rem was proportional to the old
+                              16px body — 0.75 * 17/16 ≈ 0.8rem keeps the same
+                              relative weight against the new size, not just an
+                              unscaled leftover). No explicit leading override:
+                              a unitless line-height (leading-[1.45] above) is
+                              inherited as the RATIO, not the computed pixel
+                              value, so this recomputes correctly against its
+                              own smaller font-size automatically. */}
+                          {m.filename && <div className="text-[0.8rem] opacity-80 mb-1">Attached: {m.filename}</div>}
+                          {m.text}
+                          {exactTimestampForMessageId === m.id && (
+                            <div className="text-[0.7rem] opacity-80 mt-1 border-t border-white/20 pt-1">{exactTimestamp}</div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   );
@@ -1125,9 +1137,17 @@ export default function Page() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 disabled={sending}
-                placeholder={isNarrowScreen ? "Message Enso..." : "Tell Enso what's on your mind... (Enter to send, Shift+Enter for a new line)"}
+                placeholder="Tell Enso what's on your mind..."
                 rows={1}
-                className="flex-1 min-w-0 min-h-11 max-h-[10.619rem] resize-none rounded-xl px-3 py-2.5 text-[1.0625rem] leading-[1.45] bg-white border border-stone-300 focus:outline-none focus:ring-2 focus:ring-stone-300 disabled:opacity-50 overflow-y-auto"
+                // UI batch (visual only), mobile only: the focus ring is a
+                // box-shadow, so on a small screen — where the textarea is
+                // focused for essentially the whole time the user is
+                // looking at it (keyboard up) — it read as a permanent
+                // drop shadow around the input, like a floating card
+                // rather than part of the page. Kept on md: and up, where
+                // the input isn't focused for the whole interaction and a
+                // focus ring is the normal, expected affordance.
+                className="flex-1 min-w-0 min-h-11 max-h-[10.619rem] resize-none rounded-xl px-3 py-2.5 text-[1.0625rem] leading-[1.45] bg-white border border-stone-300 focus:outline-none md:focus:ring-2 md:focus:ring-stone-300 disabled:opacity-50 overflow-y-auto"
               />
               <button
                 type="submit"
