@@ -278,6 +278,33 @@ describe("wasTopicDismissed (production bug batch, item 1a: dismissal persists c
     userTurn("Stop bringing Annissa up, please.");
     expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa", [earlyMention.id])).toBe(true);
   });
+
+  describe("EN-126 follow-up item 3: bounded-lookback matching, widened from the original single-preceding-event check", () => {
+    it("a dismissal landing TWO turns after the name (not just the immediately preceding one) is now caught", () => {
+      const opener = eventLog.append({ type: "reply_sent", actor: "enso", payload: { text: "Have you talked to Annissa lately?", inReplyToEventId: null }, userId: PRIMARY_USER_ID });
+      void opener;
+      userTurn("Not much going on today, work was slow.");
+      userTurn("Stop bringing her up, I've said this before.");
+      expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa", [])).toBe(true);
+    });
+
+    it("still false once the name falls entirely outside the bounded lookback window — a real bound, not an unbounded scan", () => {
+      const opener = eventLog.append({ type: "reply_sent", actor: "enso", payload: { text: "Have you talked to Annissa lately?", inReplyToEventId: null }, userId: PRIMARY_USER_ID });
+      void opener;
+      for (let i = 0; i < 8; i++) userTurn(`Unrelated filler turn ${i}.`);
+      userTurn("Stop bringing her up, I've said this before.");
+      expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa", [])).toBe(false);
+    });
+
+    it("KNOWN ACCEPTED GAP: a dismissal with no name anywhere in the lookback window at all still cannot register — documented, not silently wrong", () => {
+      userTurn("Work has been busy lately.");
+      userTurn("I don't want to talk about her.");
+      // No established entity's name appears anywhere nearby — there is nothing structural to attribute
+      // this to without free-form inference, which this fix deliberately does not add (see the function's
+      // own doc comment and enso-rebuild-requirements.md's EN-126 follow-up entry).
+      expect(wasTopicDismissed(eventLog, PRIMARY_USER_ID, "Annissa", [])).toBe(false);
+    });
+  });
 });
 
 describe("findLayer3Candidate honors topic dismissal, and it persists past what any single session would hold (production bug batch, item 1a)", () => {

@@ -95,29 +95,50 @@ export const TOPIC_DISMISSAL_SIGNALS = [
   "i'll drop it"
 ];
 
+/** How many events (either role) to look back for the anchor's own name before a dismissal signal — a bounded, structural window (turn distance, EN-126 follow-up item 3), never NLU. Matches this file's other small bounded windows (RECENCY_WINDOW_TURNS/COOLDOWN_TURNS in circleBack.ts) in spirit, not value — this one counts raw events (message_sent + reply_sent interleaved), not user-only turns, since the name can come from either role. */
+const DISMISSAL_NAME_LOOKBACK_EVENTS = 6;
+
 /**
- * EN-126 (capability-denial-and-echo batch), item 4: two fixes to the R52/
- * EN-106 mechanism this function already was, found by tracing every path
- * that can put an established entity into a reply as a self-initiated
- * subject (see getDismissedEstablishedEntityNames below for the full
- * trace). Both gaps were found live in one transcript: dismissed 3+ times
+ * EN-126 (capability-denial-and-echo batch), item 4, widened by the
+ * EN-126 follow-up (item 3): fixes to the R52/EN-106 mechanism this
+ * function already was, found by tracing every path that can put an
+ * established entity into a reply as a self-initiated subject (see
+ * getDismissedEstablishedEntityNames below for the full trace). Both
+ * original gaps were found live in one transcript: dismissed 3+ times
  * across sessions ("stop bringing Annissa up" — the name literal, an
  * earlier session), Enso raised her again anyway at the start of a later
  * session, and when asked "why are you ask about her again?" (a pronoun,
  * not the name) that objection ALSO wouldn't have registered under the
  * original same-message-name-plus-signal rule.
  *
- * FIX 1 — ADJACENT-TURN MATCHING, not pronoun resolution: a dismissal
- * signal in a user message also counts if the name appears in the event
- * immediately BEFORE it (Enso's own reply, or the user's own prior
- * message — whichever came right before). This is a structural adjacency
- * check, not NLU: "the entity was the subject of the turn right before
- * the objection" is a fact about turn order, not a judgment call, the
- * same "short, explicit signal, no free-form classification" discipline
- * TOPIC_DISMISSAL_SIGNALS itself was already built on. Also broadened the
- * signal list itself: "stop bringing" (the literal phrase used in the
- * live transcript) and "why are you ask"/"why do you keep" (the pronoun
- * objection shape) were both simply absent before.
+ * FIX 1 — BOUNDED-LOOKBACK MATCHING, not pronoun resolution: a dismissal
+ * signal in a user message also counts if the name appears anywhere in
+ * the DISMISSAL_NAME_LOOKBACK_EVENTS events immediately before it (Enso's
+ * own replies or the user's own prior messages, either role, whichever
+ * came before). Originally shipped checking only the SINGLE immediately-
+ * preceding event, which the follow-up review confirmed misses a genuinely
+ * common shape: a dismissal landing two or more turns after the name was
+ * last raised, not always the very next one. This is still a structural
+ * adjacency check, not NLU: "the entity was raised within the last few
+ * turns before the objection" is a fact about turn order and distance,
+ * not a judgment call, the same "short, explicit signal, no free-form
+ * classification" discipline TOPIC_DISMISSAL_SIGNALS itself was already
+ * built on. Also broadened the signal list itself: "stop bringing" (the
+ * literal phrase used in the live transcript) and "why are you ask"/"why
+ * do you keep" (the pronoun objection shape) were both simply absent
+ * before.
+ *
+ * KNOWN, ACCEPTED GAP (EN-126 follow-up item 3, not fixed): a dismissal
+ * with NO established entity's name anywhere in the lookback window at
+ * all — genuinely topic-less prose like "I don't want to talk about her"
+ * with no recent mention of who "her" is even a few turns back — still
+ * cannot register. Closing this fully would mean attributing a nameless
+ * objection to "whichever person Enso was most recently, structurally,
+ * talking about" with no bound on how far back to look, which stops being
+ * a turn-distance fact and starts being free-form inference about what
+ * the conversation was "really about" — exactly the NLU/intent
+ * classification this fix is deliberately not adding. Accepted rather
+ * than built, recorded here and in the spec rather than left silent.
  *
  * FIX 2 — RE-MENTION REOPENS, which the original never implemented at
  * all: once ANY dismissal signal was ever found, this returned true
@@ -166,9 +187,21 @@ export function wasTopicDismissed(eventLog: EventLog, userId: string, anchorName
     const event = events[i]!;
     const text = textOf(event);
     if (!TOPIC_DISMISSAL_SIGNALS.some((signal) => text.includes(signal))) continue;
-    const namedHere = text.includes(lowerName);
-    const namedJustBefore = i > 0 && textOf(events[i - 1]!).includes(lowerName);
-    if (namedHere || namedJustBefore) lastDismissalId = event.id;
+    // DISMISSAL_NAME_LOOKBACK_EVENTS turns back (either role), not just the
+    // single immediately-preceding one — a follow-up dismissal doesn't
+    // always land in the very next turn ("stop bringing her up" two turns
+    // after Enso last named her is a normal shape, not an edge case).
+    // Still a bounded, structural window (turn distance), never NLU: a
+    // dismissal with no established entity's name anywhere in this window
+    // is a genuine, accepted gap — see this function's own header comment.
+    let namedNearby = false;
+    for (let back = 0; back < DISMISSAL_NAME_LOOKBACK_EVENTS && i - 1 - back >= 0; back++) {
+      if (textOf(events[i - 1 - back]!).includes(lowerName)) {
+        namedNearby = true;
+        break;
+      }
+    }
+    if (text.includes(lowerName) || namedNearby) lastDismissalId = event.id;
   }
   if (lastDismissalId === null) return false;
 
