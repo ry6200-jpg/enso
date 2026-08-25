@@ -1,4 +1,5 @@
 import type { RouterRequest } from "./routerTypes.js";
+import { ATTRIBUTE_TYPES } from "../../projections/attributeVocabulary.js";
 
 /** Structured-output JSON Schema for the router call — same strict-mode shape as taxonomySchema.ts's TAXONOMY_JSON_SCHEMA (every property required, additionalProperties false at every level). */
 export const ROUTER_JSON_SCHEMA = {
@@ -21,6 +22,12 @@ export const ROUTER_JSON_SCHEMA = {
         fire: { type: "boolean" },
         kind: { type: ["string", "null"], enum: ["selfFact", "thirdParty", "connectDot", "elicitation", null] },
         entityId: { type: ["string", "null"] },
+        // Deliberately NOT derived from ATTRIBUTE_TYPES — a curated subset,
+        // same reason as circleBack.ts's SELF_FACT_ATTRIBUTES (see
+        // attributeVocabulary.ts's header comment): proactive curiosity-
+        // asking about gender/sexual_orientation/life_stage is a real
+        // product/wording decision this schema-and-plumbing batch does not
+        // make.
         attribute: { type: ["string", "null"], enum: ["location", "occupation", null] },
         probeType: { type: ["string", "null"] }
       },
@@ -32,7 +39,7 @@ export const ROUTER_JSON_SCHEMA = {
       properties: {
         isAffirmation: { type: "boolean" },
         entityName: { type: ["string", "null"] },
-        attribute: { type: ["string", "null"], enum: ["birthdate", "location", "occupation", null] },
+        attribute: { type: ["string", "null"], enum: [...ATTRIBUTE_TYPES, null] },
         value: { type: ["string", "null"] }
       },
       required: ["isAffirmation", "entityName", "attribute", "value"],

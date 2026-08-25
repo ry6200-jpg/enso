@@ -1,5 +1,6 @@
 import { newId } from "../ids.js";
 import type { EntityAttributeRow, ProjectionsDb } from "../projections/db.js";
+import type { AttributeType } from "../projections/attributeVocabulary.js";
 import { MONTH_NAMES, parseIsoDate } from "../zodiac/zodiac.js";
 
 /**
@@ -89,13 +90,17 @@ export function assertAttribute(
  * "1970-04-24" with no signal anything had gone wrong. location and
  * occupation genuinely do change over time and keep "latest wins."
  *
- * A plain data map, not a schema change: entity_attributes' CHECK
- * constraint (db.ts) still lists exactly these three types, so adding a
- * fourth attribute later means adding one line here too.
+ * A plain data map, kept in sync with the vocabulary by the compiler, not
+ * by hand: it's typed as Record<AttributeType, ...>, so TypeScript itself
+ * fails to build if attributeVocabulary.ts's ATTRIBUTE_TYPES gains a value
+ * with no corresponding mutability decision made here — one of the two
+ * places (this map, and ATTRIBUTE_TYPES itself) that genuinely must be
+ * touched to add an attribute; see attributeVocabulary.ts's own header
+ * comment for why mutability is deliberately not folded into that array.
  */
 export type AttributeMutability = "immutable" | "mutable";
 
-export const ATTRIBUTE_MUTABILITY: Record<EntityAttributeRow["attribute"], AttributeMutability> = {
+export const ATTRIBUTE_MUTABILITY: Record<AttributeType, AttributeMutability> = {
   birthdate: "immutable",
   location: "mutable",
   occupation: "mutable"

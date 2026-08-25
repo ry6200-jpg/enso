@@ -1,6 +1,7 @@
-import type { EntityAttributeRow, ProjectionsDb } from "../projections/db.js";
+import type { ProjectionsDb } from "../projections/db.js";
 import { primaryEntityId } from "../projections/rebuild.js";
 import { resolveEntityAttribute } from "../perception/attributes.js";
+import { ATTRIBUTE_TYPES, type AttributeType } from "../projections/attributeVocabulary.js";
 
 /**
  * Admin-only entity view (part 2). Reads only the SIGNED-IN admin's own
@@ -22,8 +23,6 @@ import { resolveEntityAttribute } from "../perception/attributes.js";
  * handling as everywhere else in this project.
  */
 
-const ATTRIBUTE_TYPES: readonly EntityAttributeRow["attribute"][] = ["birthdate", "location", "occupation"];
-
 /** Same threshold Part 1's network markers use — a single named constant, not two independently-tuned ones, since both answer the same underlying question ("has this tie gone quiet"). */
 export const DORMANCY_THRESHOLD_DAYS = 21;
 
@@ -40,7 +39,7 @@ export interface EntityDirectoryEntry {
   canonicalName: string;
   /** Every observed alias EXCEPT the canonical name itself, deduped. */
   nameVariants: string[];
-  attributes: { birthdate: string | null; location: string | null; occupation: string | null };
+  attributes: Record<AttributeType, string | null>;
   /** The full constellation this entity participates in — including bonds where neither side is the primary user. */
   bonds: EntityBondView[];
   /** This entity's own relationship class to the primary user specifically, if any — the first one found, since accretion means there can be more than one (see social_bonds' own "bonds accrete" note). */
@@ -52,12 +51,7 @@ export interface EntityDirectoryEntry {
   dormant: boolean;
 }
 
-export interface FillRates {
-  birthdate: number;
-  location: number;
-  occupation: number;
-  totalEntities: number;
-}
+export type FillRates = Record<AttributeType, number> & { totalEntities: number };
 
 function sourceIdsOf(entity: { source_event_ids: string }): string[] {
   return (JSON.parse(entity.source_event_ids) as string[]).slice().sort();
@@ -81,11 +75,9 @@ export function computeEntityDirectory(projections: ProjectionsDb, userId: strin
     const aliasRows = projections.listEntityAliases(userId, entity.id);
     const nameVariants = [...new Set(aliasRows.map((a) => a.alias))].filter((alias) => alias !== entity.name);
 
-    const attributes = {
-      birthdate: resolveEntityAttribute(projections, userId, entity.id, "birthdate")?.value ?? null,
-      location: resolveEntityAttribute(projections, userId, entity.id, "location")?.value ?? null,
-      occupation: resolveEntityAttribute(projections, userId, entity.id, "occupation")?.value ?? null
-    };
+    const attributes = Object.fromEntries(
+      ATTRIBUTE_TYPES.map((attribute) => [attribute, resolveEntityAttribute(projections, userId, entity.id, attribute)?.value ?? null])
+    ) as Record<AttributeType, string | null>;
 
     const entityBonds: EntityBondView[] = [];
     let relationshipClassToPrimary: string | null = null;
@@ -141,16 +133,12 @@ export function computeEntityDirectory(projections: ProjectionsDb, userId: strin
 export function computeFillRates(projections: ProjectionsDb, userId: string): FillRates {
   const entities = projections.listEntities(userId);
   const total = entities.length;
-  const counts = { birthdate: 0, location: 0, occupation: 0 };
+  const counts = Object.fromEntries(ATTRIBUTE_TYPES.map((attribute) => [attribute, 0])) as Record<AttributeType, number>;
   for (const entity of entities) {
     for (const attribute of ATTRIBUTE_TYPES) {
       if (resolveEntityAttribute(projections, userId, entity.id, attribute) !== null) counts[attribute]++;
     }
   }
-  return {
-    birthdate: total > 0 ? counts.birthdate / total : 0,
-    location: total > 0 ? counts.location / total : 0,
-    occupation: total > 0 ? counts.occupation / total : 0,
-    totalEntities: total
-  };
+  const rates = Object.fromEntries(ATTRIBUTE_TYPES.map((attribute) => [attribute, total > 0 ? counts[attribute] / total : 0])) as Record<AttributeType, number>;
+  return { ...rates, totalEntities: total };
 }

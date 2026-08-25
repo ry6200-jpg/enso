@@ -11,6 +11,7 @@
 /** Ambient context batch, item 1: canonical definition lives in ambientCandidates.ts (which builds this pool from ProjectionsDb) — imported and re-exported here rather than duplicated, so there is exactly one definition. */
 import type { AmbientLocationCandidate } from "../ambientCandidates.js";
 export type { AmbientLocationCandidate };
+import type { AttributeType } from "../../projections/attributeVocabulary.js";
 
 export interface CircleBackCandidate {
   /** The entity's CURRENT projection id — valid for this turn's router selection only. Never persisted for cross-turn matching (see stableKey): entity ids are reassigned on every rebuild (EN-054), a real bug found live in Phase 7 when attempt-tracking briefly keyed off this instead. */
@@ -67,12 +68,17 @@ export type ElicitationCandidate =
  * Layer 3) is enforced the identical way: only the winning kind's
  * candidates ever populate this list for a given turn.
  */
+// attribute here is deliberately the curated "location" | "occupation"
+// subset, not AttributeType — see attributeVocabulary.ts's header comment
+// and circleBack.ts's SELF_FACT_ATTRIBUTES, which this must stay in sync
+// with by hand: proactive curiosity-asking is a product/wording decision,
+// not vocabulary fan-out.
 export type CuriosityAskCandidate = { kind: "thirdParty"; candidate: CircleBackCandidate } | { kind: "selfFact"; attribute: "location" | "occupation" } | ElicitationCandidate;
 
-/** A specific attribute claim recently surfaced (in the retrieved-memory block or the prior reply) that this turn might be explicitly affirming or correcting (EN-066). */
+/** A specific attribute claim recently surfaced (in the retrieved-memory block or the prior reply) that this turn might be explicitly affirming or correcting (EN-066). Full vocabulary, not a curated subset: any attribute already on record can be affirmed or corrected reactively, regardless of whether Enso would ever proactively ASK about it (contrast CuriosityAskCandidate's "selfFact" branch below). */
 export interface RecentAttributeClaim {
   entityName: string;
-  attribute: "birthdate" | "location" | "occupation";
+  attribute: AttributeType;
   value: string;
   /** The extraction_completed event ULID that asserted this claim — resolved by the caller (never the model) into fact_confirmed's targetEventId (EN-055). */
   extractionEventId: string;
@@ -135,7 +141,7 @@ export interface RouterDecision {
     kind: "selfFact" | "thirdParty" | "connectDot" | "elicitation" | null;
     /** Set only when kind is "thirdParty" — must match a curiosityCandidates entry's entityId. Also set for a Layer 3 "elicitation" candidate (the anchor entity) — same field, same validation shape, never ambiguous since kind disambiguates which meaning applies. */
     entityId: string | null;
-    /** Set only when kind is "selfFact" — must match a curiosityCandidates entry's attribute. */
+    /** Set only when kind is "selfFact" — must match a curiosityCandidates entry's attribute. Same deliberate curated subset as CuriosityAskCandidate above, not AttributeType. */
     attribute: "location" | "occupation" | null;
     /** Set only when kind is "elicitation" — must match a curiosityCandidates entry's probeType (EN-097). */
     probeType: string | null;
@@ -143,7 +149,7 @@ export interface RouterDecision {
   attestation: {
     isAffirmation: boolean;
     entityName: string | null;
-    attribute: "birthdate" | "location" | "occupation" | null;
+    attribute: AttributeType | null;
     value: string | null;
   };
   /**

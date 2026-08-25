@@ -1,3 +1,5 @@
+import { ATTRIBUTE_TYPES } from "../projections/attributeVocabulary.js";
+
 /**
  * Shared JSON Schema for the extraction taxonomy (ExtractionTaxonomy in
  * types.ts), used to constrain both providers' structured-output modes.
@@ -81,7 +83,7 @@ export const TAXONOMY_JSON_SCHEMA = {
         type: "object",
         properties: {
           entityName: { type: "string" },
-          attribute: { type: "string", enum: ["birthdate", "location", "occupation"] },
+          attribute: { type: "string", enum: [...ATTRIBUTE_TYPES] },
           value: { type: "string" },
           eventDate: { type: ["string", "null"] }
         },

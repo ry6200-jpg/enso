@@ -1,6 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import { ATTRIBUTE_TYPES, type AttributeType } from "../../src/projections/attributeVocabulary.js";
+
+/** "sexual_orientation" -> "Sexual orientation" — generic so a vocabulary addition needs no matching UI-label edit here. */
+function attributeLabel(attribute: AttributeType): string {
+  const spaced = attribute.replace(/_/g, " ");
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
 
 /**
  * Admin-only entity view (part 2). This component never fetches on its
@@ -24,7 +31,7 @@ export interface DirectoryEntry {
   entityId: string;
   canonicalName: string;
   nameVariants: string[];
-  attributes: { birthdate: string | null; location: string | null; occupation: string | null };
+  attributes: Record<AttributeType, string | null>;
   bonds: DirectoryBondView[];
   relationshipClassToPrimary: string | null;
   mentionCount: number;
@@ -34,9 +41,11 @@ export interface DirectoryEntry {
   dormant: boolean;
 }
 
+export type DirectoryFillRates = Record<AttributeType, number> & { totalEntities: number };
+
 export interface DirectoryResponse {
   entities: DirectoryEntry[];
-  fillRates: { birthdate: number; location: number; occupation: number; totalEntities: number };
+  fillRates: DirectoryFillRates;
 }
 
 function formatDate(iso: string | null): string {
@@ -59,9 +68,7 @@ function EntityRow({ entry }: { entry: DirectoryEntry }) {
       {open && (
         <div className="px-3 pb-3 text-sm text-stone-600 space-y-2">
           {entry.nameVariants.length > 0 && <div>Also known as: {entry.nameVariants.join(", ")}</div>}
-          <div>
-            Birthdate: {entry.attributes.birthdate ?? "—"} · Location: {entry.attributes.location ?? "—"} · Occupation: {entry.attributes.occupation ?? "—"}
-          </div>
+          <div>{ATTRIBUTE_TYPES.map((attribute) => `${attributeLabel(attribute)}: ${entry.attributes[attribute] ?? "—"}`).join(" · ")}</div>
           <div>
             First mentioned: {formatDate(entry.firstMentionAt)} · Last mentioned: {formatDate(entry.lastMentionAt)}
             {entry.daysSinceLastMention !== null && ` (${Math.floor(entry.daysSinceLastMention)} days ago)`}
@@ -97,7 +104,7 @@ export default function DirectoryPanel({ data, onClose }: { data: DirectoryRespo
 
         <div className="p-5 space-y-4">
           <div className="text-xs text-stone-400">
-            {data.fillRates.totalEntities} entities. Fill rate — birthdate: {(data.fillRates.birthdate * 100).toFixed(0)}%, location: {(data.fillRates.location * 100).toFixed(0)}%, occupation: {(data.fillRates.occupation * 100).toFixed(0)}%
+            {data.fillRates.totalEntities} entities. Fill rate — {ATTRIBUTE_TYPES.map((attribute) => `${attributeLabel(attribute).toLowerCase()}: ${(data.fillRates[attribute] * 100).toFixed(0)}%`).join(", ")}
           </div>
 
           {data.entities.length === 0 && <p className="text-sm text-stone-500">No entities on record yet.</p>}

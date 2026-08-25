@@ -1,3 +1,5 @@
+import type { AttributeType } from "../projections/attributeVocabulary.js";
+
 /**
  * Provider-agnostic extraction interface (EN-080). No provider-specific
  * types leak out of the adapter layer — the router and everything above it
@@ -70,7 +72,7 @@ export interface SocialBondMention {
  */
 export interface AttributeMention {
   entityName: string;
-  attribute: "birthdate" | "location" | "occupation";
+  attribute: AttributeType;
   value: string;
   eventDate: string | null;
 }

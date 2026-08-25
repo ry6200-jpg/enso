@@ -1,5 +1,6 @@
 import type { EventLog } from "../events/eventLog.js";
 import type { ProjectionsDb } from "../projections/db.js";
+import type { AttributeType } from "../projections/attributeVocabulary.js";
 import type { RecentAttributeClaim } from "./router/routerTypes.js";
 
 /**
@@ -42,7 +43,7 @@ export function recentAttributeClaims(eventLog: EventLog, projections: Projectio
 export interface FactConfirmedPayload {
   targetEventId: string;
   entityName: string;
-  attribute: "birthdate" | "location" | "occupation";
+  attribute: AttributeType;
   value: string;
 }
 

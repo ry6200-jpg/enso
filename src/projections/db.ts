@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
+import { ATTRIBUTE_TYPES, type AttributeType } from "./attributeVocabulary.js";
 
 export interface EntityRow {
   id: string;
@@ -69,7 +70,7 @@ export interface EntityAttributeRow {
   id: string;
   user_id: string;
   entity_id: string;
-  attribute: "birthdate" | "location" | "occupation";
+  attribute: AttributeType;
   value: string;
   source_event_ids: string; // JSON array of event ULIDs
   created_at: string;
@@ -195,7 +196,7 @@ export class ProjectionsDb {
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
         entity_id TEXT NOT NULL,
-        attribute TEXT NOT NULL CHECK (attribute IN ('birthdate', 'location', 'occupation')),
+        attribute TEXT NOT NULL CHECK (attribute IN (${ATTRIBUTE_TYPES.map((a) => `'${a}'`).join(", ")})),
         value TEXT NOT NULL,
         source_event_ids TEXT NOT NULL,
         created_at TEXT NOT NULL

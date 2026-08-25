@@ -13,6 +13,7 @@ import {
 import { assertParentOf, assertSiblingOf, assertSpouseOf, closeSpouseOf, deriveSiblingsFromParents } from "../relationships/structuralAtoms.js";
 import { closeBond, openBond } from "../relationships/socialBonds.js";
 import type { ProjectionsDb } from "./db.js";
+import type { AttributeType } from "./attributeVocabulary.js";
 
 interface ExtractionCompletedPayload {
   sourceEventId: string;
@@ -28,7 +29,7 @@ interface ExtractionCompletedPayload {
     action: "open" | "close";
     explicitlyNewPerson?: boolean;
   }[];
-  attributes?: { entityName: string; attribute: "birthdate" | "location" | "occupation"; value: string; eventDate: string | null }[];
+  attributes?: { entityName: string; attribute: AttributeType; value: string; eventDate: string | null }[];
 }
 interface ExtractionFailedPayload {
   sourceEventId: string;
@@ -40,7 +41,7 @@ interface FactCorrectedPayload {
   /** Entity-NAME correction (original use). Exactly one of correctedName / (attribute + correctedValue) is ever present on a real fact_corrected event — never both, see rebuild's processing below. */
   correctedName?: string;
   /** Attribute-VALUE correction (item 4 #2, new) — see src/conversation/correction.ts's resolveCorrection for how this gets produced. */
-  attribute?: "birthdate" | "location" | "occupation";
+  attribute?: AttributeType;
   correctedValue?: string;
 }
 interface FactConfirmedPayload {
@@ -55,7 +56,7 @@ interface FactConfirmedPayload {
    * for round-trip completeness and for the eventual attribute-level
    * deletion-provenance work (EN-065/066), not built this phase.
    */
-  attribute?: "birthdate" | "location" | "occupation";
+  attribute?: AttributeType;
   value?: string;
 }
 

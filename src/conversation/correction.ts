@@ -1,3 +1,4 @@
+import type { AttributeType } from "../projections/attributeVocabulary.js";
 import type { RecentAttributeClaim } from "./router/routerTypes.js";
 
 /**
@@ -22,7 +23,7 @@ import type { RecentAttributeClaim } from "./router/routerTypes.js";
 export interface FactCorrectedAttributePayload {
   targetEventId: string;
   entityName: string;
-  attribute: "birthdate" | "location" | "occupation";
+  attribute: AttributeType;
   correctedValue: string;
 }
 

@@ -2,6 +2,7 @@ import type { EventLog } from "../events/eventLog.js";
 import type { ProjectionsDb } from "./db.js";
 import { primaryEntityId } from "./rebuild.js";
 import { resolveEntityAttribute } from "../perception/attributes.js";
+import type { AttributeType } from "./attributeVocabulary.js";
 
 /**
  * Phase 7 Part 2 — the People view's data: what Enso holds about each
@@ -23,7 +24,7 @@ export interface PersonView {
   entityId: string;
   name: string;
   confirmed: boolean;
-  attributes: { attribute: "birthdate" | "location" | "occupation"; facts: ProvenancedFact[] }[];
+  attributes: { attribute: AttributeType; facts: ProvenancedFact[] }[];
   relationships: { type: string; direction: "from" | "to"; basis: string; toldOn: string | null; sourceEventIds: string[] }[];
 }
 
@@ -54,19 +55,19 @@ export function getPrimaryUserBirthdate(projections: ProjectionsDb, userId: stri
 
 /**
  * EN-030 item A generalization: the same "does Enso already have this
- * self-fact on record" lookup as getPrimaryUserBirthdate above, but for any
- * of the three attribute types entity_attributes actually supports
- * (db.ts's CHECK constraint: 'birthdate' | 'location' | 'occupation' — the
- * only three that exist anywhere in this data model). Used by
- * circleBack.ts's self-fact candidate pool for the two of these not
- * already covered by selfBirthdateGate.ts's own one-shot mechanism.
+ * self-fact on record" lookup as getPrimaryUserBirthdate above, but generic
+ * over the full attribute vocabulary (attributeVocabulary.ts). Used by
+ * circleBack.ts's self-fact candidate pool for "location"/"occupation" —
+ * the two not already covered by selfBirthdateGate.ts's own one-shot
+ * mechanism — but this function itself has no opinion on which attributes
+ * a caller asks about; that curation lives in the caller.
  */
-export function getPrimaryUserAttribute(projections: ProjectionsDb, userId: string, attribute: "birthdate" | "location" | "occupation"): string | null {
+export function getPrimaryUserAttribute(projections: ProjectionsDb, userId: string, attribute: AttributeType): string | null {
   return resolveEntityAttribute(projections, userId, primaryEntityId(userId), attribute)?.value ?? null;
 }
 
 export interface SelfProfileAttribute {
-  attribute: "birthdate" | "location" | "occupation";
+  attribute: AttributeType;
   value: string;
   /** Distinct later values that disagree with `value` (R37) — empty for a mutable attribute or when no conflict exists. Never silently dropped: Part B's whole point is surfacing this instead of hiding it. */
   conflictingValues: string[];
@@ -83,6 +84,13 @@ export interface SelfProfile {
   bonds: SelfProfileBond[];
 }
 
+// Deliberately NOT ATTRIBUTE_TYPES — a curated subset, same reasoning as
+// circleBack.ts's SELF_FACT_ATTRIBUTES (see attributeVocabulary.ts's
+// header comment). This drives what gets injected into the LIVE persona
+// system prompt every turn (buildSelfProfileBlock); silently including
+// gender/sexual_orientation/life_stage here the moment they exist in
+// storage would be a real behavior change with no wording/framing
+// decision ever made about it — out of scope for schema-and-plumbing.
 const SELF_PROFILE_ATTRIBUTE_ORDER = ["birthdate", "location", "occupation"] as const;
 
 function structuralAtomRelationshipLabel(type: "parent_of" | "spouse_of" | "sibling_of", ownerIsFromSide: boolean): string {
@@ -253,7 +261,7 @@ export function getPeopleView(eventLog: EventLog, projections: ProjectionsDb, us
       entityId: entity.id,
       name: entity.name,
       confirmed: entity.confirmed === 1,
-      attributes: [...byAttribute.entries()].map(([attribute, facts]) => ({ attribute: attribute as "birthdate" | "location" | "occupation", facts })),
+      attributes: [...byAttribute.entries()].map(([attribute, facts]) => ({ attribute: attribute as AttributeType, facts })),
       relationships
     };
   });
