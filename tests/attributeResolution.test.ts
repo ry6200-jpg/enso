@@ -65,6 +65,15 @@ describe("resolveAttribute — pure function (R36/R37: mutability, not format, i
     const history = [row("a", "occupation", "anything at all"), row("b", "occupation", "still anything")];
     expect(resolveAttribute(history)!.value).toBe("still anything");
   });
+
+  it("mutable (gender/sexual_orientation/life_stage, EN-114): latest wins, never flagged as a conflict — same model as occupation, deliberately NOT birthdate's immutable model", () => {
+    for (const attribute of ["gender", "sexual_orientation", "life_stage"] as const) {
+      const history = [row("a", attribute, "first stated value"), row("b", attribute, "a later clarification")];
+      const resolved = resolveAttribute(history)!;
+      expect(resolved.value).toBe("a later clarification");
+      expect(resolved.conflicting).toEqual([]);
+    }
+  });
 });
 
 describe("resolveEntityAttribute / getCurrentAttribute — same resolver, DB-backed", () => {

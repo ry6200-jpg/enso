@@ -38,7 +38,7 @@
  * correction of anything already on record, admin/UI enumeration) import
  * from here.
  */
-export const ATTRIBUTE_TYPES = ["birthdate", "location", "occupation"] as const;
+export const ATTRIBUTE_TYPES = ["birthdate", "location", "occupation", "gender", "sexual_orientation", "life_stage"] as const;
 
 export type AttributeType = (typeof ATTRIBUTE_TYPES)[number];
 

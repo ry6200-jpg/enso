@@ -220,6 +220,54 @@ export class ProjectionsDb {
       CREATE INDEX IF NOT EXISTS idx_perception_user_id ON perception_logs(user_id);
       CREATE INDEX IF NOT EXISTS idx_perception_fact_ref ON perception_logs(fact_ref);
     `);
+    this.migrateEntityAttributesCheckConstraint();
+  }
+
+  /**
+   * EN-114: a pre-existing on-disk entity_attributes table (real production
+   * data included — this file round-trips via GCS checkout/checkin, it is
+   * never rebuilt from scratch) has its OLD CHECK constraint baked into its
+   * stored schema. `CREATE TABLE IF NOT EXISTS` above is a no-op against an
+   * already-existing table — SQLite has no `ALTER TABLE` for changing a
+   * CHECK constraint, unlike a simple new column (see the ADD COLUMN
+   * migrations below, EN-115/116). Detected by checking the table's own
+   * stored CREATE-TABLE SQL (sqlite_master) for the last entry in the
+   * current vocabulary; if absent, the table predates this migration and is
+   * rebuilt in place — SQLite's standard pattern for a CHECK-constraint
+   * change: rename, recreate with the CURRENT schema, copy every row across
+   * unchanged, drop the renamed original — inside one transaction so a
+   * crash mid-migration can't leave both/neither table present. Idempotent:
+   * a no-op on every open once the table is current (true for every fresh
+   * test/dev database from the moment it's created, since CREATE TABLE
+   * above already has the current CHECK).
+   */
+  private migrateEntityAttributesCheckConstraint(): void {
+    const currentMarker = ATTRIBUTE_TYPES[ATTRIBUTE_TYPES.length - 1];
+    const existing = this.db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'entity_attributes'`).get() as { sql: string } | undefined;
+    if (!existing || existing.sql.includes(`'${currentMarker}'`)) return;
+
+    const rebuild = this.db.transaction(() => {
+      this.db.exec(`ALTER TABLE entity_attributes RENAME TO entity_attributes_pre_en114`);
+      this.db.exec(`
+        CREATE TABLE entity_attributes (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          attribute TEXT NOT NULL CHECK (attribute IN (${ATTRIBUTE_TYPES.map((a) => `'${a}'`).join(", ")})),
+          value TEXT NOT NULL,
+          source_event_ids TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+      `);
+      this.db.exec(`
+        INSERT INTO entity_attributes (id, user_id, entity_id, attribute, value, source_event_ids, created_at)
+        SELECT id, user_id, entity_id, attribute, value, source_event_ids, created_at FROM entity_attributes_pre_en114;
+      `);
+      this.db.exec(`DROP TABLE entity_attributes_pre_en114`);
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_attributes_user_id ON entity_attributes(user_id)`);
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_attributes_entity_id ON entity_attributes(entity_id)`);
+    });
+    rebuild();
   }
 
   /**

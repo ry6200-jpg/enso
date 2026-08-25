@@ -5,6 +5,7 @@ import { newId } from "../src/ids.js";
 import { freshTestDbPath } from "../src/test/dbPath.js";
 import { PRIMARY_USER_ID } from "../src/test/seed.js";
 import { computeEntityDirectory, computeFillRates, DORMANCY_THRESHOLD_DAYS } from "../src/admin/entityDirectory.js";
+import type { AttributeType } from "../src/projections/attributeVocabulary.js";
 
 let projections: ProjectionsDb;
 const primary = primaryEntityId(PRIMARY_USER_ID);
@@ -24,7 +25,7 @@ function addAlias(entityId: string, alias: string) {
   projections.insertEntityAlias({ id: newId(), user_id: PRIMARY_USER_ID, entity_id: entityId, alias, source_event_ids: "[]", created_at: new Date().toISOString() });
 }
 
-function addAttribute(entityId: string, attribute: "birthdate" | "location" | "occupation", value: string) {
+function addAttribute(entityId: string, attribute: AttributeType, value: string) {
   projections.insertEntityAttribute({ id: newId(), user_id: PRIMARY_USER_ID, entity_id: entityId, attribute, value, source_event_ids: "[]", created_at: new Date().toISOString() });
 }
 
@@ -63,7 +64,7 @@ describe("computeEntityDirectory (admin-only entity view, part 2)", () => {
     const id = insertEntity("Marcus", []);
     addAttribute(id, "location", "Seattle");
     const [entry] = computeEntityDirectory(projections, PRIMARY_USER_ID, new Map(), NOW);
-    expect(entry!.attributes).toEqual({ birthdate: null, location: "Seattle", occupation: null });
+    expect(entry!.attributes).toEqual({ birthdate: null, location: "Seattle", occupation: null, gender: null, sexual_orientation: null, life_stage: null });
   });
 
   it("bond constellation includes bonds to the primary user, labeled '(you)'", () => {
@@ -126,7 +127,7 @@ describe("computeEntityDirectory (admin-only entity view, part 2)", () => {
 
 describe("computeFillRates (admin-only entity view, part 2)", () => {
   it("zero entities produces zero rates, not a division-by-zero fabrication", () => {
-    expect(computeFillRates(projections, PRIMARY_USER_ID)).toEqual({ birthdate: 0, location: 0, occupation: 0, totalEntities: 0 });
+    expect(computeFillRates(projections, PRIMARY_USER_ID)).toEqual({ birthdate: 0, location: 0, occupation: 0, gender: 0, sexual_orientation: 0, life_stage: 0, totalEntities: 0 });
   });
 
   it("computes a real fill rate across multiple entities", () => {

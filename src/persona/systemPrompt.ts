@@ -54,10 +54,18 @@ export function buildPersonaBlock(voiceMode: VoiceMode = "natural"): string {
   ].join("\n\n");
 }
 
+// Label-only map — has no say in which attributes actually appear in the
+// live self-profile block (peopleView.ts's SELF_PROFILE_ATTRIBUTE_ORDER
+// alone gates that, deliberately unchanged, EN-113/114); widened to the
+// full vocabulary here only so a future, deliberate widening of that order
+// constant needs no matching label edit.
 const SELF_PROFILE_ATTRIBUTE_LABEL: Record<SelfProfile["attributes"][number]["attribute"], string> = {
   birthdate: "Birthdate",
   location: "Location",
-  occupation: "Occupation"
+  occupation: "Occupation",
+  gender: "Gender",
+  sexual_orientation: "Sexual orientation",
+  life_stage: "Life stage"
 };
 
 export interface SelfProfileBlockResult {

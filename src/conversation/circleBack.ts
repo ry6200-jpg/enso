@@ -280,15 +280,19 @@ export function verifyCircleBackExecuted(replyText: string, candidateName: strin
 
 /**
  * Item A: the self-fact half of the generalized candidate pool. Limited to
- * "location" and "occupation" — the only two entity_attributes types
- * (db.ts's CHECK constraint) not already covered by
- * selfBirthdateGate.ts's own separate, unconditional, higher-priority
- * mechanism, which stays completely untouched by this file. "Age/life-
- * stage," "relationship status," and "what occupies him outside work" as
- * distinct concepts were part of the original request but aren't
- * representable anywhere in the current schema (no column, no extraction
- * taxonomy entry) — building those would be a taxonomy migration, a
- * separate, larger decision the user deferred when scoping this change.
+ * "location" and "occupation" — the two entity_attributes types not
+ * already covered by selfBirthdateGate.ts's own separate, unconditional,
+ * higher-priority mechanism, which stays completely untouched by this
+ * file. gender/sexual_orientation/life_stage (EN-114) and relationship
+ * status (modelled via social_bonds, not an attribute at all — see the
+ * schema-decision investigation this batch's build prompt references) now
+ * exist or are representable in the data model, but are deliberately NOT
+ * wired into proactive curiosity-asking here: whether/how Enso should ever
+ * proactively ask about them is a real product/wording decision, not made
+ * by this file just because storage now supports it. "What occupies him
+ * outside work" remains genuinely unrepresentable as a single attribute
+ * value (cardinality mismatch — see attributeVocabulary.ts) and is
+ * EN-037/EN-097's "recreation" life-domain territory instead.
  *
  * One-shot per attribute (MAX_SELF_FACT_ATTEMPTS = 1), mirroring
  * selfBirthdateGate's own reasoning: each is a standing fact this account

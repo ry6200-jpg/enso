@@ -103,7 +103,15 @@ export type AttributeMutability = "immutable" | "mutable";
 export const ATTRIBUTE_MUTABILITY: Record<AttributeType, AttributeMutability> = {
   birthdate: "immutable",
   location: "mutable",
-  occupation: "mutable"
+  occupation: "mutable",
+  // gender/sexual_orientation/life_stage (EN-114): deliberately mutable,
+  // NOT birthdate's immutable model — a later clarification is an update,
+  // not a conflict to surface. The immutable model has already failed
+  // once in production (a corrupted birthdate row it structurally cannot
+  // repair); these three don't get the same trap.
+  gender: "mutable",
+  sexual_orientation: "mutable",
+  life_stage: "mutable"
 };
 
 /**
