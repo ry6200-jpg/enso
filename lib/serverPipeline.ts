@@ -211,9 +211,33 @@ function getStorageBackend(): UserStorageBackend {
 // One turn is at most a couple of LLM calls (chat reply, then extraction),
 // each retried at most once via runWithFallback — generous headroom over
 // even a slow real case, while still bounding how long a crashed
-// instance's abandoned lock blocks the next request for that user. Revisit
-// against real production latency once there's data to revisit it with.
+// instance's abandoned lock blocks the next request for that user.
+//
+// Storage durability batch, PART 2: reaffirmed rather than changed after
+// the deploy-race stale-lock investigation — the tradeoff is real either
+// way. Shorter risks breaking a lock still held by a genuinely live but
+// slow container (an unusually slow LLM response, a large checkout),
+// which without PART 2's fencing check (userSession.ts, isLockCurrent)
+// could let two writers be active at once; longer leaves a real crash's
+// user locked out for longer. PART 3's SIGTERM handling now gives a
+// normal rollout up to its own grace window to finish checkin cleanly
+// instead of crashing mid-checkout, so an expired lock after this batch
+// should represent an actual dead holder far more often than before —
+// that supports keeping this bound tight rather than loosening it
+// defensively. Revisit against real production latency once there's
+// data to revisit it with.
 const USER_SESSION_LOCK_TTL_MS = 60_000;
+
+// Storage durability batch, PART 2: a free-text diagnostic identity
+// recorded on the lock object so a stuck lock's holder is nameable in
+// production, not a mystery — plays no role in the locking decision
+// itself (still expiresAt + a real compare-and-swap). K_REVISION is
+// Cloud Run's own env var (e.g. "enso-00019-mdm"); the instance half has
+// no equivalent standard env var short of an async metadata-server call
+// this doesn't need, so a UUID generated once per process at module load
+// stands in for "this specific running container" for its whole
+// lifetime, at zero network cost.
+const LOCK_HOLDER_ID = `${process.env.K_REVISION ?? "local"}/${crypto.randomUUID()}`;
 
 interface PipelineGlobals {
   embedderPromise?: Promise<Embedder>;
@@ -315,7 +339,7 @@ function invalidateIfStale(): void {
 export function runUserSession<T>(uid: string, work: (stores: UserSessionStores) => Promise<T>): Promise<T> {
   ensureDataPathsWritable();
   if (!isCloudMode()) ensureDevDataDir();
-  return withUserSession(getStorageBackend(), LOCAL_INSTANCE_DIR, uid, USER_SESSION_LOCK_TTL_MS, work);
+  return withUserSession(getStorageBackend(), LOCAL_INSTANCE_DIR, uid, USER_SESSION_LOCK_TTL_MS, work, LOCK_HOLDER_ID);
 }
 
 /**
@@ -332,7 +356,7 @@ export function runUserSession<T>(uid: string, work: (stores: UserSessionStores)
 export function runReadOnlyUserSession<T>(uid: string, work: (stores: UserSessionStores) => Promise<T>): Promise<T> {
   ensureDataPathsWritable();
   if (!isCloudMode()) ensureDevDataDir();
-  return withReadOnlyUserSession(getStorageBackend(), LOCAL_INSTANCE_DIR, uid, USER_SESSION_LOCK_TTL_MS, work);
+  return withReadOnlyUserSession(getStorageBackend(), LOCAL_INSTANCE_DIR, uid, USER_SESSION_LOCK_TTL_MS, work, LOCK_HOLDER_ID);
 }
 
 export function getEmbedder(): Promise<Embedder> {
@@ -424,7 +448,7 @@ export function getDailyContentCache(): DailyContentCache {
  */
 export async function resetUserData(uid: string): Promise<void> {
   const backend = getStorageBackend();
-  const handle = await backend.acquireLock(uid, USER_SESSION_LOCK_TTL_MS);
+  const handle = await backend.acquireLock(uid, USER_SESSION_LOCK_TTL_MS, LOCK_HOLDER_ID);
   try {
     const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "enso-wipe-"));
     try {

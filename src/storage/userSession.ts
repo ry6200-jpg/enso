@@ -5,12 +5,59 @@ import { RetrievalDb } from "../retrieval/retrievalDb.js";
 import { BlobStore } from "../blobs/blobStore.js";
 import { getUserDataPaths } from "./userDataPaths.js";
 import { LockAcquisitionError, type LockHandle, type UserStorageBackend } from "./userStorageBackend.js";
+import { checkpointDatabase } from "./checkpointDatabase.js";
 
 export interface UserSessionStores {
   eventLog: EventLog;
   projectionsDb: ProjectionsDb;
   retrievalDb: RetrievalDb;
   blobStore: BlobStore;
+}
+
+/**
+ * Storage durability batch, PART 3 (SIGTERM handling): a process-wide
+ * count of checkouts currently in flight (between acquireLock and
+ * releaseLock, in either withUserSession or withReadOnlyUserSession),
+ * plus a way to wait for it to reach zero. instrumentation.ts's SIGTERM
+ * handler uses this to give in-flight requests room to finish their OWN
+ * normal lifecycle — checkpoint, upload, release — instead of the
+ * process exiting out from under them mid-checkout, which is what turned
+ * a normal Cloud Run rollout into the stale-lock incident this batch
+ * fixes (Node's default SIGTERM disposition, with no handler registered,
+ * terminates promptly with no chance for an in-flight promise to finish).
+ * Deliberately does NOT reach into any in-flight `work` and force it to
+ * wrap up — an LLM call in progress has no safe early-exit point this
+ * layer could invent; the only thing this can honestly do is wait.
+ */
+let activeCheckouts = 0;
+const idleWaiters: Array<() => void> = [];
+
+function checkoutStarted(): void {
+  activeCheckouts++;
+}
+
+function checkoutFinished(): void {
+  activeCheckouts--;
+  if (activeCheckouts === 0) {
+    while (idleWaiters.length > 0) idleWaiters.shift()!();
+  }
+}
+
+/** For diagnostics/tests only — never gate application logic on this from outside a shutdown handler. */
+export function getActiveCheckoutCount(): number {
+  return activeCheckouts;
+}
+
+/** Resolves true once no checkout is in flight, or false if timeoutMs elapses first — never rejects. */
+export function waitForNoActiveCheckouts(timeoutMs: number): Promise<boolean> {
+  if (activeCheckouts === 0) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    idleWaiters.push(() => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
 }
 
 /**
@@ -27,37 +74,54 @@ export interface UserSessionStores {
  * with checkout/checkin ever safely refreshing local disk from remote or
  * ever having a safe moment to upload a consistent snapshot.
  *
- *   1. acquireLock(uid) — fails loudly (throws) if another checkout
- *      already holds it; never retried, never queued.
- *   2. download(uid, localDir) — makes localDir an exact mirror of remote.
+ *   1. acquireLock(uid, ttlMs, holder) — fails loudly (throws) if another
+ *      checkout already holds it; never retried, never queued.
+ *   2. download(uid, localDir) — makes localDir an exact mirror of remote
+ *      (may include leftover WAL sidecars from before the storage
+ *      durability batch — see download's own doc comment for why that's
+ *      safe: opening the db below replays them automatically).
  *   3. open fresh EventLog/ProjectionsDb/RetrievalDb/BlobStore against
  *      localDir.
  *   4. run the caller's `work` against those stores.
- *   5. close all three DB connections — closing the LAST connection to a
- *      WAL-mode SQLite db checkpoints it and removes the -wal/-shm
- *      sidecars (verified empirically against better-sqlite3), leaving a
- *      single self-contained main file safe to upload alone. This runs
- *      even if `work` threw: EN-010's "message saved before any AI call"
- *      means real durable writes can exist even when a turn ultimately
- *      fails, and those writes must still reach remote storage rather
- *      than being stranded on ephemeral local disk.
- *   6. upload(uid, localDir) — also runs even if `work` threw, for the
- *      same reason.
- *   7. releaseLock(uid) — always, in a finally, whether or not upload
+ *   5. checkpoint each SQLite db (PRAGMA wal_checkpoint(TRUNCATE),
+ *      checkpointDatabase.ts) BEFORE closing — an explicit, independently
+ *      verified checkpoint rather than relying on close()'s own implicit
+ *      one (a prior version of this comment claimed close() alone was
+ *      sufficient; that was never actually verified, and turned out to be
+ *      TRUE for a plain single-connection close, but does nothing to
+ *      survive the real failure mode: a hard process kill means close()
+ *      never runs at all — see checkpointDatabase.ts's own comment and
+ *      PART 3 below, which is what actually addresses that case). Runs
+ *      even if `work` threw, same reasoning as step 6 below.
+ *   6. close all three DB connections.
+ *   7. fencing check (isLockCurrent) — if this lock has been reclaimed by
+ *      someone else since step 1 (this holder outlived its own TTL), the
+ *      upload below is REFUSED rather than attempted: a resurfaced
+ *      "zombie" holder must never keep writing as if it still held the
+ *      lock. This turn's local writes are lost in that case, the same
+ *      honest tradeoff as any other checkin failure.
+ *   8. upload(uid, localDir) — runs even if `work` threw, for the same
+ *      EN-010 reason step 5 does; excludes WAL sidecars structurally and
+ *      uploads new files before deleting stale ones (see upload's own doc
+ *      comment) so an interruption here can't leave remote emptier than
+ *      it was.
+ *   9. releaseLock(uid) — always, in a finally, whether or not upload
  *      succeeded, so a live (non-crashed) instance's own failure doesn't
  *      needlessly block the next request for the lock's full TTL.
  *
- * If `work` throws AND upload also throws, both are real failures and
- * neither is swallowed — the combined error names both.
+ * If `work` throws AND checkpoint/fencing/upload also fails, both are
+ * real failures and neither is swallowed — the combined error names both.
  */
 export async function withUserSession<T>(
   backend: UserStorageBackend,
   localRoot: string,
   uid: string,
   lockTtlMs: number,
-  work: (stores: UserSessionStores) => Promise<T>
+  work: (stores: UserSessionStores) => Promise<T>,
+  holder = "unknown"
 ): Promise<T> {
-  const handle = await backend.acquireLock(uid, lockTtlMs);
+  const handle = await backend.acquireLock(uid, lockTtlMs, holder);
+  checkoutStarted();
   try {
     const paths = getUserDataPaths(localRoot, uid);
     await backend.download(uid, paths.dir);
@@ -74,28 +138,53 @@ export async function withUserSession<T>(
       result = await work({ eventLog, projectionsDb, retrievalDb, blobStore });
     } catch (err) {
       workError = err;
-    } finally {
-      eventLog.close();
-      projectionsDb.close();
-      retrievalDb.close();
     }
 
-    try {
-      await backend.upload(uid, paths.dir);
-    } catch (uploadErr) {
+    let checkinError: unknown;
+    for (const [db, dbPath, label] of [
+      [eventLog.db, paths.eventsDb, "events.db"],
+      [projectionsDb.db, paths.projectionsDb, "projections.db"],
+      [retrievalDb.db, paths.retrievalDb, "retrieval.db"]
+    ] as const) {
+      try {
+        checkpointDatabase(db, dbPath, label);
+      } catch (err) {
+        checkinError ??= err;
+      }
+    }
+    eventLog.close();
+    projectionsDb.close();
+    retrievalDb.close();
+
+    if (checkinError === undefined) {
+      try {
+        const stillHeld = await backend.isLockCurrent(uid, handle);
+        if (!stillHeld) {
+          throw new Error(
+            `Lock for user ${JSON.stringify(uid)} was reclaimed by another holder before checkin (this holder outlived its own TTL) — refusing to upload, which would race or clobber the new holder's writes.`
+          );
+        }
+        await backend.upload(uid, paths.dir);
+      } catch (err) {
+        checkinError = err;
+      }
+    }
+
+    if (checkinError !== undefined) {
       if (workError !== undefined) {
         throw new Error(
           `Turn failed AND checkin failed — remote storage still reflects only the last successful checkin. ` +
             `Turn error: ${workError instanceof Error ? workError.message : String(workError)}. ` +
-            `Checkin error: ${uploadErr instanceof Error ? uploadErr.message : String(uploadErr)}.`
+            `Checkin error: ${checkinError instanceof Error ? checkinError.message : String(checkinError)}.`
         );
       }
-      throw uploadErr;
+      throw checkinError;
     }
 
     if (workError !== undefined) throw workError;
     return result as T;
   } finally {
+    checkoutFinished();
     await backend.releaseLock(uid, handle);
   }
 }
@@ -149,10 +238,10 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function acquireReadOnlyLockWithRetry(backend: UserStorageBackend, uid: string, ttlMs: number): Promise<LockHandle> {
+async function acquireReadOnlyLockWithRetry(backend: UserStorageBackend, uid: string, ttlMs: number, holder: string): Promise<LockHandle> {
   for (let attempt = 1; attempt <= READ_ONLY_LOCK_RETRY_ATTEMPTS; attempt++) {
     try {
-      return await backend.acquireLock(uid, ttlMs);
+      return await backend.acquireLock(uid, ttlMs, holder);
     } catch (err) {
       if (!(err instanceof LockAcquisitionError) || attempt === READ_ONLY_LOCK_RETRY_ATTEMPTS) throw err;
       await delay(READ_ONLY_LOCK_RETRY_DELAY_MS);
@@ -169,9 +258,11 @@ export async function withReadOnlyUserSession<T>(
   localRoot: string,
   uid: string,
   lockTtlMs: number,
-  work: (stores: UserSessionStores) => Promise<T>
+  work: (stores: UserSessionStores) => Promise<T>,
+  holder = "unknown"
 ): Promise<T> {
-  const handle = await acquireReadOnlyLockWithRetry(backend, uid, lockTtlMs);
+  const handle = await acquireReadOnlyLockWithRetry(backend, uid, lockTtlMs, holder);
+  checkoutStarted();
   try {
     const paths = getUserDataPaths(localRoot, uid);
     await backend.download(uid, paths.dir);
@@ -190,6 +281,7 @@ export async function withReadOnlyUserSession<T>(
       retrievalDb.close();
     }
   } finally {
+    checkoutFinished();
     await backend.releaseLock(uid, handle);
   }
 }
