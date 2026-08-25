@@ -118,6 +118,50 @@ describe("computeNetworkMarkers (report page, Stage A, Section 2.2 — exact at 
     expect(result.dormancy).toEqual([]);
   });
 
+  it("R59/EN-122: an entity whose source_event_ids END with an unresolvable id (an extraction_completed id, in real data) still resolves its last mention from the most recent id that IS resolvable — never silently drops out", () => {
+    // Real shape: a mention appends BOTH the message_sent id and its own extraction_completed
+    // id, and the extraction event's ULID always sorts after the message's (created a few
+    // seconds later, same turn) — so the chronologically-last id in a real entity's
+    // source_event_ids is routinely an id with no entry in recordedAtByMessageId at all
+    // (that map is built from message_sent events only). "m-message" < "m-message" + "-extraction"
+    // lexicographically, matching real ULID ordering within one turn.
+    const realMessageId = "01M0RDGHTFS6622XFVGP1G3B2Z"; // sorts BEFORE the id below
+    const extractionId = "01M0RDH5YM96S20ZWPZ2VC5EH4"; // sorts AFTER — never in recordedAtByMessageId
+    const friend = insertEntity("Kam", [realMessageId, extractionId]);
+    establishAsFriend(friend);
+    const recentButOldEnoughToBeDormant = new Date(new Date(NOW).getTime() - (DORMANCY_THRESHOLD_DAYS + 1) * 24 * 60 * 60 * 1000).toISOString();
+
+    const result = computeNetworkMarkers(projections, PRIMARY_USER_ID, [], new Map([[realMessageId, recentButOldEnoughToBeDormant]]), NOW);
+
+    expect(result.dormancy).toHaveLength(1); // must NOT have silently dropped out
+    expect(result.dormancy[0]!.lastMentionAt).toBe(recentButOldEnoughToBeDormant);
+    expect(result.dormancy[0]!.dormant).toBe(true);
+  });
+
+  it("R59/EN-122: resolves the most recent of MULTIPLE resolvable ids, not merely the first one found — a later real message must win over an earlier one", () => {
+    const earlierMessageId = "01M0Q4K7050ZC8NJNM2EYRJDW5";
+    const laterMessageId = "01M0RDGHTFS6622XFVGP1G3B2Z";
+    const trailingExtractionId = "01M0RDH5YM96S20ZWPZ2VC5EH4";
+    const friend = insertEntity("Kam", [earlierMessageId, trailingExtractionId, laterMessageId]);
+    establishAsFriend(friend);
+    const earlier = new Date(new Date(NOW).getTime() - 40 * 24 * 60 * 60 * 1000).toISOString();
+    const later = new Date(new Date(NOW).getTime() - 2 * 24 * 60 * 60 * 1000).toISOString();
+
+    const result = computeNetworkMarkers(
+      projections,
+      PRIMARY_USER_ID,
+      [],
+      new Map([
+        [earlierMessageId, earlier],
+        [laterMessageId, later]
+      ]),
+      NOW
+    );
+
+    expect(result.dormancy[0]!.lastMentionAt).toBe(later); // the real later mention, not the earlier one
+    expect(result.dormancy[0]!.dormant).toBe(false); // 2 days ago, well under the threshold
+  });
+
   it("tie composition counts open bonds/atoms by relationship class", () => {
     const a = insertEntity("Elena", []);
     const b = insertEntity("Marcus", []);

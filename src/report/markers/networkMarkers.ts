@@ -39,6 +39,40 @@ function sourceIds(entity: EntityRow): string[] {
   return (JSON.parse(entity.source_event_ids) as string[]).slice().sort();
 }
 
+/**
+ * R59/EN-122: the most recent element of `ids` (already chronologically
+ * sorted by sourceIds) that actually resolves to a real message timestamp
+ * — never the positionally-last element outright. An entity's
+ * source_event_ids typically holds BOTH a message_sent id and its own
+ * extraction_completed id per mention (rebuild.ts's resolveName call sites
+ * push [payload.sourceEventId, event.id]), and the extraction event's ULID
+ * always sorts after the message's — created a few seconds later, same
+ * turn — so the positionally-last id is usually an extraction id, not a
+ * message id. Looking THAT up in recordedAtByMessageId (built from
+ * message_sent events only) silently misses, and a real entity's last
+ * mention drops out of dormancy with no error anywhere — confirmed live
+ * against the real production corpus (entity "Kam"), not hypothesized.
+ *
+ * Same fault class EN-055 already names for entity IDs (bind to event
+ * ULIDs, never a projection id, because entity IDs are reshaped by every
+ * rebuild): deriving meaning from a value whose ordering is actually
+ * governed by a DIFFERENT mechanism (here, which event TYPES got appended
+ * to this array, and in what order) than the one being asked about (WHEN
+ * this entity was last mentioned in a message specifically).
+ *
+ * Deliberately NOT "filter out ids whose type is extraction_completed":
+ * that would require this function to know about every non-message event
+ * type that might ever end up in source_event_ids, and silently miss a
+ * future one. recordedAtByMessageId is already the authoritative "this id
+ * is a real message with a real recorded_at" source for every other
+ * reader in this file (see mentionCounts below, which already filters
+ * this same way) — reusing IT as the filter is robust to any event type,
+ * named or not, that isn't a message.
+ */
+function lastResolvableId(ids: string[], recordedAtByMessageId: Map<string, string>): string | undefined {
+  return ids.filter((id) => recordedAtByMessageId.has(id)).at(-1);
+}
+
 export interface WindowNetworkResult {
   windowIndex: number;
   /** Distinct established entities mentioned at least once in this window. */
@@ -139,7 +173,7 @@ export function computeNetworkMarkers(
   const dormancy: DormancyResult[] = established
     .map((e) => {
       const ids = sourceIds(e);
-      const lastId = ids[ids.length - 1];
+      const lastId = lastResolvableId(ids, recordedAtByMessageId);
       const lastMentionAt = lastId ? recordedAtByMessageId.get(lastId) : undefined;
       if (!lastMentionAt) return null; // no resolvable mention timestamp — excluded rather than guessed
       const daysSinceLastMention = (now - new Date(lastMentionAt).getTime()) / (24 * 60 * 60 * 1000);
