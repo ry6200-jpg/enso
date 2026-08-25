@@ -1,4 +1,5 @@
 import {
+  AMBIENT_TRAVEL_INSTRUCTION,
   ANTI_SYCOPHANCY_INSTRUCTION,
   BREADTH_BEFORE_DEPTH_INSTRUCTION,
   buildPersonaInstruction,
@@ -48,6 +49,7 @@ export function buildPersonaBlock(voiceMode: VoiceMode = "natural"): string {
     STATED_RELATIONSHIP_FRAMING_INSTRUCTION,
     CURRENT_DATE_INSTRUCTION,
     CURRENT_LOCATION_INSTRUCTION,
+    AMBIENT_TRAVEL_INSTRUCTION,
     REGISTER_CALIBRATION_INSTRUCTION
   ].join("\n\n");
 }
@@ -206,6 +208,8 @@ export function buildAmbientContextBlock(
     own?: { weather: { temperatureCelsius: number; feelsLikeCelsius: number; description: string } | null; localTime: string | null };
     thirdParty?: { name: string; weather: { temperatureCelsius: number; feelsLikeCelsius: number; description: string } | null; localTime: string | null };
     distance?: { placeName: string; durationMinutes: number; distanceMeters: number };
+    /** Part 4: real, live-traffic drive time/distance — see CURRENT_LOCATION_INSTRUCTION's travel-specific clause for the (strict) rules on how this may shape a reply. Miles, not meters, for a drive-length distance — meters read oddly at highway scale, unlike the short walking distance above. */
+    travel?: { destinationLabel: string; durationMinutes: number; distanceMeters: number };
   },
   maxChars: number
 ): string | null {
@@ -215,6 +219,7 @@ export function buildAmbientContextBlock(
   if (data.thirdParty?.weather) lines.push(`${data.thirdParty.name}'s weather right now: ${Math.round(data.thirdParty.weather.temperatureCelsius)}°C (feels like ${Math.round(data.thirdParty.weather.feelsLikeCelsius)}°C), ${data.thirdParty.weather.description}`);
   if (data.thirdParty?.localTime) lines.push(`${data.thirdParty.name}'s local time: ${data.thirdParty.localTime}`);
   if (data.distance) lines.push(`Walking distance to ${data.distance.placeName}: about ${data.distance.durationMinutes} minutes (${Math.round(data.distance.distanceMeters)}m)`);
+  if (data.travel) lines.push(`Current drive time to ${data.travel.destinationLabel} (live traffic): about ${data.travel.durationMinutes} minutes (${(data.travel.distanceMeters / 1609.34).toFixed(1)} mi)`);
   if (lines.length === 0) return null;
 
   const block = `=== AMBIENT CONTEXT (begin) ===\n${lines.join("\n")}\n=== AMBIENT CONTEXT (end) ===`;

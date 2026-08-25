@@ -27,6 +27,11 @@ describe("buildAmbientContextBlock (item 1) — pure formatting of what actually
     expect(block).toContain("Walking distance to BIG Pharmacy: about 20 minutes (1600m)");
   });
 
+  it("part 4: renders a drive time/distance in miles, not meters, distinct from the short walking-distance line", () => {
+    const block = buildAmbientContextBlock({ travel: { destinationLabel: "home", durationMinutes: 30, distanceMeters: 24140 } }, 400)!;
+    expect(block).toContain("Current drive time to home (live traffic): about 30 minutes (15.0 mi)");
+  });
+
   it("only renders what's present — a missing weather but present local time renders just the one line", () => {
     const block = buildAmbientContextBlock({ own: { weather: null, localTime: "2:15 PM" } }, 400)!;
     expect(block).toContain("Owner's own local time: 2:15 PM");

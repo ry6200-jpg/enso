@@ -104,6 +104,8 @@ export interface RouterRequest {
   ambientLocationCandidates: AmbientLocationCandidate[];
   /** Whether the owner's own coordinates are actually available this turn (client sent them). When false, ownSituation must come back false regardless of what the router might otherwise judge relevant — there's nothing to fetch. */
   ownLocationAvailable: boolean;
+  /** Part 4 (ambient travel context): whether the owner has a stated home/residence on record at all (entity_attributes.location for the primary user) — the fallback destination when no specific place was named this turn. When false AND no place is named in the message, travelContext.relevant should come back false — there is nothing to route to. */
+  primaryResidenceKnown: boolean;
 }
 
 export type RetrievalModeDecision = "hybrid" | "entity" | "recency";
@@ -176,6 +178,31 @@ export interface RouterDecision {
     /** A place the owner named this turn that a walking-distance/nearby lookup would resolve (case c) — free text (e.g. "the pharmacy she mentioned", "the Pantages"), never validated against a candidate list the way entity ids are: this is resolved via Places lookup, never stored, never treated as a fact in its own right, so an unresolvable or slightly-off name just yields no distance data this turn rather than any real corruption. */
     namedPlaceForDistance: string | null;
   };
+  /**
+   * Part 4: the fifth axis, ported from the old app's decideLocationToolUse
+   * judgment (whether a real, current drive-time/traffic number would
+   * concretely change the advice or observation about to be given right
+   * now) into this router's existing structured-decision shape, rather
+   * than a separate tool-calling mechanism. GOVERNING RULE, same
+   * discipline as ambientContext above: relevant is true only when the
+   * owner is actually facing a timing/attendance decision this turn — an
+   * upcoming drive, whether to leave now, how much time to allow — never
+   * "a destination is knowable, so check it."
+   */
+  travelContext: {
+    relevant: boolean;
+    /**
+     * Free text for a SPECIFIC destination named this turn (e.g. "my
+     * mom's place", "the office"), never validated against a candidate
+     * list — resolved via geocoding, same treatment as
+     * ambientContext.namedPlaceForDistance. Null means no specific place
+     * was named; the fetch layer falls back to the owner's own stated
+     * residence (entity_attributes.location) when this is null AND
+     * RouterRequest.primaryResidenceKnown is true. If neither resolves,
+     * no call is made this turn.
+     */
+    destinationHint: string | null;
+  };
 }
 
 export interface RouterCallResult {
@@ -191,5 +218,6 @@ export const SAFE_DEFAULT_DECISION: RouterDecision = {
   curiosityTurn: { fire: false, kind: null, entityId: null, attribute: null, probeType: null },
   attestation: { isAffirmation: false, entityName: null, attribute: null, value: null },
   register: { mode: "natural" },
-  ambientContext: { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null }
+  ambientContext: { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null },
+  travelContext: { relevant: false, destinationHint: null }
 };

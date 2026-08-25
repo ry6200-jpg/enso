@@ -10,7 +10,8 @@ const BASE_REQUEST: RouterRequest = {
   curiosityCandidates: [],
   recentAttributeClaims: [],
   ambientLocationCandidates: [],
-  ownLocationAvailable: false
+  ownLocationAvailable: false,
+  primaryResidenceKnown: false
 };
 
 describe("ROUTER_JSON_SCHEMA (EN-048's register axis)", () => {
@@ -82,5 +83,42 @@ describe("buildRouterSystemPrompt (EN-030 curiosityTurn section)", () => {
     const prompt = buildRouterSystemPrompt(BASE_REQUEST);
     expect(prompt).toMatch(/kind="connectDot"/);
     expect(prompt).toMatch(/never invent one to fill the slot/);
+  });
+});
+
+describe("ROUTER_JSON_SCHEMA (part 4: travelContext axis)", () => {
+  it("includes a travelContext property with relevant/destinationHint, required, strict schema", () => {
+    const schema = (ROUTER_JSON_SCHEMA.properties as Record<string, unknown>).travelContext as {
+      properties: { relevant: { type: string }; destinationHint: { type: readonly string[] } };
+      required: readonly string[];
+      additionalProperties: boolean;
+    };
+    expect(schema.properties.relevant.type).toBe("boolean");
+    expect(schema.properties.destinationHint.type).toEqual(["string", "null"]);
+    expect(schema.required).toEqual(["relevant", "destinationHint"]);
+    expect(schema.additionalProperties).toBe(false);
+  });
+
+  it("travelContext is a required top-level property", () => {
+    expect(ROUTER_JSON_SCHEMA.required).toContain("travelContext");
+  });
+});
+
+describe("buildRouterSystemPrompt (part 4: travelContext section)", () => {
+  it("names the governing rule (a real timing/attendance decision, not mere knowability) and states whether a residence is on record", () => {
+    const prompt = buildRouterSystemPrompt({ ...BASE_REQUEST, primaryResidenceKnown: true });
+    expect(prompt).toMatch(/6\. TRAVEL CONTEXT/);
+    expect(prompt).toMatch(/Owner's own home\/residence on record: yes/);
+    expect(prompt).toMatch(/never "a destination is knowable, so check it\."/);
+  });
+
+  it("states 'no' plainly when no residence is on record", () => {
+    const prompt = buildRouterSystemPrompt({ ...BASE_REQUEST, primaryResidenceKnown: false });
+    expect(prompt).toMatch(/Owner's own home\/residence on record: no/);
+  });
+
+  it("never volunteers ETAs as the prompt's own concern — that discipline lives in the persona instruction, not the router prompt (see personaInstructions tests)", () => {
+    const prompt = buildRouterSystemPrompt(BASE_REQUEST);
+    expect(prompt).toMatch(/destinationHint/);
   });
 });

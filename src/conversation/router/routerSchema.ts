@@ -56,21 +56,32 @@ export const ROUTER_JSON_SCHEMA = {
       },
       required: ["relevant", "ownSituation", "thirdPartyEntityId", "namedPlaceForDistance"],
       additionalProperties: false
+    },
+    travelContext: {
+      type: "object",
+      properties: {
+        relevant: { type: "boolean" },
+        destinationHint: { type: ["string", "null"] }
+      },
+      required: ["relevant", "destinationHint"],
+      additionalProperties: false
     }
   },
-  required: ["retrieval", "curiosityTurn", "attestation", "register", "ambientContext"],
+  required: ["retrieval", "curiosityTurn", "attestation", "register", "ambientContext", "travelContext"],
   additionalProperties: false
 } as const;
 
 /**
- * Builds the router's system prompt. All five judgment axes in one call
+ * Builds the router's system prompt. All six judgment axes in one call
  * (EN-075: latency/cost over separate calls — EN-048 added the fourth,
- * register, and this batch added the fifth, ambientContext, at zero extra
- * API cost since each is just one more property on the same structured-
- * output call) — each section names its own hard constraints so a
- * strict-schema-compliant but semantically wrong answer (e.g. an invented
- * entityId) is still caught by the caller's post-call validation against
- * the candidate lists actually handed in.
+ * register, the ambient-context batch added the fifth, ambientContext,
+ * and part 4 (this batch) added the sixth, travelContext — the ported
+ * equivalent of the old app's decideLocationToolUse judgment, folded into
+ * this same structured-output call at zero extra API cost rather than a
+ * separate tool-calling mechanism) — each section names its own hard
+ * constraints so a strict-schema-compliant but semantically wrong answer
+ * (e.g. an invented entityId) is still caught by the caller's post-call
+ * validation against the candidate lists actually handed in.
  */
 export function buildRouterSystemPrompt(request: RouterRequest): string {
   const knownEntitiesBlock =
@@ -104,7 +115,7 @@ export function buildRouterSystemPrompt(request: RouterRequest): string {
       ? request.ambientLocationCandidates.map((c) => `- ${c.name} (id: ${c.entityId}) — location on record: ${c.location}`).join("\n")
       : "(no one on record has a known location)";
 
-  return `You are a routing judgment layer for a personal journaling assistant, deciding four things about the CURRENT user message below. Return ONLY the JSON the schema requires — no prose.
+  return `You are a routing judgment layer for a personal journaling assistant, deciding six things about the CURRENT user message below. Return ONLY the JSON the schema requires — no prose.
 
 CURRENT MESSAGE: ${JSON.stringify(request.message)}
 
@@ -154,5 +165,12 @@ ${ambientCandidatesBlock}
 - namedPlaceForDistance: set ONLY when the owner has raised something that a real walking-distance or nearby-place lookup would concretely resolve (e.g. deciding whether to go somewhere, wondering if a specific place is close) — free text naming the place AS THE OWNER DESCRIBED IT (e.g. "the pharmacy she mentioned," "the show tonight"), never a made-up business name; null when nothing like that came up. This is resolved by a real place lookup afterward, not validated against a list the way entity ids are — an unresolvable name just means no distance data surfaces this turn, so there is no harm in leaving it null when you're not sure it will resolve to something real.
 
 If none of the above genuinely applies, relevant MUST be false and every other field null/false — do not set relevant=true "just in case" one of the fields might end up useful.
+
+6. TRAVEL CONTEXT — is a real, live-traffic drive-time/distance lookup worth making for THIS turn? Default to relevant=false — this costs a real API call and, like ambient context above, is worth almost nothing on most turns. GOVERNING RULE, the same shape as ambient context's: the owner must be facing an actual timing or attendance decision right now — whether to leave, how much time to allow, whether a drive is worth it — never "a destination is knowable, so check it." This is never for idle travel trivia and never volunteered into a reply as an ETA — see the ambient-travel persona instruction for how the data (once fetched) is actually allowed to shape a reply.
+
+Owner's own home/residence on record: ${request.primaryResidenceKnown ? "yes" : "no"}.
+
+- destinationHint: free text for a SPECIFIC, findable place named this turn (e.g. "the airport," "downtown Seattle," a named venue or address) — AS THE OWNER DESCRIBED IT, never invented — only when relevant is true and a real destination came up. This is resolved by a real place lookup afterward, not validated against a list: a vague relational reference with nothing findable behind it (e.g. "my mom's place" with no address or venue attached) simply won't resolve, and that's fine — no harm in leaving it null when you're not sure it will resolve to something real, or in setting it and having the lookup come back empty. Leave null when relevant is true but no specific place was named (the owner's own stated residence is used automatically as the default destination when one is on record) or when relevant is false.
+- If relevant is true, no specific place was named (destinationHint null), AND the owner's home is NOT on record (see above), there is nothing to route to — but that's a fetch-layer concern, not yours: still set relevant=true if the moment genuinely calls for it, leaving destinationHint null.
 `;
 }

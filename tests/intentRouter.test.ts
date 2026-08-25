@@ -13,7 +13,8 @@ const BASE_REQUEST: RouterRequest = {
   curiosityCandidates: [{ kind: "thirdParty", candidate: { entityId: "c1", name: "Marcus", attemptNumber: 1, mentionAgeLabel: "earlier today", stableKey: "stable-c1" } }],
   recentAttributeClaims: [{ entityName: "Elena", attribute: "location", value: "Seattle", extractionEventId: "ext1" }],
   ambientLocationCandidates: [{ entityId: "e1", name: "Elena", location: "Seattle" }],
-  ownLocationAvailable: true
+  ownLocationAvailable: true,
+  primaryResidenceKnown: true
 };
 
 function fakeResult(provider: "openai" | "gemini", decision: RouterDecision): RouterCallResult {
@@ -262,6 +263,33 @@ describe("createIntentRouter — per-axis validation against candidate lists", (
 
     expect(result.decision.ambientContext.relevant).toBe(false);
   });
+
+  it("part 4: keeps travelContext.relevant with a destinationHint as free text — never validated against a candidate list", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ travelContext: { relevant: true, destinationHint: "my mom's place" } })));
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.travelContext).toEqual({ relevant: true, destinationHint: "my mom's place" });
+  });
+
+  it("part 4: keeps travelContext.relevant with destinationHint null — a valid state, the fetch layer falls back to the owner's own residence", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ travelContext: { relevant: true, destinationHint: null } })));
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.travelContext).toEqual({ relevant: true, destinationHint: null });
+  });
+
+  it("part 4: suppresses travelContext entirely when relevant=false but destinationHint was set anyway — a malformed-but-schema-valid decision", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ travelContext: { relevant: false, destinationHint: "somewhere" } })));
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.travelContext).toEqual({ relevant: false, destinationHint: null });
+  });
 });
 
 describe("createIntentRouter — EN-083 uncertified-tier gate bypass", () => {
@@ -353,6 +381,29 @@ describe("createIntentRouter — EN-083 uncertified-tier gate bypass", () => {
     const result = await router.route(BASE_REQUEST);
 
     expect(result.decision.ambientContext.relevant).toBe(true);
+    expect(result.certified).toBe(true);
+  });
+
+  it("part 4: forces travelContext to no-action when served by an uncertified provider — a real, billed Routes API call is exactly the consequence EN-083 exists to gate", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => {
+      throw new ProviderAvailabilityError("503", 503);
+    });
+    const fallback = vi.fn<RouterAdapter>(async () => fakeResult("gemini", decisionWith({ travelContext: { relevant: true, destinationHint: "the office" } })));
+    const router = createIntentRouter(primary, fallback, new Set(["openai"]));
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.travelContext).toEqual({ relevant: false, destinationHint: null });
+    expect(result.certified).toBe(false);
+  });
+
+  it("part 4: keeps travelContext.relevant when served by the certified tier", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ travelContext: { relevant: true, destinationHint: null } })));
+    const router = createIntentRouter(primary, primary, new Set(["openai"]));
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.travelContext.relevant).toBe(true);
     expect(result.certified).toBe(true);
   });
 });

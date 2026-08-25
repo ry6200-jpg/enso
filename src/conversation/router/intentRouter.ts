@@ -112,6 +112,17 @@ function validateDecision(raw: RouterDecision, request: RouterRequest): { decisi
     decision.ambientContext = NO_ACTION_AMBIENT_CONTEXT;
   }
 
+  // Part 4: destinationHint is free text, same treatment as ambientContext.namedPlaceForDistance —
+  // resolved via a real geocode afterward, never validated against a candidate list. The only
+  // structural check here is the same "never a sub-field set while relevant=false" discipline
+  // every other axis already gets; destinationHint=null WITH relevant=true is a valid state (the
+  // fetch layer falls back to the owner's own stated residence — see ambientTravelFetch.ts).
+  const NO_ACTION_TRAVEL_CONTEXT = { relevant: false, destinationHint: null } as const;
+  if (!decision.travelContext.relevant && decision.travelContext.destinationHint !== null) {
+    reasons.push("travelContext had destinationHint set while relevant=false — suppressed entirely");
+    decision.travelContext = NO_ACTION_TRAVEL_CONTEXT;
+  }
+
   return { decision, reasons };
 }
 
@@ -169,14 +180,15 @@ export function createIntentRouter(
       }
 
       const isCertified = certifiedProviders.has(raw.provider);
-      if (!isCertified && (decision.curiosityTurn.fire || decision.attestation.isAffirmation || decision.register.mode === "zen" || decision.ambientContext.relevant)) {
+      if (!isCertified && (decision.curiosityTurn.fire || decision.attestation.isAffirmation || decision.register.mode === "zen" || decision.ambientContext.relevant || decision.travelContext.relevant)) {
         reasons.push(`gates bypassed to no-action: decision served by uncertified tier "${raw.provider}" (EN-083)`);
         decision = {
           ...decision,
           curiosityTurn: { fire: false, kind: null, entityId: null, attribute: null, probeType: null },
           attestation: { isAffirmation: false, entityName: null, attribute: null, value: null },
           register: { mode: "natural" },
-          ambientContext: { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null }
+          ambientContext: { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null },
+          travelContext: { relevant: false, destinationHint: null }
         };
       }
 

@@ -112,7 +112,7 @@ describe("Validation bank — router flags (EN-075)", () => {
       knownEntities: [{ entityId: "e-elena", name: "Elena" }],
       curiosityTurnEligible: true,
       curiosityCandidates: [],
-      recentAttributeClaims: [], ambientLocationCandidates: [], ownLocationAvailable: false
+      recentAttributeClaims: [], ambientLocationCandidates: [], ownLocationAvailable: false, primaryResidenceKnown: false
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
@@ -124,7 +124,7 @@ describe("Validation bank — router flags (EN-075)", () => {
   }, 180_000);
 
   it("A2 (negative): with no known entities, never fabricates entity mode", async () => {
-    const request: RouterRequest = { message: "How's my mom doing?", recentTurns: [], knownEntities: [], curiosityTurnEligible: true, curiosityCandidates: [], recentAttributeClaims: [], ambientLocationCandidates: [], ownLocationAvailable: false };
+    const request: RouterRequest = { message: "How's my mom doing?", recentTurns: [], knownEntities: [], curiosityTurnEligible: true, curiosityCandidates: [], recentAttributeClaims: [], ambientLocationCandidates: [], ownLocationAvailable: false, primaryResidenceKnown: false };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
       const pass = decision.retrieval.mode !== "entity";
@@ -141,7 +141,7 @@ describe("Validation bank — router flags (EN-075)", () => {
       knownEntities: [],
       curiosityTurnEligible: true,
       curiosityCandidates: [{ kind: "thirdParty", candidate: { entityId: "c-marcus", name: "Marcus", attemptNumber: 1, mentionAgeLabel: "earlier today", stableKey: "stable-c-marcus" } }],
-      recentAttributeClaims: [], ambientLocationCandidates: [], ownLocationAvailable: false
+      recentAttributeClaims: [], ambientLocationCandidates: [], ownLocationAvailable: false, primaryResidenceKnown: false
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
@@ -159,7 +159,7 @@ describe("Validation bank — router flags (EN-075)", () => {
       knownEntities: [],
       curiosityTurnEligible: true,
       curiosityCandidates: [{ kind: "thirdParty", candidate: { entityId: "c-marcus", name: "Marcus", attemptNumber: 1, mentionAgeLabel: "earlier today", stableKey: "stable-c-marcus" } }],
-      recentAttributeClaims: [], ambientLocationCandidates: [], ownLocationAvailable: false
+      recentAttributeClaims: [], ambientLocationCandidates: [], ownLocationAvailable: false, primaryResidenceKnown: false
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
@@ -177,7 +177,7 @@ describe("Validation bank — router flags (EN-075)", () => {
       knownEntities: [{ entityId: "e-elena", name: "Elena" }],
       curiosityTurnEligible: true,
       curiosityCandidates: [],
-      recentAttributeClaims: [{ entityName: "Elena", attribute: "location", value: "Seattle", extractionEventId: "ext1" }], ambientLocationCandidates: [], ownLocationAvailable: false
+      recentAttributeClaims: [{ entityName: "Elena", attribute: "location", value: "Seattle", extractionEventId: "ext1" }], ambientLocationCandidates: [], ownLocationAvailable: false, primaryResidenceKnown: false
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
@@ -195,7 +195,7 @@ describe("Validation bank — router flags (EN-075)", () => {
       knownEntities: [{ entityId: "e-elena", name: "Elena" }],
       curiosityTurnEligible: true,
       curiosityCandidates: [],
-      recentAttributeClaims: [{ entityName: "Elena", attribute: "location", value: "Seattle", extractionEventId: "ext1" }], ambientLocationCandidates: [], ownLocationAvailable: false
+      recentAttributeClaims: [{ entityName: "Elena", attribute: "location", value: "Seattle", extractionEventId: "ext1" }], ambientLocationCandidates: [], ownLocationAvailable: false, primaryResidenceKnown: false
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);

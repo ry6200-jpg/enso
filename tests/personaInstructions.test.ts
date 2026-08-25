@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AMBIENT_TRAVEL_INSTRUCTION,
   ANTI_SYCOPHANCY_INSTRUCTION,
   buildPersonaInstruction,
   CONVERSATION_INITIATIVE_INSTRUCTION,
@@ -317,5 +318,45 @@ describe("CONVERSATION_INITIATIVE_INSTRUCTION (passive-mode batch, findings 2-4)
     // separate block from buildPersonaInstruction's own return value, same split as
     // STATED_RELATIONSHIP_FRAMING_INSTRUCTION above — documenting that split, not asserting it's absent.
     expect(PERSONA_INSTRUCTION).not.toMatch(/ENDING THE CONVERSATION IS NEVER YOUR CALL/);
+  });
+});
+
+describe("AMBIENT_TRAVEL_INSTRUCTION (part 4: ambient travel context)", () => {
+  it("is context to reason from, never a lookup presented — the same discipline as ambient weather/distance above", () => {
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/AMBIENT TRAVEL CONTEXT/);
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/CONTEXT TO REASON FROM, never a lookup you present/);
+  });
+
+  it("never announces an ETA or reports traffic, even when the number would be useful", () => {
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/ENSO MUST NOT ANNOUNCE ETAs OR REPORT TRAFFIC/);
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/never state the drive time, the distance, or a description of traffic conditions as a fact you're reporting/);
+  });
+
+  it("names what the data actually shapes: whether to open a longer thread or let the person go, never announced as reasoning", () => {
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/WHAT IT ACTUALLY SHAPES/);
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/never announced as reasoning/);
+  });
+
+  it("volunteering routes through the EXISTING winding-down/unsolicited-advice judgment, never a new standalone permission", () => {
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/VOLUNTEERING ROUTES THROUGH EXISTING JUDGMENT, NEVER A NEW RULE OF ITS OWN/);
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/the winding-down discriminator/);
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/UNSOLICITED ADVICE \/ LECTURE MODE/);
+  });
+
+  it("confabulation guard: never gestures at drive/traffic conditions with no real reading resolved this turn, anchored to the real incident's exact phrasing", () => {
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/NEVER GESTURE AT CONDITIONS YOU HAVEN'T ACTUALLY CHECKED/);
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/hope the drive home is easy/);
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/had nothing to say when asked why/);
+  });
+
+  it("confabulation guard applies REGARDLESS of whether any call fired this turn — this is independent of the volunteering judgment above", () => {
+    expect(AMBIENT_TRAVEL_INSTRUCTION).toMatch(/A SEPARATE, INDEPENDENT RULE, REGARDLESS OF WHETHER ANY CALL FIRED THIS TURN/);
+  });
+
+  it("is included in the assembled persona block actually sent to the model", () => {
+    // AMBIENT_TRAVEL_INSTRUCTION is assembled into buildPersonaBlock (systemPrompt.ts), a
+    // separate block from buildPersonaInstruction's own return value, same split as
+    // STATED_RELATIONSHIP_FRAMING_INSTRUCTION/CONVERSATION_INITIATIVE_INSTRUCTION above.
+    expect(PERSONA_INSTRUCTION).not.toMatch(/AMBIENT TRAVEL CONTEXT/);
   });
 });

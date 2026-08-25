@@ -14,7 +14,7 @@ import type { ContentChunkRow, RetrievalDb } from "../retrieval/retrievalDb.js";
 import { assembleContext, DEFAULT_CONTEXT_BUDGETS, type AssembledContext, type ContextBudgets } from "./contextAssembly.js";
 import { decideRetrievalInvocation, findAllMentionedEntityIds, type RetrievalInvocation, type RetrievalMode } from "./retrievalInvocation.js";
 import { buildAmbientContextBlock, buildAttachmentContextBlock, buildCurrentDateContextBlock, buildEntityDossierBlock, buildLocationContextBlock, buildSelfProfileBlock, type RecentTurnForPrompt, type VoiceMode } from "../persona/systemPrompt.js";
-import { buildEntityDossier, buildSelfProfile, MAX_ENTITY_DOSSIERS_PER_TURN } from "../projections/peopleView.js";
+import { buildEntityDossier, buildSelfProfile, getPrimaryUserAttribute, MAX_ENTITY_DOSSIERS_PER_TURN } from "../projections/peopleView.js";
 import type { CurrentLocationContext } from "../location/currentLocation.js";
 import { getSessionTurnsForPrompt } from "./conversationHistory.js";
 import { buildConnectDotDirective, buildCuriosityAskDirective, findCuriosityAskCandidates, isCuriosityTurnEligible, verifyCuriosityAskExecuted } from "./circleBack.js";
@@ -25,6 +25,7 @@ import { decideVoiceMode, hasZenTriggerPhrase } from "./voiceMode.js";
 import type { IntentRouter, RouterResult } from "./router/intentRouter.js";
 import { ambientLocationCandidates } from "./ambientCandidates.js";
 import { fetchAmbientContext } from "./ambientContextFetch.js";
+import { fetchAmbientTravelContext } from "./ambientTravelFetch.js";
 
 export interface ReplySentPayload {
   text: string;
@@ -94,6 +95,8 @@ export interface ReplySentPayload {
      * a failed fetch means silence, exactly like never having asked).
      */
     ambientContext?: { ownWeatherKnown: boolean; ownLocalTimeKnown: boolean; thirdPartyName: string | null; distancePlaceName: string | null } | null;
+    /** Part 4: same "reflects what actually reached the block, not what the router merely judged relevant" discipline as ambientContext above. Null when nothing resolved (never relevant, or the fetch/lookup chain failed anywhere) — indistinguishable from "never asked," same honesty as ambientContext. */
+    travelContext?: { destinationLabel: string } | null;
   };
   /**
    * Phase 6 round-trip survival: the router's own decision shaped this
@@ -432,7 +435,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       curiosityCandidates,
       recentAttributeClaims: claims,
       ambientLocationCandidates: ambientCandidates,
-      ownLocationAvailable: input.ownCoordinates != null
+      ownLocationAvailable: input.ownCoordinates != null,
+      primaryResidenceKnown: getPrimaryUserAttribute(deps.projectionsDb, input.userId, "location") !== null
     });
 
     const r = routerResult.decision.retrieval;
@@ -455,12 +459,21 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   // zero calls of any kind, including the owner's own — fetchAmbientContext
   // itself short-circuits on `!decision.relevant` before touching anything.
   const ambientContextDecision = routerResult?.decision.ambientContext ?? { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null };
-  const [candidateChunks, ambientData] = await Promise.all([
+  // Part 4: same "gated by the router, zero calls below relevant=false" discipline as
+  // ambientContext above — run in parallel since none of the three depend on each other.
+  const travelContextDecision = routerResult?.decision.travelContext ?? { relevant: false, destinationHint: null };
+  const [candidateChunks, ambientData, travelData] = await Promise.all([
     runRetrieval(deps, input.userId, invocation),
     fetchAmbientContext({
       decision: ambientContextDecision,
       ownCoordinates: input.ownCoordinates ?? null,
       candidates: ambientCandidates,
+      apiKey: deps.googleMapsApiKey
+    }),
+    fetchAmbientTravelContext({
+      decision: travelContextDecision,
+      ownCoordinates: input.ownCoordinates ?? null,
+      primaryResidence: getPrimaryUserAttribute(deps.projectionsDb, input.userId, "location"),
       apiKey: deps.googleMapsApiKey
     })
   ]);
@@ -497,7 +510,10 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   // never the recent-window budget — same discipline as locationContextBlock/
   // dateContextBlock above. Deliberately NOT passed anywhere near
   // extraction below, same as those two.
-  const ambientContextBlock = buildAmbientContextBlock(ambientData, (input.budgets ?? DEFAULT_CONTEXT_BUDGETS).maxAmbientContextChars);
+  const ambientContextBlock = buildAmbientContextBlock(
+    { ...ambientData, travel: travelData ?? undefined },
+    (input.budgets ?? DEFAULT_CONTEXT_BUDGETS).maxAmbientContextChars
+  );
 
   const assembled = assembleContext(
     candidateChunks,
@@ -570,7 +586,10 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
             thirdPartyName: ambientData.thirdParty?.name ?? null,
             distancePlaceName: ambientData.distance?.placeName ?? null
           }
-        : null
+        : null,
+      // Part 4: same "reflects the block, not the router's mere judgment" discipline as
+      // ambientContext above — null whenever travelData never resolved, for any reason.
+      travelContext: ambientContextBlock && travelData ? { destinationLabel: travelData.destinationLabel } : null
     },
     router: {
       used: routerResult !== null,
