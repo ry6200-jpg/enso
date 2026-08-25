@@ -10,3 +10,5 @@ dev-data/
 .cache/
 .next/
 next-env.d.ts
+*.db
+transcript.txt
