@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { User } from "firebase/auth";
 import ZodiacSidebar from "./components/ZodiacSidebar";
+import ReportPanel from "./components/ReportPanel";
 import { authFetch, signInWithGoogle, signOut, watchAuthState } from "./lib/firebaseClient";
 import { isPinnedToBottom } from "./lib/chatScroll";
 import { downloadTranscript } from "./lib/transcriptDownload";
@@ -190,6 +191,9 @@ export default function Page() {
   // presentation, owned here since it's UI, not logic.
   const [transcriptDownloadStatus, setTranscriptDownloadStatus] = useState<"idle" | "loading" | "error">("idle");
   const [transcriptDownloadError, setTranscriptDownloadError] = useState<string | null>(null);
+  // Report page (Stage A, enso-report-methodology.md) — the panel itself owns all its own
+  // fetch/loading/prediction-capture state; this is purely whether it's mounted at all.
+  const [reportPanelOpen, setReportPanelOpen] = useState(false);
   // Below md (Tailwind's breakpoint, matching ZodiacSidebar's own `hidden
   // md:flex`), the desktop placeholder's parenthetical wraps to three lines
   // and explains a keyboard shortcut a phone doesn't have. matchMedia, not
@@ -870,6 +874,16 @@ export default function Page() {
                 </div>
                 <button
                   type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setReportPanelOpen(true);
+                  }}
+                  className="w-full text-left px-3 py-1.5 text-sm text-stone-600 hover:bg-stone-50 hover:text-stone-900"
+                >
+                  Report
+                </button>
+                <button
+                  type="button"
                   onClick={() => void handleDownloadTranscript()}
                   disabled={transcriptDownloadStatus === "loading"}
                   className="w-full text-left px-3 py-1.5 text-sm text-stone-600 hover:bg-stone-50 hover:text-stone-900 disabled:text-stone-400 disabled:hover:bg-transparent"
@@ -1026,6 +1040,8 @@ export default function Page() {
           {attachmentStatus.filename}: {attachmentStatus.extractionSucceeded ? "extraction succeeded" : `extraction failed — ${attachmentStatus.extractionError}`}
         </div>
       )}
+
+      {reportPanelOpen && <ReportPanel onClose={() => setReportPanelOpen(false)} />}
     </div>
   );
 }
