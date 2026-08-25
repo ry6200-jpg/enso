@@ -4,24 +4,22 @@ import path from "node:path";
 import { Storage } from "@google-cloud/storage";
 import { sanitizeUidForPath } from "./userDataPaths.js";
 import { LockAcquisitionError, type LockHandle, type UserStorageBackend } from "./userStorageBackend.js";
+import { walk } from "./walkDir.js";
 
 interface LockMeta {
   token: string;
   expiresAt: number;
+  /** Storage durability batch, PART 2 — diagnostic only, see userStorageBackend.ts's acquireLock doc comment. */
+  holder: string;
 }
 
 function isGcsErrorCode(err: unknown, code: number): boolean {
   return typeof err === "object" && err !== null && "code" in err && (err as { code: unknown }).code === code;
 }
 
-function walk(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(full));
-    else out.push(full);
-  }
-  return out;
+/** Storage durability batch, PART 1: never upload a WAL sidecar file, structurally, regardless of what a caller failed to clean up. */
+function isSidecarFile(name: string): boolean {
+  return name.endsWith("-wal") || name.endsWith("-shm") || name.endsWith("-journal");
 }
 
 /**
@@ -82,30 +80,36 @@ export class GcsStorageBackend implements UserStorageBackend {
     }
   }
 
+  /**
+   * Storage durability batch, PART 1 + PART 3: never uploads a `-wal`/
+   * `-shm`/`-journal` sidecar (structural, regardless of what the caller
+   * left on local disk), and — the ordering fix — uploads the new/updated
+   * files FIRST, deleting anything stale (present remotely, absent
+   * locally) only afterward, never the reverse. The old delete-then-
+   * upload order meant a checkin interrupted partway through (a crash,
+   * SIGKILL after a rollout eviction) could leave the remote prefix
+   * EMPTIER than before the upload started — objectively worse than not
+   * uploading at all. Uploading first means an interruption leaves, at
+   * worst, an orphaned stale file remotely (recoverable, cleaned up by the
+   * next successful checkin), never data that used to exist and no longer
+   * does.
+   */
   async upload(uid: string, localDir: string): Promise<void> {
     const prefix = this.userPrefix(uid);
 
-    // Remote must end up an exact mirror of localDir — delete existing
-    // remote objects under this user's prefix first, same reasoning as
-    // download()'s wipe-before-copy: a file removed locally (e.g. by
-    // upload deletion) must not survive remotely as an orphan that never
-    // gets cleaned up because it no longer exists locally to overwrite it.
-    const [existing] = await this.bucket().getFiles({ prefix });
-    await Promise.all(existing.map((file) => file.delete()));
+    const localFiles = fs.existsSync(localDir) ? walk(localDir).filter((f) => !isSidecarFile(f)) : [];
+    const localRelatives = localFiles.map((absolute) => path.relative(localDir, absolute).split(path.sep).join("/"));
+    await Promise.all(localFiles.map((absolute, i) => this.bucket().upload(absolute, { destination: prefix + localRelatives[i] })));
 
-    if (!fs.existsSync(localDir)) return;
-    await Promise.all(
-      walk(localDir).map((absolute) => {
-        const relative = path.relative(localDir, absolute).split(path.sep).join("/");
-        return this.bucket().upload(absolute, { destination: prefix + relative });
-      })
-    );
+    const localRelativeSet = new Set(localRelatives);
+    const [remoteFiles] = await this.bucket().getFiles({ prefix });
+    await Promise.all(remoteFiles.filter((file) => !localRelativeSet.has(file.name.slice(prefix.length))).map((file) => file.delete()));
   }
 
-  async acquireLock(uid: string, ttlMs: number): Promise<LockHandle> {
+  async acquireLock(uid: string, ttlMs: number, holder = "unknown"): Promise<LockHandle> {
     const file = this.bucket().file(this.lockObjectName(uid));
     const token = crypto.randomUUID();
-    const meta: LockMeta = { token, expiresAt: Date.now() + ttlMs };
+    const meta: LockMeta = { token, expiresAt: Date.now() + ttlMs, holder };
 
     try {
       await file.save(JSON.stringify(meta), { preconditionOpts: { ifGenerationMatch: 0 } });
@@ -154,6 +158,18 @@ export class GcsStorageBackend implements UserStorageBackend {
       // functionally the same "already reclaimed" case just discovered one
       // step later. Anything else is a real failure and must surface.
       if (!isGcsErrorCode(err, 412)) throw err;
+    }
+  }
+
+  async isLockCurrent(uid: string, handle: LockHandle): Promise<boolean> {
+    const file = this.bucket().file(this.lockObjectName(uid));
+    try {
+      const [buffer] = await file.download();
+      const existing = JSON.parse(buffer.toString("utf8")) as LockMeta;
+      return existing.token === handle.token;
+    } catch (err) {
+      if (isGcsErrorCode(err, 404)) return false; // no lock object at all — definitely not current
+      throw err;
     }
   }
 }

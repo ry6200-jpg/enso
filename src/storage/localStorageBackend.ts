@@ -3,10 +3,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { sanitizeUidForPath } from "./userDataPaths.js";
 import { LockAcquisitionError, type LockHandle, type UserStorageBackend } from "./userStorageBackend.js";
+import { walk } from "./walkDir.js";
 
 interface LockMeta {
   token: string;
   expiresAt: number;
+  /** Storage durability batch, PART 2 — diagnostic only, see userStorageBackend.ts's acquireLock doc comment. */
+  holder: string;
+}
+
+/** Storage durability batch, PART 1: never upload/copy a WAL sidecar file, structurally, regardless of what a caller failed to clean up. */
+function isSidecarFile(name: string): boolean {
+  return name.endsWith("-wal") || name.endsWith("-shm") || name.endsWith("-journal");
 }
 
 function readLockMeta(lockDir: string): LockMeta | null {
@@ -64,15 +72,36 @@ export class LocalStorageBackend implements UserStorageBackend {
     fs.cpSync(remoteUserDir, localDir, { recursive: true });
   }
 
+  /**
+   * Storage durability batch, PART 1 + PART 3: never uploads a `-wal`/
+   * `-shm`/`-journal` sidecar, and copies the new/updated files FIRST,
+   * deleting anything stale (present remotely, absent locally) only
+   * afterward — never the reverse. An interruption partway through this
+   * now leaves, at worst, an orphaned extra file remotely (recoverable,
+   * cleaned up by the next successful checkin) rather than a remote
+   * directory wiped before its replacement finished landing, which is
+   * strictly worse than not having uploaded at all.
+   */
   async upload(uid: string, localDir: string): Promise<void> {
     const remoteUserDir = this.userDir(uid);
-    fs.rmSync(remoteUserDir, { recursive: true, force: true });
     fs.mkdirSync(remoteUserDir, { recursive: true });
-    if (!fs.existsSync(localDir)) return;
-    fs.cpSync(localDir, remoteUserDir, { recursive: true });
+
+    const localFiles = fs.existsSync(localDir) ? walk(localDir).filter((f) => !isSidecarFile(f)) : [];
+    for (const absolute of localFiles) {
+      const relative = path.relative(localDir, absolute);
+      const destination = path.join(remoteUserDir, relative);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.copyFileSync(absolute, destination);
+    }
+
+    const localRelativeSet = new Set(localFiles.map((f) => path.relative(localDir, f)));
+    for (const remoteAbsolute of walk(remoteUserDir)) {
+      const relative = path.relative(remoteUserDir, remoteAbsolute);
+      if (!localRelativeSet.has(relative)) fs.rmSync(remoteAbsolute, { force: true });
+    }
   }
 
-  async acquireLock(uid: string, ttlMs: number): Promise<LockHandle> {
+  async acquireLock(uid: string, ttlMs: number, holder = "unknown"): Promise<LockHandle> {
     const lockDir = this.lockDir(uid);
     fs.mkdirSync(path.dirname(lockDir), { recursive: true });
 
@@ -88,7 +117,7 @@ export class LocalStorageBackend implements UserStorageBackend {
 
     const writeMeta = (): LockHandle => {
       const token = crypto.randomUUID();
-      fs.writeFileSync(path.join(lockDir, "meta.json"), JSON.stringify({ token, expiresAt: Date.now() + ttlMs } satisfies LockMeta));
+      fs.writeFileSync(path.join(lockDir, "meta.json"), JSON.stringify({ token, expiresAt: Date.now() + ttlMs, holder } satisfies LockMeta));
       return { token };
     };
 
@@ -108,5 +137,10 @@ export class LocalStorageBackend implements UserStorageBackend {
     const existing = readLockMeta(lockDir);
     if (existing === null || existing.token !== handle.token) return; // already reclaimed by someone else — never delete a lock we don't own
     fs.rmSync(lockDir, { recursive: true, force: true });
+  }
+
+  async isLockCurrent(uid: string, handle: LockHandle): Promise<boolean> {
+    const existing = readLockMeta(this.lockDir(uid));
+    return existing !== null && existing.token === handle.token;
   }
 }
