@@ -36,8 +36,6 @@ export interface UserDataPaths {
   projectionsDb: string;
   retrievalDb: string;
   blobsDir: string;
-  /** Report page (Stage A, methodology Section 4.1's prediction capture) — a small JSON file, deliberately NOT the event log or a projection: the report reads the corpus but never writes to it, and a prediction is metadata about a report-viewing session, not a message the owner sent. Included in checkout/checkin automatically (both storage backends copy the whole per-user directory generically), so it's durable and cross-device without any backend code change. */
-  reportPredictionsPath: string;
 }
 
 /**
@@ -65,8 +63,7 @@ export function getUserDataPaths(rootDir: string, uid: string): UserDataPaths {
     eventsDb: path.join(dir, "events.db"),
     projectionsDb: path.join(dir, "projections.db"),
     retrievalDb: path.join(dir, "retrieval.db"),
-    blobsDir: path.join(dir, "blobs"),
-    reportPredictionsPath: path.join(dir, "report-predictions.json")
+    blobsDir: path.join(dir, "blobs")
   };
 }
 

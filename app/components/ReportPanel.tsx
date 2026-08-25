@@ -60,7 +60,7 @@ interface ReportViewModel {
   baselines: { windowIndex: number; activeTieCount: { priorWindowCount: number; baseline: { mean: number; stdev: number; deviationInStdevs: number | null } | null } }[];
 }
 
-type Phase = "predicting" | "loading" | "result" | "notEnoughData" | "error";
+type Phase = "start" | "loading" | "result" | "notEnoughData" | "error";
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -87,11 +87,7 @@ function DrillDown({ label, messages }: { label: string; messages: { id: string;
 }
 
 export default function ReportPanel({ onClose }: { onClose: () => void }) {
-  const [phase, setPhase] = useState<Phase>("predicting");
-  const [central, setCentral] = useState("");
-  const [recurring, setRecurring] = useState("");
-  const [absent, setAbsent] = useState("");
-  const [prediction, setPrediction] = useState<{ central: string; recurring: string; absent: string; createdAt: string } | null>(null);
+  const [phase, setPhase] = useState<Phase>("start");
   const [report, setReport] = useState<ReportViewModel | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -106,14 +102,13 @@ export default function ReportPanel({ onClose }: { onClose: () => void }) {
           return "UTC";
         }
       })();
-      const res = await authFetch("/api/report", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ central, recurring, absent, timezone }) });
+      const res = await authFetch("/api/report", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ timezone }) });
       if (!res.ok) throw new Error(`Report generation failed (HTTP ${res.status}).`);
-      const json = (await res.json()) as { displayable: boolean; prediction?: { central: string; recurring: string; absent: string; createdAt: string }; report?: ReportViewModel };
+      const json = (await res.json()) as { displayable: boolean; report?: ReportViewModel };
       if (!json.displayable) {
         setPhase("notEnoughData");
         return;
       }
-      setPrediction(json.prediction ?? null);
       setReport(json.report ?? null);
       setPhase("result");
     } catch (err) {
@@ -133,21 +128,8 @@ export default function ReportPanel({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="p-5 space-y-5">
-          {phase === "predicting" && (
+          {phase === "start" && (
             <div className="space-y-3">
-              <p className="text-sm text-stone-600">Before generating, write down what you expect this report to show. The gap between this and the result is the actual finding.</p>
-              <label className="block text-sm text-stone-700">
-                Who do you expect to be central?
-                <textarea value={central} onChange={(e) => setCentral(e.target.value)} rows={2} className="mt-1 w-full rounded border border-stone-300 px-2 py-1 text-sm" />
-              </label>
-              <label className="block text-sm text-stone-700">
-                What do you expect to recur?
-                <textarea value={recurring} onChange={(e) => setRecurring(e.target.value)} rows={2} className="mt-1 w-full rounded border border-stone-300 px-2 py-1 text-sm" />
-              </label>
-              <label className="block text-sm text-stone-700">
-                What do you expect to be absent?
-                <textarea value={absent} onChange={(e) => setAbsent(e.target.value)} rows={2} className="mt-1 w-full rounded border border-stone-300 px-2 py-1 text-sm" />
-              </label>
               <button type="button" onClick={() => void handleGenerate()} className="rounded bg-stone-800 text-white text-sm px-4 py-2 hover:bg-stone-700">
                 Generate report
               </button>
@@ -159,7 +141,7 @@ export default function ReportPanel({ onClose }: { onClose: () => void }) {
           {phase === "error" && (
             <div className="space-y-3">
               <p className="text-sm text-red-600">{error}</p>
-              <button type="button" onClick={() => setPhase("predicting")} className="text-sm text-stone-600 underline">
+              <button type="button" onClick={() => setPhase("start")} className="text-sm text-stone-600 underline">
                 Back
               </button>
             </div>
@@ -169,15 +151,6 @@ export default function ReportPanel({ onClose }: { onClose: () => void }) {
 
           {phase === "result" && report && (
             <div className="space-y-6">
-              {prediction && (
-                <div className="rounded border border-stone-200 bg-stone-50 p-3 text-sm space-y-1">
-                  <div className="text-xs text-stone-400">Your prediction, {formatDate(prediction.createdAt)}</div>
-                  <div><span className="text-stone-500">Central:</span> {prediction.central || "—"}</div>
-                  <div><span className="text-stone-500">Recurring:</span> {prediction.recurring || "—"}</div>
-                  <div><span className="text-stone-500">Absent:</span> {prediction.absent || "—"}</div>
-                </div>
-              )}
-
               <div className="text-xs text-stone-400">
                 {report.corpus.totalMessages} messages, {formatDate(report.corpus.firstMessageAt!)} – {formatDate(report.corpus.lastMessageAt!)}. Windowed at {report.windowDays} day{report.windowDays === 1 ? "" : "s"}.
               </div>

@@ -3,7 +3,6 @@ import { EventLog } from "../events/eventLog.js";
 import { ProjectionsDb } from "../projections/db.js";
 import { RetrievalDb } from "../retrieval/retrievalDb.js";
 import { BlobStore } from "../blobs/blobStore.js";
-import { ReportPredictionStore } from "../report/reportPredictionStore.js";
 import { getUserDataPaths } from "./userDataPaths.js";
 import { LockAcquisitionError, type LockHandle, type UserStorageBackend } from "./userStorageBackend.js";
 
@@ -12,8 +11,6 @@ export interface UserSessionStores {
   projectionsDb: ProjectionsDb;
   retrievalDb: RetrievalDb;
   blobStore: BlobStore;
-  /** Plain-file store, no open/close lifecycle (unlike the three SQLite connections above) — see reportPredictionStore.ts for why this is a JSON file rather than a DB. */
-  reportPredictions: ReportPredictionStore;
 }
 
 /**
@@ -70,12 +67,11 @@ export async function withUserSession<T>(
     const projectionsDb = new ProjectionsDb(paths.projectionsDb);
     const retrievalDb = new RetrievalDb(paths.retrievalDb);
     const blobStore = new BlobStore(paths.blobsDir);
-    const reportPredictions = new ReportPredictionStore(paths.reportPredictionsPath);
 
     let workError: unknown;
     let result: T | undefined;
     try {
-      result = await work({ eventLog, projectionsDb, retrievalDb, blobStore, reportPredictions });
+      result = await work({ eventLog, projectionsDb, retrievalDb, blobStore });
     } catch (err) {
       workError = err;
     } finally {
@@ -185,10 +181,9 @@ export async function withReadOnlyUserSession<T>(
     const projectionsDb = new ProjectionsDb(paths.projectionsDb);
     const retrievalDb = new RetrievalDb(paths.retrievalDb);
     const blobStore = new BlobStore(paths.blobsDir);
-    const reportPredictions = new ReportPredictionStore(paths.reportPredictionsPath);
 
     try {
-      return await work({ eventLog, projectionsDb, retrievalDb, blobStore, reportPredictions });
+      return await work({ eventLog, projectionsDb, retrievalDb, blobStore });
     } finally {
       eventLog.close();
       projectionsDb.close();
