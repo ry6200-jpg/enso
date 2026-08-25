@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { User } from "firebase/auth";
 import ZodiacSidebar from "./components/ZodiacSidebar";
 import ReportPanel from "./components/ReportPanel";
+import DirectoryPanel, { type DirectoryResponse } from "./components/DirectoryPanel";
 import { authFetch, signInWithGoogle, signOut, watchAuthState } from "./lib/firebaseClient";
 import { isPinnedToBottom } from "./lib/chatScroll";
 import { downloadTranscript } from "./lib/transcriptDownload";
@@ -194,6 +195,13 @@ export default function Page() {
   // Report page (Stage A, enso-report-methodology.md) — the panel itself owns all its own
   // fetch/loading/prediction-capture state; this is purely whether it's mounted at all.
   const [reportPanelOpen, setReportPanelOpen] = useState(false);
+  // Admin-only entity view (part 2): hiding the menu item is secondary, not the control — the
+  // real gate is server-side (requireAdminUserId, a bare 404 before any work for a non-admin).
+  // This is purely a visibility flag, checked once by asking the route itself; a non-admin's
+  // browser gets a fast 404 with zero DB work behind it, same as anyone probing the route directly.
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [directoryData, setDirectoryData] = useState<DirectoryResponse | null>(null);
+  const [directoryPanelOpen, setDirectoryPanelOpen] = useState(false);
   // Below md (Tailwind's breakpoint, matching ZodiacSidebar's own `hidden
   // md:flex`), the desktop placeholder's parenthetical wraps to three lines
   // and explains a keyboard shortcut a phone doesn't have. matchMedia, not
@@ -314,6 +322,27 @@ export default function Page() {
       .catch((err) => {
         // eslint-disable-next-line no-console
         console.error("GET /api/history threw before a response was received:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.uid]);
+
+  // Admin-only entity view (part 2): a single check once signed in, deciding ONLY whether to
+  // show the menu item — never the actual gate, which is server-side on every real request to
+  // the route itself. A non-admin gets a fast 404 here with no DB work behind it; nothing about
+  // this check reveals more than "this menu item exists," which a non-admin can't act on anyway.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    authFetch("/api/directory")
+      .then(async (r) => {
+        if (cancelled) return;
+        setIsAdmin(r.status !== 404);
+        if (r.ok) setDirectoryData((await r.json()) as DirectoryResponse);
+      })
+      .catch(() => {
+        if (!cancelled) setIsAdmin(false);
       });
     return () => {
       cancelled = true;
@@ -882,6 +911,18 @@ export default function Page() {
                 >
                   Report
                 </button>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setDirectoryPanelOpen(true);
+                    }}
+                    className="w-full text-left px-3 py-1.5 text-sm text-stone-600 hover:bg-stone-50 hover:text-stone-900"
+                  >
+                    Entity directory
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => void handleDownloadTranscript()}
@@ -1042,6 +1083,7 @@ export default function Page() {
       )}
 
       {reportPanelOpen && <ReportPanel onClose={() => setReportPanelOpen(false)} />}
+      {directoryPanelOpen && directoryData && <DirectoryPanel data={directoryData} onClose={() => setDirectoryPanelOpen(false)} />}
     </div>
   );
 }
