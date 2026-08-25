@@ -52,6 +52,35 @@ describe("getPeopleView (Phase 7 Part 2 — provenance-traceable memory surface)
     expect(view[0]!.attributes).toEqual([{ attribute: "location", facts: [{ value: "Seattle", toldOn: msg.occurredAt ?? msg.recordedAt, sourceEventIds: [msg.id, extraction.id] }] }]);
   });
 
+  it("EN-115: never renders 'told on' for an inferred attribute row, even when a real message_sent event exists in its provenance", () => {
+    const msg = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "Elena mentioned being near downtown a lot lately.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    const elenaId = newId();
+    projections.insertEntity({
+      id: elenaId,
+      user_id: PRIMARY_USER_ID,
+      name: "Elena",
+      confirmed: 0,
+      source_event_ids: JSON.stringify([msg.id]),
+      extractor_version: "message-v1",
+      pending_disambiguation: null,
+      created_at: new Date().toISOString()
+    });
+    projections.insertEntityAttribute({
+      id: newId(),
+      user_id: PRIMARY_USER_ID,
+      entity_id: elenaId,
+      attribute: "location",
+      value: "Seattle",
+      source_event_ids: JSON.stringify([msg.id]),
+      created_at: new Date().toISOString(),
+      provenance_kind: "inferred"
+    });
+
+    const view = getPeopleView(eventLog, projections, PRIMARY_USER_ID);
+
+    expect(view[0]!.attributes).toEqual([{ attribute: "location", facts: [{ value: "Seattle", toldOn: null, sourceEventIds: [msg.id] }] }]);
+  });
+
   it("surfaces a structural relationship to the primary user, with direction and provenance", () => {
     const msg = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "My mother Elena lives in Seattle.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
     const elenaId = newId();

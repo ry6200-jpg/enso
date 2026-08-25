@@ -1,6 +1,6 @@
 import { newId } from "../ids.js";
 import type { EntityAttributeRow, ProjectionsDb } from "../projections/db.js";
-import type { AttributeType } from "../projections/attributeVocabulary.js";
+import type { AttributeType, ProvenanceKind } from "../projections/attributeVocabulary.js";
 import { MONTH_NAMES, parseIsoDate } from "../zodiac/zodiac.js";
 
 /**
@@ -51,13 +51,22 @@ import { MONTH_NAMES, parseIsoDate } from "../zodiac/zodiac.js";
  * so corruption is visible in the moment, not discovered weeks later by
  * inspecting the database directly.
  */
+/**
+ * provenanceKind (EN-115) defaults to 'stated' — every call site in this
+ * codebase today extracts from something the owner actually said, so
+ * 'stated' is correct with no caller changes needed. A future
+ * inference-writer (e.g. residence inference, blocked on this column
+ * existing — see enso-rebuild-requirements.md's "Residence inference"
+ * note) passes 'inferred' explicitly.
+ */
 export function assertAttribute(
   projections: ProjectionsDb,
   userId: string,
   entityId: string,
   attribute: EntityAttributeRow["attribute"],
   value: string,
-  sourceEventIds: string[]
+  sourceEventIds: string[],
+  provenanceKind: ProvenanceKind = "stated"
 ): EntityAttributeRow | null {
   if (!isPlausibleWriteTimeValue(attribute, value)) {
     // eslint-disable-next-line no-console
@@ -73,7 +82,8 @@ export function assertAttribute(
     attribute,
     value,
     source_event_ids: JSON.stringify([...new Set(sourceEventIds)].sort()),
-    created_at: new Date().toISOString()
+    created_at: new Date().toISOString(),
+    provenance_kind: provenanceKind
   };
   projections.insertEntityAttribute(row);
   return row;
@@ -194,11 +204,25 @@ export interface ResolvedAttribute {
 export function resolveAttribute(history: EntityAttributeRow[]): ResolvedAttribute | null {
   if (history.length === 0) return null;
   const attribute = history[0]!.attribute;
-  const valid = history.filter((row) => isValidAttributeValue(attribute, row.value));
+
+  // EN-115: provenance decides which SUBSET of history is even eligible to
+  // resolve or conflict. A stated value always wins over an inferred one
+  // for the same (entity, attribute): inferred rows are excluded entirely
+  // from resolution whenever ANY stated row exists, so an inferred value
+  // disagreeing with a stated one is never even compared, let alone
+  // surfaced as a conflict — it's silently superseded. Falls back to
+  // inferred-only resolution only when no stated row exists at all (today:
+  // never, since nothing writes 'inferred' yet — every row defaults to
+  // 'stated', so eligibleHistory === history for all real data right now).
+  const statedHistory = history.filter((row) => (row.provenance_kind ?? "stated") === "stated");
+  const eligibleHistory = statedHistory.length > 0 ? statedHistory : history.filter((row) => row.provenance_kind === "inferred");
+  if (eligibleHistory.length === 0) return null;
+
+  const valid = eligibleHistory.filter((row) => isValidAttributeValue(attribute, row.value));
   if (valid.length === 0) return null;
 
   const resolvedRow = ATTRIBUTE_MUTABILITY[attribute] === "mutable" ? valid[valid.length - 1]! : valid[0]!;
-  const conflicting = ATTRIBUTE_MUTABILITY[attribute] === "immutable" ? history.filter((row) => row.id !== resolvedRow.id && row.value !== resolvedRow.value) : [];
+  const conflicting = ATTRIBUTE_MUTABILITY[attribute] === "immutable" ? eligibleHistory.filter((row) => row.id !== resolvedRow.id && row.value !== resolvedRow.value) : [];
 
   return { value: resolvedRow.value, row: resolvedRow, conflicting };
 }

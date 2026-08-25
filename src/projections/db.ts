@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { ATTRIBUTE_TYPES, type AttributeType } from "./attributeVocabulary.js";
+import { ATTRIBUTE_TYPES, type AttributeType, type ProvenanceKind } from "./attributeVocabulary.js";
 
 export interface EntityRow {
   id: string;
@@ -74,6 +74,17 @@ export interface EntityAttributeRow {
   value: string;
   source_event_ids: string; // JSON array of event ULIDs
   created_at: string;
+  /**
+   * EN-115: 'stated' (the owner said it directly) or 'inferred' (Enso
+   * derived it from a pattern of other evidence — nothing writes this yet;
+   * see attributeVocabulary.ts). Optional on this interface — not because a
+   * row read back from SQLite is ever actually missing it (the column is
+   * NOT NULL DEFAULT 'stated'), but so the many existing call sites across
+   * the test suite that construct a row literal before this field existed
+   * keep compiling unchanged. insertEntityAttribute defaults it to
+   * 'stated' when omitted — correct for every writer that exists today.
+   */
+  provenance_kind?: ProvenanceKind;
 }
 
 /**
@@ -199,7 +210,8 @@ export class ProjectionsDb {
         attribute TEXT NOT NULL CHECK (attribute IN (${ATTRIBUTE_TYPES.map((a) => `'${a}'`).join(", ")})),
         value TEXT NOT NULL,
         source_event_ids TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        provenance_kind TEXT NOT NULL DEFAULT 'stated'
       );
       CREATE INDEX IF NOT EXISTS idx_attributes_user_id ON entity_attributes(user_id);
       CREATE INDEX IF NOT EXISTS idx_attributes_entity_id ON entity_attributes(entity_id);
@@ -221,6 +233,21 @@ export class ProjectionsDb {
       CREATE INDEX IF NOT EXISTS idx_perception_fact_ref ON perception_logs(fact_ref);
     `);
     this.migrateEntityAttributesCheckConstraint();
+    this.migrateEntityAttributesAddColumn("provenance_kind", `TEXT NOT NULL DEFAULT 'stated'`);
+  }
+
+  /**
+   * EN-115/116: adds one column to a pre-existing on-disk entity_attributes
+   * table, idempotently. Unlike the CHECK-constraint change above (EN-114),
+   * a new column with a constant DEFAULT is something SQLite's ALTER TABLE
+   * supports directly — no rename/recreate/copy dance needed. Detected via
+   * PRAGMA table_info rather than sqlite_master text (more precise for "does
+   * this exact column exist" than substring-matching stored DDL).
+   */
+  private migrateEntityAttributesAddColumn(column: string, definition: string): void {
+    const columns = this.db.prepare(`PRAGMA table_info(entity_attributes)`).all() as { name: string }[];
+    if (columns.some((c) => c.name === column)) return;
+    this.db.exec(`ALTER TABLE entity_attributes ADD COLUMN ${column} ${definition}`);
   }
 
   /**
@@ -405,10 +432,10 @@ export class ProjectionsDb {
   insertEntityAttribute(row: EntityAttributeRow): void {
     this.db
       .prepare(
-        `INSERT INTO entity_attributes (id, user_id, entity_id, attribute, value, source_event_ids, created_at)
-         VALUES (@id, @user_id, @entity_id, @attribute, @value, @source_event_ids, @created_at)`
+        `INSERT INTO entity_attributes (id, user_id, entity_id, attribute, value, source_event_ids, created_at, provenance_kind)
+         VALUES (@id, @user_id, @entity_id, @attribute, @value, @source_event_ids, @created_at, @provenance_kind)`
       )
-      .run(row);
+      .run({ ...row, provenance_kind: row.provenance_kind ?? "stated" });
   }
 
   /**

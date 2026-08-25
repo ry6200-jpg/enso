@@ -236,7 +236,11 @@ export function getPeopleView(eventLog: EventLog, projections: ProjectionsDb, us
     const byAttribute = new Map<string, ProvenancedFact[]>();
     for (const row of attributeRows) {
       const sourceEventIds = JSON.parse(row.source_event_ids) as string[];
-      const fact: ProvenancedFact = { value: row.value, toldOn: resolveToldOn(eventLog, sourceEventIds), sourceEventIds };
+      // EN-115: an inferred row has no real message_sent event behind it —
+      // resolving toldOn for one would either render a false "you told me
+      // this on..." or break resolveToldOn's own assumption outright.
+      const toldOn = row.provenance_kind === "inferred" ? null : resolveToldOn(eventLog, sourceEventIds);
+      const fact: ProvenancedFact = { value: row.value, toldOn, sourceEventIds };
       byAttribute.set(row.attribute, [...(byAttribute.get(row.attribute) ?? []), fact]);
     }
 

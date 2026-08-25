@@ -49,11 +49,15 @@ describe("entity_attributes CHECK-constraint migration (EN-114)", () => {
 
     const projections = new ProjectionsDb(dbPath);
 
-    // The pre-existing row survived the rebuild unchanged.
+    // The pre-existing row survived the rebuild unchanged, and picked up
+    // provenance_kind='stated' via the ADD COLUMN migration (EN-115) that
+    // runs immediately after — correct, since every row that predates
+    // provenance_kind existing came from a real stated assertion.
     const history = projections.listEntityAttributeHistory(PRIMARY_USER_ID, entityId, "location");
     expect(history).toHaveLength(1);
     expect(history[0]!.id).toBe("pre-1");
     expect(history[0]!.value).toBe("Seattle");
+    expect(history[0]!.provenance_kind).toBe("stated");
 
     // A new attribute type — impossible under the old CHECK — now works.
     expect(() =>
@@ -74,5 +78,35 @@ describe("entity_attributes CHECK-constraint migration (EN-114)", () => {
     const dbPath = freshTestDbPath(import.meta.url, "already-current");
     new ProjectionsDb(dbPath); // first open: fresh table, already current
     expect(() => new ProjectionsDb(dbPath)).not.toThrow(); // second open: must detect "already current" and skip the rebuild
+  });
+});
+
+describe("entity_attributes ADD COLUMN migration (EN-115)", () => {
+  it("a table with the CURRENT CHECK constraint but no provenance_kind column gets it added, existing rows backfilled to 'stated'", () => {
+    const dbPath = freshTestDbPath(import.meta.url, "post-en114-pre-en115");
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    const raw = new Database(dbPath);
+    raw.exec(`
+      CREATE TABLE entity_attributes (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        attribute TEXT NOT NULL CHECK (attribute IN ('birthdate', 'location', 'occupation', 'gender', 'sexual_orientation', 'life_stage')),
+        value TEXT NOT NULL,
+        source_event_ids TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `);
+    const entityId = primaryEntityId(PRIMARY_USER_ID);
+    raw.prepare(
+      `INSERT INTO entity_attributes (id, user_id, entity_id, attribute, value, source_event_ids, created_at)
+       VALUES ('pre-1', ?, ?, 'occupation', 'Engineer', '[]', '2026-01-01T00:00:00.000Z')`
+    ).run(PRIMARY_USER_ID, entityId);
+    raw.close();
+
+    const projections = new ProjectionsDb(dbPath);
+    const history = projections.listEntityAttributeHistory(PRIMARY_USER_ID, entityId, "occupation");
+    expect(history).toHaveLength(1);
+    expect(history[0]!.provenance_kind).toBe("stated");
   });
 });

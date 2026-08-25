@@ -13,6 +13,10 @@ function row(id: string, attribute: EntityAttributeRow["attribute"], value: stri
   return { id, user_id: PRIMARY_USER_ID, entity_id: primaryEntityId(PRIMARY_USER_ID), attribute, value, source_event_ids: "[]", created_at: "2026-01-01T00:00:00.000Z" };
 }
 
+function inferredRow(id: string, attribute: EntityAttributeRow["attribute"], value: string): EntityAttributeRow {
+  return { ...row(id, attribute, value), provenance_kind: "inferred" };
+}
+
 describe("resolveAttribute — pure function (R36/R37: mutability, not format, is the real distinction)", () => {
   it("returns null for empty history", () => {
     expect(resolveAttribute([])).toBeNull();
@@ -73,6 +77,34 @@ describe("resolveAttribute — pure function (R36/R37: mutability, not format, i
       expect(resolved.value).toBe("a later clarification");
       expect(resolved.conflicting).toEqual([]);
     }
+  });
+
+  it("EN-115 (mutable): a stated value silently supersedes an inferred one, even when the inferred row is LATER — never flagged as a conflict", () => {
+    const history = [row("a", "location", "Seattle"), inferredRow("b", "location", "Portland")];
+    const resolved = resolveAttribute(history)!;
+    expect(resolved.value).toBe("Seattle");
+    expect(resolved.row.id).toBe("a");
+    expect(resolved.conflicting).toEqual([]);
+  });
+
+  it("EN-115 (immutable): a stated value silently supersedes a disagreeing inferred one — not surfaced as a conflict the way two stated values would be", () => {
+    const history = [row("a", "birthdate", "1970-04-24"), inferredRow("b", "birthdate", "1983")];
+    const resolved = resolveAttribute(history)!;
+    expect(resolved.value).toBe("1970-04-24");
+    expect(resolved.conflicting).toEqual([]);
+  });
+
+  it("EN-115: an inferred value resolves only when NO stated row exists at all for that (entity, attribute)", () => {
+    const history = [inferredRow("a", "location", "Portland")];
+    const resolved = resolveAttribute(history)!;
+    expect(resolved.value).toBe("Portland");
+  });
+
+  it("EN-115: multiple stated values still conflict/resolve normally amongst themselves, ignoring any inferred rows present", () => {
+    const history = [row("a", "birthdate", "1970-04-24"), row("b", "birthdate", "1983"), inferredRow("c", "birthdate", "1999")];
+    const resolved = resolveAttribute(history)!;
+    expect(resolved.value).toBe("1970-04-24");
+    expect(resolved.conflicting.map((r) => r.value)).toEqual(["1983"]);
   });
 });
 
