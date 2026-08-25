@@ -8,12 +8,15 @@ import DirectoryPanel, { type DirectoryResponse } from "./components/DirectoryPa
 import { authFetch, signInWithGoogle, signOut, watchAuthState } from "./lib/firebaseClient";
 import { isPinnedToBottom } from "./lib/chatScroll";
 import { downloadTranscript } from "./lib/transcriptDownload";
+import { daySeparatorLabel, formatExactTimestamp, formatInlineTime, isNewLocalDay, shouldShowInlineTime } from "./lib/chatTimestamps";
 
 interface ChatMessage {
   id: string;
   role: "user" | "enso";
   text: string;
   filename?: string;
+  /** ISO-8601 UTC, the event's own recorded time (see conversationHistory.ts) — never decoded from a ULID. Optimistic client-added messages (sent, not yet server-confirmed) get the client's own clock as a placeholder, reconciled with the real value on the next history fetch. */
+  recordedAt: string;
 }
 
 interface AttachmentStatus {
@@ -202,6 +205,12 @@ export default function Page() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [directoryData, setDirectoryData] = useState<DirectoryResponse | null>(null);
   const [directoryPanelOpen, setDirectoryPanelOpen] = useState(false);
+  // Chat timestamps (part 3): exact timestamp on hover uses a native `title` attribute (zero extra
+  // code, works everywhere a mouse does) — this state is ONLY for the long-press case on touch
+  // devices, where `title` never fires. longPressTimer tracks the pending timer so a touch that
+  // ends/moves before it fires never shows anything (a tap must stay a tap, not a delayed popup).
+  const [exactTimestampForMessageId, setExactTimestampForMessageId] = useState<string | null>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Below md (Tailwind's breakpoint, matching ZodiacSidebar's own `hidden
   // md:flex`), the desktop placeholder's parenthetical wraps to three lines
   // and explains a keyboard shortcut a phone doesn't have. matchMedia, not
@@ -671,6 +680,29 @@ export default function Page() {
     );
   }
 
+  /**
+   * Chat timestamps batch, part 3: a one-off, imperative history refetch —
+   * distinct from the mount effect above (which owns its own cancellation
+   * flag and the 403/sign-out handling for a genuinely fresh page load).
+   * Used ONLY after an attachment send succeeds, to replace the optimistic
+   * message with the server's own explicit-event-ID-resolved filename
+   * (see sendMessage's comment on why the filename is never guessed
+   * client-side). Errors here are non-fatal — the reply itself already
+   * succeeded — so this fails silently to a console warning rather than
+   * disrupting the conversation the user is already looking at.
+   */
+  async function refetchHistory() {
+    try {
+      const r = await authFetch("/api/history");
+      if (!r.ok) return;
+      const json = (await r.json()) as { messages: ChatMessage[] };
+      setMessages(json.messages);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Post-attachment history refetch failed (reply itself already succeeded):", err);
+    }
+  }
+
   async function sendMessage() {
     const text = input.trim();
     const file = pendingFile;
@@ -695,7 +727,14 @@ export default function Page() {
     // must NOT interrupt that — see scrollToBottomIfPinned above).
     isPinnedRef.current = true;
     setShowJumpToBottom(false);
-    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", text, filename: file?.name }]);
+    // Chat timestamps batch, part 3: the attachment filename is deliberately NOT set here from
+    // `file?.name` — that's a client-side guess, positional in spirit even though it's usually
+    // right, and the old version of this line is exactly the thing that "vanishes on any refetch"
+    // (a real reported bug): once real history replaces this optimistic entry, the ONLY source of
+    // truth for the filename is the server's explicit attachmentEventId resolution
+    // (conversationHistory.ts), never this line. refetchHistory() below pulls that real value in
+    // as soon as it exists, rather than trusting a guess indefinitely.
+    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", text, recordedAt: new Date().toISOString() }]);
 
     try {
       let attachmentEventId: string | undefined;
@@ -705,7 +744,7 @@ export default function Page() {
         const uploadRes = await authFetch("/api/attachments", { method: "POST", body: formData });
         const uploadJson = await uploadRes.json();
         if (!uploadRes.ok) {
-          setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "enso", text: `(couldn't attach ${file.name}: ${uploadJson.error})` }]);
+          setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "enso", text: `(couldn't attach ${file.name}: ${uploadJson.error})`, recordedAt: new Date().toISOString() }]);
           return;
         }
         attachmentEventId = uploadJson.uploadEventId;
@@ -721,15 +760,19 @@ export default function Page() {
       const res = await authFetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, attachmentEventId, locationContext, coordinates }) });
       const json = await res.json();
       if (!res.ok) {
-        setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "enso", text: `(reply failed — your message was still saved: ${json.error})` }]);
+        setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "enso", text: `(reply failed — your message was still saved: ${json.error})`, recordedAt: new Date().toISOString() }]);
       } else {
-        setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "enso", text: json.replyText }]);
+        setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "enso", text: json.replyText, recordedAt: new Date().toISOString() }]);
         // Item 7: /api/chat awaits extraction (refreshMemoryAfterTurn)
         // before responding, so any attribute — a just-established
         // birthdate, say — is already committed by the time this resolves.
         // Bump the sidebar's refresh signal so it re-fetches instead of
         // only ever checking once on page load.
         setSidebarRefreshSignal((n) => n + 1);
+        // Attachment filenames only ever come from the server's explicit event-ID resolution
+        // (see the comment on the optimistic append above) — pull the real value in now rather
+        // than leaving the bubble attachment-less until whatever next reload happens to refetch.
+        if (attachmentEventId) void refetchHistory();
       }
     } finally {
       setSending(false);
@@ -974,27 +1017,57 @@ export default function Page() {
           <div className="flex-1 min-h-0 relative">
             <div ref={listRef} className="h-full overflow-y-auto overscroll-contain">
               <div ref={contentRef} className="p-4 flex flex-col gap-3">
-                {messages.map((m) => (
-                  <div
-                    key={m.id}
-                    className={`max-w-lg rounded-lg px-4 py-3 text-[1.0625rem] leading-[1.45] whitespace-pre-wrap ${
-                      m.role === "user" ? "self-end text-white" : "self-start bg-white border border-stone-200"
-                    }`}
-                    style={m.role === "user" ? { backgroundColor: "var(--enso-red)", color: "#faf7f2" } : { color: "var(--enso-ink)" }}
-                  >
-                    {/* Secondary text, scaled proportionally to the 17px
-                        body above (0.75rem was proportional to the old
-                        16px body — 0.75 * 17/16 ≈ 0.8rem keeps the same
-                        relative weight against the new size, not just an
-                        unscaled leftover). No explicit leading override:
-                        a unitless line-height (leading-[1.45] above) is
-                        inherited as the RATIO, not the computed pixel
-                        value, so this recomputes correctly against its
-                        own smaller font-size automatically. */}
-                    {m.filename && <div className="text-[0.8rem] opacity-80 mb-1">Attached: {m.filename}</div>}
-                    {m.text}
-                  </div>
-                ))}
+                {messages.map((m, i) => {
+                  // Chat timestamps (part 3): rendered in the owner's own local timezone via the
+                  // ambient Tier 3 timezone that's already always-on (see the timezone effect
+                  // above) — falls back to UTC only on the rare page load where it hasn't resolved
+                  // yet. Day separators and gap-based inline times are computed from each message's
+                  // own recordedAt against the PREVIOUS message's, never a running/mutated total.
+                  const timezone = locationContext.timezone ?? "UTC";
+                  const prevRecordedAt = i > 0 ? messages[i - 1]!.recordedAt : null;
+                  const newDay = isNewLocalDay(prevRecordedAt, m.recordedAt, timezone);
+                  const showTime = newDay || shouldShowInlineTime(prevRecordedAt, m.recordedAt);
+                  const exactTimestamp = formatExactTimestamp(m.recordedAt, timezone);
+
+                  return (
+                    <div key={m.id}>
+                      {newDay && <div className="text-center text-xs text-stone-400 my-2">{daySeparatorLabel(m.recordedAt, timezone)}</div>}
+                      {showTime && <div className={`text-[0.7rem] text-stone-400 mb-0.5 ${m.role === "user" ? "text-right" : "text-left"}`}>{formatInlineTime(m.recordedAt, timezone)}</div>}
+                      <div
+                        className={`max-w-lg rounded-lg px-4 py-3 text-[1.0625rem] leading-[1.45] whitespace-pre-wrap ${
+                          m.role === "user" ? "self-end text-white" : "self-start bg-white border border-stone-200"
+                        }`}
+                        style={m.role === "user" ? { backgroundColor: "var(--enso-red)", color: "#faf7f2" } : { color: "var(--enso-ink)" }}
+                        title={exactTimestamp}
+                        onTouchStart={() => {
+                          longPressTimerRef.current = setTimeout(() => setExactTimestampForMessageId(m.id), 500);
+                        }}
+                        onTouchEnd={() => {
+                          if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+                          setExactTimestampForMessageId(null);
+                        }}
+                        onTouchMove={() => {
+                          if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+                        }}
+                      >
+                        {/* Secondary text, scaled proportionally to the 17px
+                            body above (0.75rem was proportional to the old
+                            16px body — 0.75 * 17/16 ≈ 0.8rem keeps the same
+                            relative weight against the new size, not just an
+                            unscaled leftover). No explicit leading override:
+                            a unitless line-height (leading-[1.45] above) is
+                            inherited as the RATIO, not the computed pixel
+                            value, so this recomputes correctly against its
+                            own smaller font-size automatically. */}
+                        {m.filename && <div className="text-[0.8rem] opacity-80 mb-1">Attached: {m.filename}</div>}
+                        {m.text}
+                        {exactTimestampForMessageId === m.id && (
+                          <div className="text-[0.7rem] opacity-80 mt-1 border-t border-white/20 pt-1">{exactTimestamp}</div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 

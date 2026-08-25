@@ -21,10 +21,19 @@ describe("getConversationHistory (item 9: conversation appeared to vanish on ref
     const m2 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "work has been busy", attachmentOnly: false }, userId: PRIMARY_USER_ID });
 
     expect(getConversationHistory(eventLog, PRIMARY_USER_ID)).toEqual([
-      { id: m1.id, role: "user", text: "Richard" },
-      { id: r1.id, role: "enso", text: "Nice to meet you, Richard." },
-      { id: m2.id, role: "user", text: "work has been busy" }
+      { id: m1.id, role: "user", text: "Richard", recordedAt: m1.recordedAt },
+      { id: r1.id, role: "enso", text: "Nice to meet you, Richard.", recordedAt: r1.recordedAt },
+      { id: m2.id, role: "user", text: "work has been busy", recordedAt: m2.recordedAt }
     ]);
+  });
+
+  it("chat timestamps batch, part 3: recordedAt is sourced from the event's own recorded_at field, exactly, never decoded from the ULID or approximated", () => {
+    const m1 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "hello", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    const [message] = getConversationHistory(eventLog, PRIMARY_USER_ID);
+    expect(message!.recordedAt).toBe(m1.recordedAt);
+    // A real, parseable ISO-8601 timestamp — not the ULID string itself, not a placeholder.
+    expect(new Date(message!.recordedAt).toString()).not.toBe("Invalid Date");
+    expect(message!.recordedAt).not.toBe(m1.id);
   });
 
   it("excludes non-conversational events (uploads, extractions) from the visible transcript", () => {

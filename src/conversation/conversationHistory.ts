@@ -9,6 +9,8 @@ export interface ConversationMessage {
   text: string;
   /** Set when this message carries messageCapture.ts's attachmentEventId link — looked up by that explicit id, never inferred from the event's position in the log. */
   filename?: string;
+  /** Chat timestamps batch, part 3: the event's own `recordedAt` (ISO-8601 UTC), never decoded from the ULID — the client renders it in the owner's local timezone. */
+  recordedAt: string;
 }
 
 /**
@@ -29,7 +31,8 @@ export function getConversationHistory(eventLog: EventLog, userId: string): Conv
       const base: ConversationMessage = {
         id: e.id,
         role: e.type === "message_sent" ? "user" : "enso",
-        text: (e.payload as { text: string }).text
+        text: (e.payload as { text: string }).text,
+        recordedAt: e.recordedAt
       };
       if (e.type !== "message_sent") return base;
 

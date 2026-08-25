@@ -47,12 +47,12 @@ export async function GET(request: Request): Promise<Response> {
   });
 
   if (messages.length === 0) {
-    return NextResponse.json({ messages: [{ id: "proactive-opener", role: "enso" as const, text: PROACTIVE_OPENER_MESSAGE }] });
+    return NextResponse.json({ messages: [{ id: "proactive-opener", role: "enso" as const, text: PROACTIVE_OPENER_MESSAGE, recordedAt: new Date().toISOString() }] });
   }
 
   if (welcomeBack?.eligible) {
     const greetingText = await generateWelcomeBackMessage(getChatRouter(), welcomeBack.lastUserMessageText);
-    return NextResponse.json({ messages: [...messages, { id: "welcome-back", role: "enso" as const, text: greetingText }] });
+    return NextResponse.json({ messages: [...messages, { id: "welcome-back", role: "enso" as const, text: greetingText, recordedAt: new Date().toISOString() }] });
   }
 
   return NextResponse.json({ messages });
