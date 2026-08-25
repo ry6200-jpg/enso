@@ -53,6 +53,10 @@ Do not re-litigate settled decisions. Section 12 questions marked RESOLVED are c
 - Cleanup queries scoped by anything broader than explicit test-entity IDs (time ranges, recency) are prohibited.
 - If an operation could touch real user data destructively, stop and confirm before running it.
 
+## Dev tooling
+
+- `scripts/mintAdminIdToken.ts` (`npm run mint-token -- <uid>`) mints a real Firebase ID token for a given uid from the terminal, no browser needed — for testing authenticated/admin routes when DevTools-based token extraction isn't available (e.g. Chromebooks). It reads only `FIREBASE_SERVICE_ACCOUNT_JSON` and `NEXT_PUBLIC_FIREBASE_API_KEY` from the environment (no hardcoded credentials or emails); the resulting token is a real bearer credential for whatever uid you pass — handle it like a password, don't paste it anywhere public.
+
 ## Prompts and provider work
 
 - Provider capabilities (PDF input, tool-calling shape, caching, limits) are verified at build time per EN-082 — never assumed from memory.

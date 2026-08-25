@@ -9,6 +9,7 @@
     "test:watch": "vitest --exclude '**/*.live.test.ts'",
     "demo": "tsx scripts/demo.ts",
     "chat": "node --env-file=.env --import tsx scripts/chat.ts",
+    "mint-token": "node --env-file=.env --import tsx scripts/mintAdminIdToken.ts",
     "typecheck": "tsc --noEmit",
     "dev": "next dev --webpack",
     "build": "next build --webpack",
