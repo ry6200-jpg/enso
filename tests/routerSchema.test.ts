@@ -121,4 +121,18 @@ describe("buildRouterSystemPrompt (part 4: travelContext section)", () => {
     const prompt = buildRouterSystemPrompt(BASE_REQUEST);
     expect(prompt).toMatch(/destinationHint/);
   });
+
+  it("EN-118: the residence-fallback description is anchored to what it actually requires (heading home specifically), not an abstract 'this is how the mechanism works' sentence sitting in context every turn", () => {
+    const prompt = buildRouterSystemPrompt(BASE_REQUEST);
+    // The old abstract-mechanism sentence is gone (1b: same fault as AMBIENT_TRAVEL_INSTRUCTION's old "may include").
+    expect(prompt).not.toMatch(/the owner's own stated residence is used automatically as the default destination when one is on record/);
+    // Replaced with an explicit gate: null is only correct when the moment specifically implies home.
+    expect(prompt).toMatch(/Leave destinationHint null ONLY when relevant is true AND the moment specifically implies the owner heading to their OWN home/);
+  });
+
+  it("the fallback must not fire on a vague remark with no sense of where — the router is told to set relevant=false rather than guess at an unnamed destination", () => {
+    const prompt = buildRouterSystemPrompt(BASE_REQUEST);
+    expect(prompt).toMatch(/A general timing\/attendance decision with no sense of WHERE/);
+    expect(prompt).toMatch(/set relevant=false instead of guessing at a destination that was never actually there/);
+  });
 });
