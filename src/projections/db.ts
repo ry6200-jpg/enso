@@ -85,6 +85,14 @@ export interface EntityAttributeRow {
    * 'stated' when omitted — correct for every writer that exists today.
    */
   provenance_kind?: ProvenanceKind;
+  /**
+   * EN-116: whether this fact may be used by the future cross-user "En"
+   * layer to surface a possible connection to another user. Same
+   * optionality reasoning as provenance_kind above; insertEntityAttribute
+   * defaults it to 0 (false) when omitted — no writer anywhere can
+   * currently set it true (no consent flow exists yet).
+   */
+  matching_eligible?: 0 | 1;
 }
 
 /**
@@ -211,7 +219,8 @@ export class ProjectionsDb {
         value TEXT NOT NULL,
         source_event_ids TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        provenance_kind TEXT NOT NULL DEFAULT 'stated'
+        provenance_kind TEXT NOT NULL DEFAULT 'stated',
+        matching_eligible INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS idx_attributes_user_id ON entity_attributes(user_id);
       CREATE INDEX IF NOT EXISTS idx_attributes_entity_id ON entity_attributes(entity_id);
@@ -234,6 +243,7 @@ export class ProjectionsDb {
     `);
     this.migrateEntityAttributesCheckConstraint();
     this.migrateEntityAttributesAddColumn("provenance_kind", `TEXT NOT NULL DEFAULT 'stated'`);
+    this.migrateEntityAttributesAddColumn("matching_eligible", `INTEGER NOT NULL DEFAULT 0`);
   }
 
   /**
@@ -432,10 +442,10 @@ export class ProjectionsDb {
   insertEntityAttribute(row: EntityAttributeRow): void {
     this.db
       .prepare(
-        `INSERT INTO entity_attributes (id, user_id, entity_id, attribute, value, source_event_ids, created_at, provenance_kind)
-         VALUES (@id, @user_id, @entity_id, @attribute, @value, @source_event_ids, @created_at, @provenance_kind)`
+        `INSERT INTO entity_attributes (id, user_id, entity_id, attribute, value, source_event_ids, created_at, provenance_kind, matching_eligible)
+         VALUES (@id, @user_id, @entity_id, @attribute, @value, @source_event_ids, @created_at, @provenance_kind, @matching_eligible)`
       )
-      .run({ ...row, provenance_kind: row.provenance_kind ?? "stated" });
+      .run({ ...row, provenance_kind: row.provenance_kind ?? "stated", matching_eligible: row.matching_eligible ?? 0 });
   }
 
   /**

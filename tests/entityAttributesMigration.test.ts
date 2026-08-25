@@ -50,14 +50,16 @@ describe("entity_attributes CHECK-constraint migration (EN-114)", () => {
     const projections = new ProjectionsDb(dbPath);
 
     // The pre-existing row survived the rebuild unchanged, and picked up
-    // provenance_kind='stated' via the ADD COLUMN migration (EN-115) that
-    // runs immediately after — correct, since every row that predates
-    // provenance_kind existing came from a real stated assertion.
+    // provenance_kind='stated'/matching_eligible=0 via the ADD COLUMN
+    // migrations (EN-115/116) that run immediately after — correct, since
+    // every row that predates those columns came from a real stated
+    // assertion and no consent flow has ever existed to set the latter.
     const history = projections.listEntityAttributeHistory(PRIMARY_USER_ID, entityId, "location");
     expect(history).toHaveLength(1);
     expect(history[0]!.id).toBe("pre-1");
     expect(history[0]!.value).toBe("Seattle");
     expect(history[0]!.provenance_kind).toBe("stated");
+    expect(history[0]!.matching_eligible).toBe(0);
 
     // A new attribute type — impossible under the old CHECK — now works.
     expect(() =>
@@ -81,8 +83,8 @@ describe("entity_attributes CHECK-constraint migration (EN-114)", () => {
   });
 });
 
-describe("entity_attributes ADD COLUMN migration (EN-115)", () => {
-  it("a table with the CURRENT CHECK constraint but no provenance_kind column gets it added, existing rows backfilled to 'stated'", () => {
+describe("entity_attributes ADD COLUMN migrations (EN-115/116)", () => {
+  it("a table with the CURRENT CHECK constraint but no provenance_kind/matching_eligible columns gets both added, existing rows backfilled correctly", () => {
     const dbPath = freshTestDbPath(import.meta.url, "post-en114-pre-en115");
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     const raw = new Database(dbPath);
@@ -108,5 +110,6 @@ describe("entity_attributes ADD COLUMN migration (EN-115)", () => {
     const history = projections.listEntityAttributeHistory(PRIMARY_USER_ID, entityId, "occupation");
     expect(history).toHaveLength(1);
     expect(history[0]!.provenance_kind).toBe("stated");
+    expect(history[0]!.matching_eligible).toBe(0);
   });
 });

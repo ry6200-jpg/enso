@@ -83,7 +83,11 @@ export function assertAttribute(
     value,
     source_event_ids: JSON.stringify([...new Set(sourceEventIds)].sort()),
     created_at: new Date().toISOString(),
-    provenance_kind: provenanceKind
+    provenance_kind: provenanceKind,
+    // EN-116: always 0 — no caller of assertAttribute (the only real
+    // application-level writer) can currently set this true. No UI, no
+    // consent flow exists yet; that's a separate, later decision.
+    matching_eligible: 0
   };
   projections.insertEntityAttribute(row);
   return row;

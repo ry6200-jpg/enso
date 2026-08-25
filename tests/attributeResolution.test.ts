@@ -233,6 +233,17 @@ describe("assertAttribute — write-time tier (item 5b), deliberately different 
     expect(db.listEntityAttributeHistory(PRIMARY_USER_ID, entityId, "occupation")).toHaveLength(1);
   });
 
+  it("EN-115/116: defaults provenance_kind to 'stated' and matching_eligible to 0 — no caller can currently set either otherwise", () => {
+    const result = assertAttribute(db, PRIMARY_USER_ID, entityId, "occupation", "Software engineer", ["ev1"]);
+    expect(result!.provenance_kind).toBe("stated");
+    expect(result!.matching_eligible).toBe(0);
+  });
+
+  it("EN-115: assertAttribute writes 'inferred' when the caller passes it explicitly", () => {
+    const result = assertAttribute(db, PRIMARY_USER_ID, entityId, "location", "Seattle", ["ev1"], "inferred");
+    expect(result!.provenance_kind).toBe("inferred");
+  });
+
   it("still writes a fully valid birthdate", () => {
     const result = assertAttribute(db, PRIMARY_USER_ID, entityId, "birthdate", "4/24/1970", ["ev1"]);
     expect(result).not.toBeNull();
