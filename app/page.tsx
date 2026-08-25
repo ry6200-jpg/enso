@@ -1105,13 +1105,25 @@ export default function Page() {
               e.preventDefault();
               void sendMessage();
             }}
-            className="shrink-0 flex flex-col gap-1.5 px-3 py-2 border-t border-stone-200"
+            // UI batch part 2: min-w-0 so this flex item can never be
+            // pushed wider than its allotted column by an overflowing
+            // child (see the pendingFile chip below) — without it, a long
+            // unbroken filename bled straight past the sidebar divider on
+            // desktop, since a flex item's default min-width is its
+            // content's, not its stretched box's.
+            className="shrink-0 flex flex-col gap-1.5 px-1.5 md:px-3 py-2 border-t border-stone-200 min-w-0"
             style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
           >
             {pendingFile && (
-              <div className="flex items-center gap-2 text-sm text-stone-600 bg-stone-100 border border-stone-300 rounded-lg px-3 py-1.5 w-fit">
-                <span>{pendingFile.name}</span>
-                <button type="button" onClick={() => setPendingFile(null)} className="text-stone-400 hover:text-stone-700" title="Remove attachment">
+              // max-w-full + min-w-0 (on both this and the truncated span)
+              // is what actually clamps a long filename to the composer's
+              // own width instead of it forcing this box wider than its
+              // flex-stretched size — w-fit alone only affects the SHORT-
+              // filename case (hugging content instead of stretching full
+              // width), it does nothing to cap the long-filename case.
+              <div className="flex items-center gap-2 text-sm text-stone-600 bg-stone-100 border border-stone-300 rounded-lg px-3 py-1.5 w-fit max-w-full min-w-0">
+                <span className="truncate min-w-0">{pendingFile.name}</span>
+                <button type="button" onClick={() => setPendingFile(null)} className="shrink-0 text-stone-400 hover:text-stone-700" title="Remove attachment">
                   ×
                 </button>
               </div>
@@ -1120,11 +1132,18 @@ export default function Page() {
                 are fixed ~44px tap targets that stay bottom-aligned as the
                 textarea grows (next commit) — they must never stretch to
                 match its height or vertically re-center mid-growth. */}
-            <div className="flex items-end gap-2">
+            <div className="flex items-end gap-1.5 md:gap-2">
               <input ref={fileInputRef} type="file" onChange={handleFileChange} className="hidden" id="attachment-input" />
               <label
                 htmlFor="attachment-input"
-                className="shrink-0 w-11 h-11 flex items-center justify-center cursor-pointer rounded-xl bg-stone-100 border border-stone-300 text-stone-600 hover:bg-stone-200"
+                // UI batch part 2, mobile only: w-10/h-10 (was w-11/h-11
+                // uniformly) — freeing 4px here is part of giving the
+                // textarea most of the row's width on a 390px phone
+                // screen, where every pixel taken by the fixed-size
+                // buttons is a pixel the placeholder can't use before
+                // wrapping to two lines. Restored to the original 44px on
+                // md: and up, where the row has room to spare.
+                className="shrink-0 w-10 h-10 md:w-11 md:h-11 flex items-center justify-center cursor-pointer rounded-xl bg-stone-100 border border-stone-300 text-stone-600 hover:bg-stone-200"
                 title="Attach a file"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1152,7 +1171,12 @@ export default function Page() {
               <button
                 type="submit"
                 disabled={sending || (!input.trim() && !pendingFile)}
-                className="shrink-0 h-11 rounded-xl text-white px-5 text-base font-medium disabled:opacity-50 hover:opacity-90"
+                // UI batch part 2, mobile only: px-2.5 (was px-5
+                // uniformly) — the other big lever, alongside the attach
+                // button above and the form/gap trims, for giving the
+                // textarea most of the row's width on mobile. Restored to
+                // px-5 on md: and up.
+                className="shrink-0 h-11 rounded-xl text-white px-2.5 md:px-5 text-base font-medium disabled:opacity-50 hover:opacity-90"
                 style={{ backgroundColor: "var(--enso-red)" }}
               >
                 Send
