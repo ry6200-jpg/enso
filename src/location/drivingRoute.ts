@@ -21,6 +21,20 @@ function parseDurationSeconds(duration: string): number | null {
   return Number(match[1]);
 }
 
+/**
+ * EN-112 diagnostic-blind-spot fix: this function used to swallow both
+ * `!res.ok` and any thrown error identically into a bare `return null`,
+ * with nothing logged on either path — the same silence for "the API
+ * rejected the call" as for "there's genuinely no route." That silence is
+ * exactly why this feature's health was ambiguous from the outside
+ * (investigation report, EN-112 Part 0): production logs had zero
+ * evidence either way, so "never called" and "called and failed" looked
+ * identical. Every path now logs — attempted, the HTTP status or thrown
+ * error on failure, and success with the resolved duration — WITHOUT
+ * changing any returned value; every `return null` below is unchanged
+ * from before, only preceded by a log line. Never logs the API key or
+ * the raw coordinates (location data), only outcome/status/duration.
+ */
 export async function getDrivingRoute(
   originLatitude: number,
   originLongitude: number,
@@ -29,6 +43,8 @@ export async function getDrivingRoute(
   apiKey: string | undefined
 ): Promise<DrivingRoute | null> {
   if (!apiKey) return null;
+  // eslint-disable-next-line no-console
+  console.log("getDrivingRoute: calling computeRoutes");
   try {
     const res = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
       method: "POST",
@@ -45,14 +61,32 @@ export async function getDrivingRoute(
       }),
       signal: AbortSignal.timeout(ROUTES_TIMEOUT_MS)
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      // eslint-disable-next-line no-console
+      console.error(`getDrivingRoute: computeRoutes failed (HTTP ${res.status}): ${body.slice(0, 500)}`);
+      return null;
+    }
     const data = (await res.json()) as { routes?: { duration?: string; distanceMeters?: number }[] };
     const route = data.routes?.[0];
-    if (!route?.duration || route.distanceMeters === undefined) return null;
+    if (!route?.duration || route.distanceMeters === undefined) {
+      // eslint-disable-next-line no-console
+      console.error(`getDrivingRoute: computeRoutes returned no usable route (routes array length ${data.routes?.length ?? 0})`);
+      return null;
+    }
     const seconds = parseDurationSeconds(route.duration);
-    if (seconds === null) return null;
-    return { durationMinutes: Math.round(seconds / 60), distanceMeters: route.distanceMeters };
-  } catch {
+    if (seconds === null) {
+      // eslint-disable-next-line no-console
+      console.error(`getDrivingRoute: could not parse duration string ${JSON.stringify(route.duration)}`);
+      return null;
+    }
+    const durationMinutes = Math.round(seconds / 60);
+    // eslint-disable-next-line no-console
+    console.log(`getDrivingRoute: succeeded, durationMinutes=${durationMinutes}, distanceMeters=${route.distanceMeters}`);
+    return { durationMinutes, distanceMeters: route.distanceMeters };
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(`getDrivingRoute: computeRoutes call threw: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }

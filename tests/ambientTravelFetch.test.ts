@@ -100,4 +100,36 @@ describe("fetchAmbientTravelContext (part 4) — the actual API calls, gated by 
     const result = await fetchAmbientTravelContext({ decision: { relevant: true, destinationHint: "the airport" }, ownCoordinates: ORIGIN, primaryResidence: "Seattle", apiKey: "fake-key" });
     expect(result).toBeNull();
   });
+
+  describe("EN-112 diagnostic-blind-spot fix: which destination path was taken is now logged, fallback behavior itself unchanged", () => {
+    it("logs 'explicit destinationHint' when a specific place was named — same result as before", async () => {
+      globalThis.fetch = vi.fn(async (url: string) => {
+        if (url.includes("searchText")) return mockJsonResponse({ places: [{ displayName: { text: "LAX" }, formattedAddress: "addr", location: { latitude: 33.94, longitude: -118.4 } }] });
+        if (url.includes("computeRoutes")) return mockJsonResponse({ routes: [{ duration: "1500s", distanceMeters: 20000 }] });
+        throw new Error(`unexpected fetch: ${url}`);
+      }) as unknown as typeof fetch;
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+      const result = await fetchAmbientTravelContext({ decision: { relevant: true, destinationHint: "the airport" }, ownCoordinates: ORIGIN, primaryResidence: "Seattle", apiKey: "fake-key" });
+
+      expect(result).toEqual({ destinationLabel: "the airport", durationMinutes: 25, distanceMeters: 20000 });
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("explicit destinationHint"));
+    });
+
+    it("logs the entity_attributes.location fallback when no destinationHint was stated — same result as before, and never logs the actual residence value", async () => {
+      globalThis.fetch = vi.fn(async (url: string) => {
+        if (url.includes("geocode")) return mockJsonResponse({ status: "OK", results: [{ geometry: { location: { lat: 47.6, lng: -122.3 } } }] });
+        if (url.includes("computeRoutes")) return mockJsonResponse({ routes: [{ duration: "1800s", distanceMeters: 24000 }] });
+        throw new Error(`unexpected fetch: ${url}`);
+      }) as unknown as typeof fetch;
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+      const result = await fetchAmbientTravelContext({ decision: { relevant: true, destinationHint: null }, ownCoordinates: ORIGIN, primaryResidence: "1600 Amphitheatre Parkway", apiKey: "fake-key" });
+
+      expect(result).toEqual({ destinationLabel: "1600 Amphitheatre Parkway", durationMinutes: 30, distanceMeters: 24000 });
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("fallback"));
+      const allLogged = logSpy.mock.calls.flat().join(" ");
+      expect(allLogged).not.toContain("1600 Amphitheatre Parkway");
+    });
+  });
 });

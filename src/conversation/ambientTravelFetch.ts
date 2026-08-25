@@ -43,10 +43,18 @@ export async function fetchAmbientTravelContext(input: AmbientTravelFetchInput):
   let destinationCoords: { latitude: number; longitude: number } | null;
 
   if (input.decision.destinationHint) {
+    // eslint-disable-next-line no-console
+    console.log("fetchAmbientTravelContext: destination path = explicit destinationHint");
     const place = await findPlaceByName(input.decision.destinationHint, input.ownCoordinates.latitude, input.ownCoordinates.longitude, input.apiKey);
     destinationLabel = input.decision.destinationHint;
     destinationCoords = place ? { latitude: place.latitude, longitude: place.longitude } : null;
   } else if (input.primaryResidence) {
+    // EN-112 diagnostic-blind-spot fix: this is the silent fallback the
+    // investigation flagged (Part 0/Part 1) — behavior is unchanged, this
+    // log line is the only addition, and it never logs the actual
+    // residence value (location data), only that this branch fired.
+    // eslint-disable-next-line no-console
+    console.log("fetchAmbientTravelContext: destination path = entity_attributes.location fallback (no destinationHint stated this turn)");
     destinationCoords = await geocodePlaceName(input.primaryResidence, input.apiKey);
     destinationLabel = input.primaryResidence;
   } else {
