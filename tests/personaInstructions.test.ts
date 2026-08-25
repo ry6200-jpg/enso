@@ -432,4 +432,26 @@ describe("CAPABILITY_HONESTY_INSTRUCTION (EN-117, R56/R57/R58: three faults from
     // Both present, memory honesty first (its existing position), capability honesty right after — never one replacing the other.
     expect(block.indexOf("Only state specific facts")).toBeLessThan(block.indexOf("CAPABILITY HONESTY"));
   });
+
+  it("EN-126 item 1 (\"why not\" must get a cause, not a restated denial): a follow-up why gets explicit guidance to name the missing piece at a human level, never the bare denial again", () => {
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/IF ASKED WHY, GIVE THE ACTUAL REASON ONCE — NEVER THE SAME DENIAL AGAIN/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/name, at a human level, which specific piece is actually missing/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/nothing here tells you about the road between here and there/);
+    // Every existing constraint still governs the "why" answer too — no internals, no invented mechanism.
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/no explaining it in terms of your own architecture/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/never invent a specific technical cause you don't actually know/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/I can't access your device's GPS signal/);
+  });
+
+  it("EN-126 item 2 (echoed exemplar phrasing): the denial sentence now carries explicit vary-your-wording guidance instead of one dominant word to lift", () => {
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/in your own words each time/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/never reuse the same phrasing twice in one conversation/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).toMatch(/tone references only, never a script to repeat/);
+    // The word "reading" no longer dominates the instruction's own opening/topic-ban framing — down from a
+    // heavily-repeated single noun to varied language, the actual mechanism behind the live-caught echo
+    // ("I don't have a live traffic reading" -> "I don't have a live route reading", one word swapped).
+    expect(CAPABILITY_HONESTY_INSTRUCTION).not.toMatch(/a reading that never resolved/);
+    expect(CAPABILITY_HONESTY_INSTRUCTION).not.toMatch(/not having a live reading doesn't take the subject off the table/);
+  });
 });
+
