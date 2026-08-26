@@ -10,6 +10,7 @@ import { isPinnedToBottom } from "./lib/chatScroll";
 import { downloadTranscript } from "./lib/transcriptDownload";
 import { daySeparatorLabel, formatExactTimestamp, formatInlineTime, isNewLocalDay, shouldShowInlineTime } from "./lib/chatTimestamps";
 import { classifyHistoryFetchStatus } from "./lib/historyFetch";
+import { runSequenced } from "./lib/pageLoadReadQueue";
 
 interface ChatMessage {
   id: string;
@@ -305,7 +306,10 @@ export default function Page() {
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
-    authFetch("/api/history")
+    // R71: sequenced against this uid's other mount-time reads (directory,
+    // zodiac-sidebar) so none of them contend at the per-user storage read
+    // lock at the same moment — see pageLoadReadQueue.ts.
+    runSequenced(user.uid, () => authFetch("/api/history"))
       .then(async (r) => {
         // Stale-tab investigation fix: 401 (token missing/expired/invalid)
         // now gets the SAME treatment as 403 (not on the allowlist) — both
@@ -365,7 +369,10 @@ export default function Page() {
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
-    authFetch("/api/directory")
+    // R71: sequenced against this uid's other mount-time reads (history,
+    // zodiac-sidebar) so none of them contend at the per-user storage read
+    // lock at the same moment — see pageLoadReadQueue.ts.
+    runSequenced(user.uid, () => authFetch("/api/directory"))
       .then(async (r) => {
         if (cancelled) return;
         setIsAdmin(r.status !== 404);
@@ -1226,6 +1233,7 @@ export default function Page() {
         </div>
 
         <ZodiacSidebar
+          uid={user?.uid ?? null}
           refreshSignal={sidebarRefreshSignal}
           onAvailabilityChange={setZodiacAvailable}
           mobileOpen={mobileSidebarOpen}

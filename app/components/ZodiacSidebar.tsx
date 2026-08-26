@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { authFetch } from "../lib/firebaseClient";
 import { resolveZodiacSidebarResponse, type ZodiacSidebarData } from "../lib/zodiacSidebarFetch";
+import { runSequenced } from "../lib/pageLoadReadQueue";
 
 /**
  * Batch 2, item 6: the standalone /horoscope and /people pages (and the
@@ -54,6 +55,15 @@ function ZodiacSection({ sign, iconUrl, reflection }: { sign: string; iconUrl: s
 }
 
 interface ZodiacSidebarProps {
+  /**
+   * R71: the signed-in uid, so this component's own mount-time read can be
+   * sequenced against the page's other mount-time reads (history,
+   * directory) at the same per-user storage lock — see
+   * pageLoadReadQueue.ts. null before a user is resolved; the fetch below
+   * is a no-op until a real uid is present, same guard every other
+   * mount-time read in this app already uses.
+   */
+  uid: string | null;
   refreshSignal?: number;
   /** Fires whenever availability changes — the header's mobile-panel trigger only ever renders while this is true (see this file's header comment). */
   onAvailabilityChange?: (available: boolean) => void;
@@ -62,10 +72,11 @@ interface ZodiacSidebarProps {
   onMobileClose?: () => void;
 }
 
-export default function ZodiacSidebar({ refreshSignal = 0, onAvailabilityChange, mobileOpen = false, onMobileClose }: ZodiacSidebarProps) {
+export default function ZodiacSidebar({ uid, refreshSignal = 0, onAvailabilityChange, mobileOpen = false, onMobileClose }: ZodiacSidebarProps) {
   const [data, setData] = useState<ZodiacSidebarData | null>(null);
 
   useEffect(() => {
+    if (!uid) return;
     let cancelled = false;
     // Stale-tab investigation fix: resolveZodiacSidebarResponse checks
     // `ok` before parsing, so an auth failure (401/403) rejects into the
@@ -74,7 +85,11 @@ export default function ZodiacSidebar({ refreshSignal = 0, onAvailabilityChange,
     // comment for why the old `.then((r) => r.json())` made a real
     // failure invisible, rendering as the same message a genuine empty
     // state shows.
-    authFetch("/api/zodiac-sidebar")
+    //
+    // R71: sequenced against this uid's other mount-time reads (history,
+    // directory) so none of them contend at the per-user storage read
+    // lock at the same moment — see pageLoadReadQueue.ts.
+    runSequenced(uid, () => authFetch("/api/zodiac-sidebar"))
       .then(resolveZodiacSidebarResponse)
       .then((json) => {
         if (!cancelled) setData(json);
@@ -85,7 +100,7 @@ export default function ZodiacSidebar({ refreshSignal = 0, onAvailabilityChange,
     return () => {
       cancelled = true;
     };
-  }, [refreshSignal]);
+  }, [uid, refreshSignal]);
 
   useEffect(() => {
     onAvailabilityChange?.(data?.available ?? false);
