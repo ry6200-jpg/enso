@@ -45,7 +45,7 @@ export function createOpenAiRouterAdapter(apiKey: string): RouterAdapter {
       provider: "openai",
       model: OPENAI_ROUTER_MODEL,
       decision,
-      usage: { inputTokens: response.usage?.input_tokens ?? 0, outputTokens: response.usage?.output_tokens ?? 0 }
+      usage: { inputTokens: response.usage?.input_tokens ?? 0, outputTokens: response.usage?.output_tokens ?? 0, cachedInputTokens: response.usage?.input_tokens_details?.cached_tokens ?? 0 }
     };
   };
 }
@@ -81,7 +81,8 @@ export function createGeminiRouterAdapter(apiKey: string): RouterAdapter {
       decision,
       usage: {
         inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
-        outputTokens: (response.usageMetadata?.candidatesTokenCount ?? 0) + (response.usageMetadata?.thoughtsTokenCount ?? 0)
+        outputTokens: (response.usageMetadata?.candidatesTokenCount ?? 0) + (response.usageMetadata?.thoughtsTokenCount ?? 0),
+        cachedInputTokens: 0
       }
     };
   };

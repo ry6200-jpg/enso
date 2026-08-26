@@ -24,7 +24,7 @@ const CANNED_REPLY: ChatCallResult = {
   provider: "openai",
   model: "gpt-5.6-sol",
   text: "Got it, noted.",
-  usage: { inputTokens: 10, outputTokens: 5 } as ChatCallResult["usage"]
+  usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 0 } as ChatCallResult["usage"]
 };
 
 function fakeChatRouter(result: ChatCallResult = CANNED_REPLY): ChatRouter {
@@ -526,7 +526,7 @@ describe("sendMessage — ambient current-location (CORE DISTINCTION: never a fa
     const extractionRouter: ExtractionRouter = {
       extract: async (request) => {
         receivedRequest = request;
-        return { provider: "openai", model: "gpt-5.6-terra", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] }, usage: { inputTokens: 1, outputTokens: 1 } };
+        return { provider: "openai", model: "gpt-5.6-terra", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] }, usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 } };
       }
     };
 

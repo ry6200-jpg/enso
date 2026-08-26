@@ -17,7 +17,7 @@ function capturingChatRouter() {
   const router: ChatRouter = {
     async reply(request) {
       capturedSystem = request.system;
-      return { provider: "openai", model: "gpt-5.6-sol", text: "A short reflection.", usage: { inputTokens: 1, outputTokens: 1 } };
+      return { provider: "openai", model: "gpt-5.6-sol", text: "A short reflection.", usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 } };
     }
   };
   return { router, getCapturedSystem: () => capturedSystem };

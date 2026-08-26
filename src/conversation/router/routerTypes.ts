@@ -215,7 +215,7 @@ export interface RouterCallResult {
   provider: "openai" | "gemini";
   model: string;
   decision: RouterDecision;
-  usage: { inputTokens: number; outputTokens: number };
+  usage: { inputTokens: number; outputTokens: number; cachedInputTokens: number };
 }
 
 /** EN-075's fail-safe: hybrid retrieval, no temporal weighting, no gate actions, natural register (never zen) — used on router error/timeout/malformed JSON, and on EN-083's uncertified-failover-tier bypass. Never blocks the reply either way. */

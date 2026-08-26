@@ -57,7 +57,8 @@ export function createGeminiAdapter(apiKey: string): ProviderAdapter {
         // verified against ai.google.dev/gemini-api/docs/thinking), so both
         // must be included here or cost tracking silently undercounts.
         outputTokens:
-          (response.usageMetadata?.candidatesTokenCount ?? 0) + (response.usageMetadata?.thoughtsTokenCount ?? 0)
+          (response.usageMetadata?.candidatesTokenCount ?? 0) + (response.usageMetadata?.thoughtsTokenCount ?? 0),
+        cachedInputTokens: 0
       }
     };
   };

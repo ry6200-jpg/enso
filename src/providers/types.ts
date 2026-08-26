@@ -125,6 +125,17 @@ export interface ExtractionRequest {
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
+  /**
+   * Prompt-cache verification (formatLocalTime coarsening): the portion of
+   * inputTokens OpenAI actually served from its prompt cache, discounted
+   * accordingly on their side — read from response.usage.input_tokens_
+   * details.cached_tokens on the Responses API, never estimated. 0 for
+   * every Gemini adapter (no equivalent field in that API's usage shape)
+   * and for any OpenAI call this codebase hasn't wired the read into yet —
+   * always a real 0, never omitted, same never-omit-just-zero discipline
+   * used elsewhere in this codebase's provenance fields.
+   */
+  cachedInputTokens: number;
 }
 
 export interface ProviderCallResult {

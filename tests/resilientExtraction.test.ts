@@ -45,7 +45,7 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
           socialBonds: [{ type: "friend", fromName: "me", toName: "Sarah", qualifier: null, basis: "stated", action: "open", explicitlyNewPerson: false }],
           attributes: [{ entityName: "Sarah", attribute: "location", value: "Boston", eventDate: null }]
         },
-        usage: { inputTokens: 10, outputTokens: 5 }
+        usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 0 }
       })
     };
 
@@ -76,7 +76,7 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
           provider: "openai",
           model: "gpt-5.6-terra",
           taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
-          usage: { inputTokens: 1, outputTokens: 1 }
+          usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 }
         };
       }
     };
@@ -95,7 +95,7 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
           provider: "openai",
           model: "gpt-5.6-terra",
           taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
-          usage: { inputTokens: 1, outputTokens: 1 }
+          usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 }
         };
       }
     };
@@ -114,7 +114,7 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
           provider: "openai",
           model: "gpt-5.6-terra",
           taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
-          usage: { inputTokens: 1, outputTokens: 1 }
+          usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 }
         };
       }
     };
@@ -133,7 +133,7 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
           provider: "openai",
           model: "gpt-5.6-terra",
           taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
-          usage: { inputTokens: 1, outputTokens: 1 }
+          usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 }
         };
       }
     };
@@ -149,7 +149,7 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
         provider: "openai",
         model: "gpt-5.6-terra",
         taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
-        usage: { inputTokens: 1, outputTokens: 1 }
+        usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 }
       })
     };
 
@@ -165,7 +165,7 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
         provider: "openai",
         model: "gpt-5.6-terra",
         taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
-        usage: { inputTokens: 1, outputTokens: 1 }
+        usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 }
       })
     };
 
@@ -195,7 +195,7 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
     const router: ExtractionRouter = {
       extract: async () => {
         called = true;
-        return { provider: "openai", model: "gpt-5.6-terra", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] }, usage: { inputTokens: 0, outputTokens: 0 } };
+        return { provider: "openai", model: "gpt-5.6-terra", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] }, usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 } };
       }
     };
 
@@ -213,7 +213,7 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
       extract: async () => {
         attempts++;
         if (attempts < 2) throw new ProviderAvailabilityError("503", 503);
-        return { provider: "gemini", model: "gemini-3.7-flash", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] }, usage: { inputTokens: 1, outputTokens: 1 } };
+        return { provider: "gemini", model: "gemini-3.7-flash", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] }, usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 } };
       }
     };
 
@@ -259,7 +259,7 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
     const router: ExtractionRouter = {
       extract: async () => {
         if (shouldFail) throw new ProviderAvailabilityError("down for now", 503);
-        return { provider: "openai", model: "gpt-5.6-terra", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] }, usage: { inputTokens: 1, outputTokens: 1 } };
+        return { provider: "openai", model: "gpt-5.6-terra", taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] }, usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 } };
       }
     };
 
@@ -295,7 +295,7 @@ describe("extractDocumentWithResilience (EN-059/060/062/063)", () => {
         model: "gemini-3.7-flash",
         fullText: referenceText,
         entities: [{ name: "SomeName", type: "person" as const }],
-        usage: { inputTokens: 10, outputTokens: 10 }
+        usage: { inputTokens: 10, outputTokens: 10, cachedInputTokens: 0 }
       })) satisfies DocumentContentAdapter
     };
 
@@ -314,7 +314,7 @@ describe("extractDocumentWithResilience (EN-059/060/062/063)", () => {
         model: "gpt-5.6-terra",
         fullText: "I wrote about my day with Sarah.",
         entities: [{ name: "Sarah", type: "person" as const }],
-        usage: { inputTokens: 10, outputTokens: 10 }
+        usage: { inputTokens: 10, outputTokens: 10, cachedInputTokens: 0 }
       })) satisfies DocumentContentAdapter
     };
 
@@ -337,7 +337,7 @@ describe("extractImageWithResilience (EN-059/062)", () => {
   it("appends extraction_completed with the description", async () => {
     const upload = captureUpload(eventLog, blobStore, { userId: PRIMARY_USER_ID, bytes: Buffer.from("img bytes"), filename: "photo.jpg", mimeType: "image/jpeg" });
     const imageRouter = {
-      extract: (async () => ({ provider: "openai" as const, model: "gpt-5.6-terra", description: "A photo of a cat.", usage: { inputTokens: 5, outputTokens: 5 } })) satisfies ImageContentAdapter
+      extract: (async () => ({ provider: "openai" as const, model: "gpt-5.6-terra", description: "A photo of a cat.", usage: { inputTokens: 5, outputTokens: 5, cachedInputTokens: 0 } })) satisfies ImageContentAdapter
     };
 
     const result = await extractImageWithResilience(eventLog, imageRouter, upload, { bytes: Buffer.from("x"), mimeType: "image/jpeg" });

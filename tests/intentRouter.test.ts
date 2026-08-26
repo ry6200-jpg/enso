@@ -18,7 +18,7 @@ const BASE_REQUEST: RouterRequest = {
 };
 
 function fakeResult(provider: "openai" | "gemini", decision: RouterDecision): RouterCallResult {
-  return { provider, model: provider === "openai" ? "gpt-5.6-terra" : "gemini-3.7-flash", decision, usage: { inputTokens: 10, outputTokens: 5 } };
+  return { provider, model: provider === "openai" ? "gpt-5.6-terra" : "gemini-3.7-flash", decision, usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 0 } };
 }
 
 function decisionWith(overrides: Partial<RouterDecision> = {}): RouterDecision {

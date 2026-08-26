@@ -10,10 +10,8 @@ import type {
   ImageContentRequest,
   ImageContentResult
 } from "./attachmentTypes.js";
-function recordAttachmentCost(
-  costTracker: CostTracker | undefined,
-  result: { provider: "openai" | "gemini"; model: string; usage: { inputTokens: number; outputTokens: number } }
-) {
+import type { TokenUsage } from "./types.js";
+function recordAttachmentCost(costTracker: CostTracker | undefined, result: { provider: "openai" | "gemini"; model: string; usage: TokenUsage }) {
   if (!costTracker) return;
   // Attachment adapters return fullText/description rather than a taxonomy;
   // CostTracker.record only needs provider/model/usage to price the call,

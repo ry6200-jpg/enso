@@ -37,7 +37,7 @@ function givePrimaryUserSelfFactsKnown(projections: ProjectionsDb): void {
   }
 }
 
-const CANNED_REPLY: ChatCallResult = { provider: "openai", model: "gpt-5.6-sol", text: "Noted.", usage: { inputTokens: 10, outputTokens: 5 } };
+const CANNED_REPLY: ChatCallResult = { provider: "openai", model: "gpt-5.6-sol", text: "Noted.", usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 0 } };
 
 function fakeChatRouter(replyText = "Noted."): ChatRouter {
   return { async reply() { return { ...CANNED_REPLY, text: replyText }; } };

@@ -42,7 +42,7 @@ describe("refreshMemoryAfterTurn (item 7: preceding-reply lookup)", () => {
           provider: "openai",
           model: "gpt-5.6-terra",
           taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
-          usage: { inputTokens: 1, outputTokens: 1 }
+          usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 }
         };
       }
     };
@@ -62,7 +62,7 @@ describe("refreshMemoryAfterTurn (item 7: preceding-reply lookup)", () => {
           provider: "openai",
           model: "gpt-5.6-terra",
           taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
-          usage: { inputTokens: 1, outputTokens: 1 }
+          usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 }
         };
       }
     };
@@ -85,7 +85,7 @@ describe("refreshMemoryAfterTurn (item 7: preceding-reply lookup)", () => {
           provider: "openai",
           model: "gpt-5.6-terra",
           taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
-          usage: { inputTokens: 1, outputTokens: 1 }
+          usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 }
         };
       }
     };

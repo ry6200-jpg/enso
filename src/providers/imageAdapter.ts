@@ -59,7 +59,8 @@ export function createOpenAiImageAdapter(apiKey: string): ImageContentAdapter {
       description: output.description,
       usage: {
         inputTokens: response.usage?.input_tokens ?? 0,
-        outputTokens: response.usage?.output_tokens ?? 0
+        outputTokens: response.usage?.output_tokens ?? 0,
+        cachedInputTokens: response.usage?.input_tokens_details?.cached_tokens ?? 0
       }
     };
   };
@@ -103,7 +104,8 @@ export function createGeminiImageAdapter(apiKey: string): ImageContentAdapter {
       description: output.description,
       usage: {
         inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
-        outputTokens: (response.usageMetadata?.candidatesTokenCount ?? 0) + (response.usageMetadata?.thoughtsTokenCount ?? 0)
+        outputTokens: (response.usageMetadata?.candidatesTokenCount ?? 0) + (response.usageMetadata?.thoughtsTokenCount ?? 0),
+        cachedInputTokens: 0
       }
     };
   };

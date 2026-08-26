@@ -35,7 +35,7 @@ describe("extractDocumentContent (EN-062/063)", () => {
         model: "gpt-5.6-terra",
         fullText: "Page one text. Page two text.",
         entities: [{ name: "Sarah", type: "person" as const }],
-        usage: { inputTokens: 10, outputTokens: 5 }
+        usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 0 }
       })) satisfies DocumentContentAdapter
     };
 
@@ -63,7 +63,7 @@ describe("extractDocumentContent (EN-062/063)", () => {
         model: "gemini-3.7-flash",
         fullText: longText,
         entities: [],
-        usage: { inputTokens: 100, outputTokens: 200 }
+        usage: { inputTokens: 100, outputTokens: 200, cachedInputTokens: 0 }
       })) satisfies DocumentContentAdapter
     };
 
@@ -89,7 +89,7 @@ describe("extractImageContent (EN-062)", () => {
         provider: "openai" as const,
         model: "gpt-5.6-terra",
         description: "A photo of two people at a cafe table.",
-        usage: { inputTokens: 15, outputTokens: 20 }
+        usage: { inputTokens: 15, outputTokens: 20, cachedInputTokens: 0 }
       })) satisfies ImageContentAdapter
     };
 

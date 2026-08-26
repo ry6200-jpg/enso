@@ -11,7 +11,7 @@ function fakeResult(provider: "openai" | "gemini", overrides: Partial<ChatCallRe
     provider,
     model: provider === "openai" ? "gpt-5.6-sol" : "gemini-3.7-flash",
     text: "a reply",
-    usage: { inputTokens: 10, outputTokens: 5 },
+    usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 0 },
     ...overrides
   };
 }
@@ -70,7 +70,7 @@ describe("createChatRouter (EN-081/083)", () => {
     const primary = vi.fn<ChatAdapter>(async () => {
       throw new ProviderAvailabilityError("503 from primary", 503);
     });
-    const fallback = vi.fn<ChatAdapter>(async () => fakeResult("gemini", { usage: { inputTokens: 100, outputTokens: 50 } }));
+    const fallback = vi.fn<ChatAdapter>(async () => fakeResult("gemini", { usage: { inputTokens: 100, outputTokens: 50, cachedInputTokens: 0 } }));
     const costTracker = new CostTracker();
     const router = createChatRouter(primary, fallback, costTracker);
 

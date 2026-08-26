@@ -41,7 +41,8 @@ export function createOpenAiChatAdapter(apiKey: string): ChatAdapter {
       text: response.output_text,
       usage: {
         inputTokens: response.usage?.input_tokens ?? 0,
-        outputTokens: response.usage?.output_tokens ?? 0
+        outputTokens: response.usage?.output_tokens ?? 0,
+        cachedInputTokens: response.usage?.input_tokens_details?.cached_tokens ?? 0
       }
     };
   };
@@ -89,7 +90,9 @@ export function createGeminiChatAdapter(apiKey: string): ChatAdapter {
       text: response.text,
       usage: {
         inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
-        outputTokens: (response.usageMetadata?.candidatesTokenCount ?? 0) + (response.usageMetadata?.thoughtsTokenCount ?? 0)
+        outputTokens: (response.usageMetadata?.candidatesTokenCount ?? 0) + (response.usageMetadata?.thoughtsTokenCount ?? 0),
+        // No prompt-caching field in Gemini's usageMetadata shape — always a real 0, never estimated.
+        cachedInputTokens: 0
       }
     };
   };

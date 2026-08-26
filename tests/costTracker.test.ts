@@ -22,10 +22,24 @@ describe("CostTracker (EN-086)", () => {
       provider: "openai",
       model: "gpt-5.6-terra",
       taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
-      usage: { inputTokens: 500_000, outputTokens: 0 }
+      usage: { inputTokens: 500_000, outputTokens: 0, cachedInputTokens: 0 }
     };
     const entry = tracker.record(result);
     expect(entry.costUsd).toBeCloseTo(1.0, 5); // 0.5M input tokens * $2/M
+  });
+
+  it("prompt-cache verification: cachedInputTokens propagates through onto the record, but costUsd does not yet discount for it — a deliberate, reported gap, not an oversight", () => {
+    const tracker = new CostTracker();
+    const entry = tracker.record({
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
+      usage: { inputTokens: 1_000_000, outputTokens: 0, cachedInputTokens: 900_000 }
+    } satisfies ProviderCallResult);
+    expect(entry.cachedInputTokens).toBe(900_000);
+    // Every input token still charged at the flat, uncached rate ($5/M for sol) — the
+    // cached figure is captured for reporting, not yet applied as a pricing discount.
+    expect(entry.costUsd).toBeCloseTo(5.0, 5);
   });
 
   it("sums total spend across multiple recorded calls", () => {
@@ -34,13 +48,13 @@ describe("CostTracker (EN-086)", () => {
       provider: "openai",
       model: "gpt-5.6-luna",
       taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
-      usage: { inputTokens: 1_000_000, outputTokens: 0 }
+      usage: { inputTokens: 1_000_000, outputTokens: 0, cachedInputTokens: 0 }
     });
     tracker.record({
       provider: "gemini",
       model: "gemini-3.7-flash",
       taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
-      usage: { inputTokens: 0, outputTokens: 1_000_000 }
+      usage: { inputTokens: 0, outputTokens: 1_000_000, cachedInputTokens: 0 }
     });
 
     expect(tracker.totalUsd()).toBeCloseTo(0.2 + 3.75, 5);

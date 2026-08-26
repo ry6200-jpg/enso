@@ -9,7 +9,7 @@ function fakeResult(provider: "openai" | "gemini", overrides: Partial<ProviderCa
     provider,
     model: provider === "openai" ? "gpt-5.6-terra" : "gemini-3.7-flash",
     taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
-    usage: { inputTokens: 10, outputTokens: 5 },
+    usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 0 },
     ...overrides
   };
 }
@@ -103,7 +103,7 @@ describe("createExtractionRouter (EN-081/083)", () => {
     const primary = vi.fn<ProviderAdapter>(async () => {
       throw new ProviderAvailabilityError("503", 503);
     });
-    const fallback = vi.fn<ProviderAdapter>(async () => fakeResult("gemini", { usage: { inputTokens: 100, outputTokens: 50 } }));
+    const fallback = vi.fn<ProviderAdapter>(async () => fakeResult("gemini", { usage: { inputTokens: 100, outputTokens: 50, cachedInputTokens: 0 } }));
     const router = createExtractionRouter(
       { message: { primary, fallback }, document: { primary, fallback } },
       tracker
