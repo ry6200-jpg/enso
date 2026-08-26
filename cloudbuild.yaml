@@ -62,9 +62,11 @@ steps:
       # under concurrency — not just a re-read of the CAS logic.
       - --max-instances=1
       - --min-instances=0
-      # Comma-safe delimiter (ALLOWED_EMAILS' own value contains commas,
-      # which would otherwise collide with --update-env-vars' default
-      # comma-separated-pairs syntax) — see `gcloud topic escaping`.
+      # Comma-safe delimiter (^;^) — kept even though GCS_BUCKET_NAME's own
+      # value has no commas: harmless with a single key, and switching back
+      # to the default comma syntax buys nothing now that ALLOWED_EMAILS
+      # (the value that actually needed it) is gone from this flag — see
+      # `gcloud topic escaping`.
       #
       # --update-env-vars, not --set-env-vars: the latter REMOVES ALL
       # EXISTING ENVIRONMENT VARIABLES FIRST (confirmed via `gcloud run
@@ -78,7 +80,36 @@ steps:
       # remove one: deleting a var (console-set or otherwise) requires
       # --remove-env-vars explicitly, named here, never assumed available
       # from this step alone.
-      - --update-env-vars=^;^ALLOWED_EMAILS=ry6200@gmail.com,ry3223@gmail.com;GCS_BUCKET_NAME=mirror-505915-enso-user-data
+      #
+      # ALLOWED_EMAILS is deliberately not set here either, for the exact
+      # same reason as ADMIN_EMAILS: it holds real testers' email
+      # addresses, which should not live in version control any more than
+      # the admin identity should. It used to be hardcoded on the line
+      # below (two emails) — a real bug, found live: the deployed service's
+      # actual allowlist had grown to four real testers via the Cloud Run
+      # console, and this flag's SET-not-MERGE-per-key semantics meant the
+      # next ordinary deploy would have silently reverted it back to two,
+      # locking out two working testers with no error anywhere. Removed
+      # entirely rather than "fixed" to the current four — any hardcoded
+      # value here just becomes the next stale value the moment someone
+      # adds or removes a tester via the console again.
+      #
+      # Both ADMIN_EMAILS and ALLOWED_EMAILS are therefore set OUT OF BAND
+      # on the live service — via the Cloud Run console, or `gcloud run
+      # services update --update-env-vars` — and are expected to persist
+      # across every deploy run through this file, precisely because
+      # neither is named in the flag below. A brand-new environment (a
+      # fresh project, a service created from scratch) will therefore boot
+      # with ALLOWED_EMAILS unset — and `lib/requireUser.ts`'s
+      # allowedEmails() throws loud on that ("ALLOWED_EMAILS is not set...")
+      # by design, the deliberate CONTRAST EN-110 records against
+      # adminEmails()'s fail-CLOSED default (an absent ADMIN_EMAILS
+      # silently returns no admins, never throws — a forgotten admin var
+      # must never accidentally grant everyone admin access, the way a
+      # thrown-and-ignored error pattern could). That crash on a genuinely
+      # fresh environment is expected, not a bug: set ALLOWED_EMAILS once,
+      # by hand, out of band — never by adding it back to this flag.
+      - --update-env-vars=^;^GCS_BUCKET_NAME=mirror-505915-enso-user-data
       - --set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,GOOGLE_MAPS_API_KEY=GOOGLE_MAPS_API_KEY:latest,FIREBASE_SERVICE_ACCOUNT_JSON=FIREBASE_SERVICE_ACCOUNT_JSON:latest
 
 images:
