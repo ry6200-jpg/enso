@@ -29,10 +29,26 @@ export async function getTimeZoneId(latitude: number, longitude: number, apiKey:
   }
 }
 
-/** e.g. "2:15 PM" for the given IANA zone, as of right now. Never throws on an invalid zone id — returns null instead, since a malformed id from a failed/tampered lookup must never surface a wrong time as if it were real. */
+/**
+ * e.g. "2 PM" for the given IANA zone, as of right now — hour granularity
+ * only, deliberately. A journal has no use for minute precision here, and
+ * OpenAI's prompt cache only discounts the longest byte-identical PREFIX
+ * across calls: minute-level output (the original "2:15 PM" shape) meant
+ * this string, which feeds directly into the CURRENT CONTEXT and AMBIENT
+ * CONTEXT blocks near the front of the prompt, differed on almost every
+ * single call regardless of whether anything real had changed — truncating
+ * the cacheable prefix before the two largest blocks (retrieved-memory,
+ * recent-window) were ever reached. Hour granularity keeps the rendered
+ * string byte-identical across the many consecutive calls that land in the
+ * same clock-hour, and correctly still changes the moment a call crosses
+ * an hour boundary — a real cache-hostility fix, not merely a display
+ * preference. Never throws on an invalid zone id — returns null instead,
+ * since a malformed id from a failed/tampered lookup must never surface a
+ * wrong time as if it were real.
+ */
 export function formatLocalTime(timeZoneId: string, now: Date = new Date()): string | null {
   try {
-    return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: timeZoneId }).format(now);
+    return new Intl.DateTimeFormat("en-US", { hour: "numeric", timeZone: timeZoneId }).format(now);
   } catch {
     return null;
   }

@@ -39,7 +39,7 @@ describe("fetchAmbientContext (item 1) — the actual API calls, gated by the ro
     });
 
     expect(result.own?.weather).toEqual({ temperatureCelsius: 35.3, feelsLikeCelsius: 36, description: "Sunny" });
-    expect(result.own?.localTime).toMatch(/^\d{1,2}:\d{2}\s?(AM|PM)$/);
+    expect(result.own?.localTime).toMatch(/^\d{1,2}\s?(AM|PM)$/);
     expect(result.thirdParty).toBeUndefined();
     expect(result.distance).toBeUndefined();
   });

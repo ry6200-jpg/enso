@@ -70,13 +70,28 @@ describe("getTimeZoneId / formatLocalTime (item 1) — mocked fetch, real API sh
     expect(await getTimeZoneId(0, 0, "fake-key")).toBeNull();
   });
 
-  it("formatLocalTime renders a real IANA zone to a plain time string", () => {
+  it("formatLocalTime renders a real IANA zone to a plain time string, hour granularity only", () => {
     const formatted = formatLocalTime("Asia/Kuala_Lumpur", new Date("2026-08-23T05:00:00Z"));
-    expect(formatted).toMatch(/^\d{1,2}:\d{2}\s?(AM|PM)$/);
+    expect(formatted).toMatch(/^\d{1,2}\s?(AM|PM)$/);
   });
 
   it("formatLocalTime returns null for an invalid zone id rather than a wrong guessed time", () => {
     expect(formatLocalTime("Not/A_Real_Zone")).toBeNull();
+  });
+
+  it("prompt-cache fix: renders byte-identical across two calls a few minutes apart, within the same hour", () => {
+    const early = formatLocalTime("America/Los_Angeles", new Date("2026-08-23T21:03:00Z"));
+    const late = formatLocalTime("America/Los_Angeles", new Date("2026-08-23T21:58:00Z"));
+    expect(early).toBe(late);
+    expect(early).toBe("2 PM");
+  });
+
+  it("prompt-cache fix: still changes the moment a call crosses an hour boundary — a real bound, not frozen forever", () => {
+    const beforeBoundary = formatLocalTime("America/Los_Angeles", new Date("2026-08-23T21:59:00Z"));
+    const afterBoundary = formatLocalTime("America/Los_Angeles", new Date("2026-08-23T22:02:00Z"));
+    expect(beforeBoundary).not.toBe(afterBoundary);
+    expect(beforeBoundary).toBe("2 PM");
+    expect(afterBoundary).toBe("3 PM");
   });
 });
 

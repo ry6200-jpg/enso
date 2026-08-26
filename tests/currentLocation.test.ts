@@ -141,7 +141,7 @@ describe("buildLocationContextBlock — pure formatting, own budget, never the r
     const block = buildLocationContextBlock(GEO, 200)!;
     expect(block).toContain("=== CURRENT CONTEXT (begin) ===");
     expect(block).toContain("Location: Tokyo, Japan (via device GPS)");
-    expect(block).toMatch(/Local time: \d{1,2}:\d{2} [AP]M/);
+    expect(block).toMatch(/Local time: \d{1,2} [AP]M/);
   });
 
   it("renders the IP tier with its own label, distinct from geolocation", () => {
@@ -152,7 +152,7 @@ describe("buildLocationContextBlock — pure formatting, own budget, never the r
   it("Tier 3 (timezone only): local time only, explicitly notes location isn't available, never fabricates a place", () => {
     const block = buildLocationContextBlock(TZ_ONLY, 200)!;
     expect(block).not.toMatch(/Location:/);
-    expect(block).toMatch(/Local time: \d{1,2}:\d{2} [AP]M \(timezone only — location not available\)/);
+    expect(block).toMatch(/Local time: \d{1,2} [AP]M \(timezone only — location not available\)/);
   });
 
   it("omits the whole block (never a partial render) when it would exceed its own budget", () => {
