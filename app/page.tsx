@@ -10,7 +10,19 @@ import { isPinnedToBottom } from "./lib/chatScroll";
 import { downloadTranscript } from "./lib/transcriptDownload";
 import { daySeparatorLabel, formatExactTimestamp, formatInlineTime, isNewLocalDay, shouldShowInlineTime } from "./lib/chatTimestamps";
 import { classifyHistoryFetchStatus } from "./lib/historyFetch";
+import { classifyDirectoryFetchStatus } from "./lib/directoryFetch";
 import { runSequenced } from "./lib/pageLoadReadQueue";
+
+// R71: bounded retry for the directory probe's "retryable" (in practice,
+// residual storage-lock contention) outcome only — never for a real 404.
+// Small and fixed on purpose: pageLoadReadQueue.ts's sequencing should
+// already make this class of contention rare, not the primary defense.
+const DIRECTORY_PROBE_MAX_ATTEMPTS = 3;
+const DIRECTORY_PROBE_RETRY_DELAY_MS = 400;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 interface ChatMessage {
   id: string;
@@ -366,21 +378,66 @@ export default function Page() {
   // show the menu item — never the actual gate, which is server-side on every real request to
   // the route itself. A non-admin gets a fast 404 here with no DB work behind it; nothing about
   // this check reveals more than "this menu item exists," which a non-admin can't act on anyway.
+  //
+  // R71: rewritten from `setIsAdmin(r.status !== 404)`, which read a 401
+  // (not authenticated) or a 500 (a storage-lock refusal — real
+  // production evidence, see pageLoadReadQueue.ts's own comment) as a
+  // POSITIVE admin signal, since both are !== 404. classifyDirectoryFetchStatus
+  // (app/lib/directoryFetch.ts) makes the three cases explicit: 404 is
+  // the real, permanent, server-side "no" (requireAdminUserId's own
+  // decision — never retried, never second-guessed here); 401 is "not
+  // authenticated yet," never treated as a positive signal but also never
+  // retried on its own, since authFetch already waits on the SDK's own
+  // authStateReady() before dispatching, so a persistent 401 loop
+  // wouldn't resolve by hammering the route again; 500 is infrastructure
+  // (in practice, residual lock contention this uid's own sequencing
+  // above should make rare, not zero — e.g. a second tab open for the
+  // same account), worth a small bounded retry, and only ever leaves
+  // isAdmin at its prior value on exhaustion rather than forcing it false
+  // — a transient lock refusal must never look identical to a confirmed
+  // "not an admin."
   useEffect(() => {
     if (!user) return;
+    const uid = user.uid;
     let cancelled = false;
-    // R71: sequenced against this uid's other mount-time reads (history,
-    // zodiac-sidebar) so none of them contend at the per-user storage read
-    // lock at the same moment — see pageLoadReadQueue.ts.
-    runSequenced(user.uid, () => authFetch("/api/directory"))
-      .then(async (r) => {
-        if (cancelled) return;
-        setIsAdmin(r.status !== 404);
-        if (r.ok) setDirectoryData((await r.json()) as DirectoryResponse);
-      })
-      .catch(() => {
+
+    const attemptDirectoryProbe = async (attempt: number): Promise<void> => {
+      let response: Response;
+      try {
+        // R71: sequenced against this uid's other mount-time reads (history,
+        // zodiac-sidebar) so none of them contend at the per-user storage read
+        // lock at the same moment — see pageLoadReadQueue.ts.
+        response = await runSequenced(uid, () => authFetch("/api/directory"));
+      } catch {
         if (!cancelled) setIsAdmin(false);
-      });
+        return;
+      }
+      if (cancelled) return;
+
+      const outcome = classifyDirectoryFetchStatus(response.status);
+      if (outcome === "notAdmin") {
+        setIsAdmin(false);
+        return;
+      }
+      if (outcome === "notAuthenticated") {
+        // Not a positive signal, but not forced false either — genuinely
+        // transient (see the effect's own header comment); no retry loop,
+        // since a real fix (a settled token) isn't something hammering
+        // this route again can produce.
+        return;
+      }
+      if (outcome === "retryable") {
+        if (attempt >= DIRECTORY_PROBE_MAX_ATTEMPTS) return; // give up for this session; never force isAdmin false on infrastructure failure
+        await delay(DIRECTORY_PROBE_RETRY_DELAY_MS * attempt);
+        if (!cancelled) await attemptDirectoryProbe(attempt + 1);
+        return;
+      }
+      // outcome === "success"
+      setIsAdmin(true);
+      setDirectoryData((await response.json()) as DirectoryResponse);
+    };
+
+    void attemptDirectoryProbe(1);
     return () => {
       cancelled = true;
     };
