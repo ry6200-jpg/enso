@@ -64,3 +64,4 @@ Do not re-litigate settled decisions. Section 12 questions marked RESOLVED are c
 - Provider capabilities (PDF input, tool-calling shape, caching, limits) are verified at build time per EN-082 — never assumed from memory.
 - No blanket capability prohibitions in any prompt ("no maps access" — see R3). Behaviors that must happen reliably get explicit gates, not prompt paragraphs (EN-070).
 - Judgment gates run on a mid-tier model minimum; per-model certification is required, and uncertified failover tiers bypass gates to no-action (EN-074, EN-083).
+- RESPECT THE EXTRACTION CACHE: Do not trigger a historical "reprocess" (sending data back through the LLM) to test projection logic or schema changes. Use Enso's deterministic "rebuild" function (dropping projections and replaying the event log using existing `extraction_completed` payloads). Never bump the `extractor_version` in the codebase unless actively redesigning the extraction prompt.
