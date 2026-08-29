@@ -116,10 +116,15 @@ describe("PERSONA_INSTRUCTION (EN-097: elicitation stance)", () => {
     expect(PERSONA_INSTRUCTION).toMatch(/never anything that could read as an intake form or a checklist/);
   });
 
-  it("THE CONTINUER RULE is explicit, not left as an implication (per the brief's own instruction)", () => {
-    expect(PERSONA_INSTRUCTION).toMatch(/THE CONTINUER RULE, EXPLICIT, NOT AN IMPLICATION/);
-    expect(PERSONA_INSTRUCTION).toMatch(/the correct next move is NOT another question/);
-    expect(PERSONA_INSTRUCTION).toMatch(/One probe, then space/);
+  it("THE INVITATIONAL CONTINUER RULE is explicit, not left as an implication (per the brief's own instruction)", () => {
+    expect(PERSONA_INSTRUCTION).toMatch(/THE INVITATIONAL CONTINUER RULE, EXPLICIT, NOT AN IMPLICATION/);
+    expect(PERSONA_INSTRUCTION).toMatch(/the correct next move is not another pointed question, but it is not silence either/);
+    expect(PERSONA_INSTRUCTION).toMatch(/Use a gentle, open-ended continuer/);
+  });
+
+  it("still distinguishes a vague/thin answer from genuinely opening up (regression guard unchanged)", () => {
+    expect(PERSONA_INSTRUCTION).toMatch(/A VAGUE OR THIN ANSWER IS NOT OPENING UP — DO NOT CONFUSE THE TWO/);
+    expect(PERSONA_INSTRUCTION).toMatch(/The right move on a thin answer is a DIFFERENT, more specific question — not a continuer, and not silence/);
   });
 
   it("points back toward the person's own people, not only inward", () => {
@@ -269,8 +274,8 @@ describe("PERSONA_INSTRUCTION: THE CONTINUER RULE carve-out (passive-mode batch,
     expect(PERSONA_INSTRUCTION).toMatch(/just a lot going on/);
   });
 
-  it("directs a different, more specific question rather than silence on a thin answer", () => {
-    expect(PERSONA_INSTRUCTION).toMatch(/The right move on a thin answer is a DIFFERENT, more specific question — not silence/);
+  it("directs a different, more specific question rather than a continuer or silence on a thin answer", () => {
+    expect(PERSONA_INSTRUCTION).toMatch(/The right move on a thin answer is a DIFFERENT, more specific question — not a continuer, and not silence/);
   });
 
   it("only sustained signals across multiple turns (never a single vague reply) justify actually backing off", () => {
