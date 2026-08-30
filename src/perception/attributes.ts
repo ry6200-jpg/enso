@@ -192,6 +192,79 @@ export interface ResolvedAttribute {
 }
 
 /**
+ * Owner-reported hardening: for a MUTABLE attribute, "latest wins" used to
+ * mean literally the last-INSERTED row (array-last, per the doc comment
+ * below) — a stray historical mention ("I grew up in Toledo," told after
+ * "I live in LA" was already on record) or a future aspiration ("planning
+ * to retire in Florida in 2030") could silently become "current" purely by
+ * being asserted later in the conversation, even though its own eventDate
+ * (already captured by the extractor — buildExtractionSystemPrompt's
+ * `attributes` rule) says otherwise. Considered and rejected: pushing this
+ * onto the extraction PROMPT instead ("don't extract past/future
+ * locations") — rejected because the single most common way someone
+ * states a new CURRENT location is itself past-tense grammar ("I moved to
+ * Seattle last month"), so a blanket tense filter would suppress exactly
+ * the updates that matter most, and would also stop Enso from ever storing
+ * genuine history the app exists to remember. This fixes it structurally
+ * instead, at the one place currency is actually decided.
+ *
+ * eventDateByRowId is a row's already-captured, capped-at-`todayDateOnly`
+ * eventDate; a row with no key (or `null`) is UNDATED, meaning the text
+ * gave no resolvable date for it — the extractor's own "never guess
+ * eventDate" rule leaves this null far more often than not (e.g. "I grew
+ * up in Toledo" carries no ISO date to extract).
+ *
+ * SCOPE, decided after an earlier version of this function over-reached and
+ * broke a real case (caught by this file's own FAST tests, not shipped): a
+ * first design treated every UNDATED row as effectively "dated today," on
+ * the theory that a plain present-tense statement means "as of right now."
+ * That fixed the motivating case (an undated current location surviving an
+ * unrelated LATER mention of a long-past dated location) but broke the
+ * opposite, equally real case: an undated ORIGINAL location correctly
+ * losing to a LATER, genuinely-dated recent move ("I moved to Seattle last
+ * year") — under "undated = today," the undated row's fake-today date beat
+ * the dated row's real one, silently blocking a real update. Distinguishing
+ * "a stray historical aside" from "a genuine recent update" when only ONE
+ * side of the comparison has a date is NOT decidable from eventDate alone —
+ * this schema has no started/ended marker for attributes (unlike
+ * structuralAtoms/socialBonds' own `action: "open"/"close"`), so a lone
+ * past eventDate cannot say whether the state it describes is still
+ * ongoing or already superseded.
+ *
+ * What IS decidable, and is what this function actually fixes: (1) a row
+ * dated LATER than `todayDateOnly` (a stated future plan) is never
+ * eligible to be "current," full stop, regardless of anything else; (2)
+ * when TWO ROWS BOTH carry a resolvable, non-future eventDate, the one
+ * with the later real date wins, never the one that merely happened to be
+ * typed later. A comparison where only one side has a date falls back to
+ * plain insertion order — textually-last-wins — UNCHANGED from before this
+ * function existed, on purpose: this is a known, accepted, NOT-closed gap
+ * (a stray undated historical aside mentioned after the current value can
+ * still incorrectly become "current"), not a silently narrowed promise.
+ */
+function pickCurrentMutableRow(valid: EntityAttributeRow[], eventDateByRowId: ReadonlyMap<string, string | null>, todayDateOnly: string): EntityAttributeRow {
+  const isNotFutureDated = (row: EntityAttributeRow) => {
+    const eventDate = eventDateByRowId.get(row.id);
+    return !(eventDate && eventDate > todayDateOnly);
+  };
+  const eligible = valid.filter(isNotFutureDated);
+  const pool = eligible.length > 0 ? eligible : valid; // never end up with nothing just because every candidate happens to be future-dated
+
+  let winner = pool[0]!;
+  let winnerDate = eventDateByRowId.get(winner.id) ?? null;
+  for (const row of pool.slice(1)) {
+    const rowDate = eventDateByRowId.get(row.id) ?? null;
+    // Only skip promotion when BOTH sides are dated and the candidate is
+    // chronologically older — every other case (either side undated, or
+    // the candidate's date is >= the winner's) matches legacy last-wins.
+    if (rowDate !== null && winnerDate !== null && rowDate < winnerDate) continue;
+    winner = row;
+    winnerDate = rowDate;
+  }
+  return winner;
+}
+
+/**
  * The ONE place "the current value of an attribute" is decided — every
  * reader (peopleView's getPrimaryUserBirthdate/getPrimaryUserAttribute,
  * getCurrentAttribute below, the zodiac-sidebar route, selfBirthdateGate,
@@ -203,9 +276,22 @@ export interface ResolvedAttribute {
  * Pure over already-fetched history (ProjectionsDb.listEntityAttributeHistory
  * / listEntityAttributes both return `ORDER BY id ASC`, i.e. oldest-first —
  * required here, not just convenient, since "first valid value wins" for an
- * immutable attribute depends on that ordering).
+ * immutable attribute depends on that ordering, and since a mutable
+ * attribute's own tie-break above falls back to this same array order).
+ *
+ * eventDateByRowId and nowIso are both optional and default to "no date
+ * data available" / the real current time — every existing caller that
+ * passes only `history` keeps resolving exactly as it did before this
+ * function gained date-awareness (see pickCurrentMutableRow above). Only
+ * ATTRIBUTE_MUTABILITY's "mutable" branch (location/occupation, etc.) ever
+ * consults either parameter; immutable resolution (birthdate) is
+ * unaffected by both, exactly as before.
  */
-export function resolveAttribute(history: EntityAttributeRow[]): ResolvedAttribute | null {
+export function resolveAttribute(
+  history: EntityAttributeRow[],
+  eventDateByRowId: ReadonlyMap<string, string | null> = new Map(),
+  nowIso: string = new Date().toISOString()
+): ResolvedAttribute | null {
   if (history.length === 0) return null;
   const attribute = history[0]!.attribute;
 
@@ -225,20 +311,31 @@ export function resolveAttribute(history: EntityAttributeRow[]): ResolvedAttribu
   const valid = eligibleHistory.filter((row) => isValidAttributeValue(attribute, row.value));
   if (valid.length === 0) return null;
 
-  const resolvedRow = ATTRIBUTE_MUTABILITY[attribute] === "mutable" ? valid[valid.length - 1]! : valid[0]!;
+  const resolvedRow = ATTRIBUTE_MUTABILITY[attribute] === "mutable" ? pickCurrentMutableRow(valid, eventDateByRowId, nowIso.slice(0, 10)) : valid[0]!;
   const conflicting = ATTRIBUTE_MUTABILITY[attribute] === "immutable" ? eligibleHistory.filter((row) => row.id !== resolvedRow.id && row.value !== resolvedRow.value) : [];
 
   return { value: resolvedRow.value, row: resolvedRow, conflicting };
 }
 
-/** Convenience wrapper: fetches the (entity, attribute) history and resolves it in one call. */
+/**
+ * Convenience wrapper: fetches the (entity, attribute) history, joins each
+ * row to its perception log's `event_at` (EN-016 dual time — the "when the
+ * fact became true" date the extractor captured, distinct from
+ * `created_at`, which R37 already found unreliable for ordering: a full
+ * projection rebuild re-inserts every row with a near-identical timestamp
+ * regardless of how far apart the underlying messages actually were), and
+ * resolves it in one call.
+ */
 export function resolveEntityAttribute(
   projections: ProjectionsDb,
   userId: string,
   entityId: string,
-  attribute: EntityAttributeRow["attribute"]
+  attribute: EntityAttributeRow["attribute"],
+  nowIso: string = new Date().toISOString()
 ): ResolvedAttribute | null {
-  return resolveAttribute(projections.listEntityAttributeHistory(userId, entityId, attribute));
+  const history = projections.listEntityAttributeHistory(userId, entityId, attribute);
+  const eventDateByRowId = new Map(history.map((row) => [row.id, projections.getPerceptionLogForFact(row.id)?.event_at ?? null]));
+  return resolveAttribute(history, eventDateByRowId, nowIso);
 }
 
 /** The current value — mutability-aware (see resolveAttribute above). Kept as its own name/shape since existing callers want just the row, not conflict info. */
@@ -246,9 +343,10 @@ export function getCurrentAttribute(
   projections: ProjectionsDb,
   userId: string,
   entityId: string,
-  attribute: EntityAttributeRow["attribute"]
+  attribute: EntityAttributeRow["attribute"],
+  nowIso: string = new Date().toISOString()
 ): EntityAttributeRow | undefined {
-  return resolveEntityAttribute(projections, userId, entityId, attribute)?.row;
+  return resolveEntityAttribute(projections, userId, entityId, attribute, nowIso)?.row;
 }
 
 /**

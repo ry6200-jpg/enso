@@ -108,6 +108,119 @@ describe("resolveAttribute — pure function (R36/R37: mutability, not format, i
   });
 });
 
+describe("resolveAttribute — eventDate-aware mutable resolution (owner-reported hardening: cap future-dated aspirations, and order multiple dated facts by their real date instead of text order)", () => {
+  const NOW = "2026-08-29T00:00:00.000Z";
+
+  it("KNOWN, ACCEPTED GAP (not this fix's scope): an undated current value CAN still be overridden by a later mention with an explicit past eventDate — undecidable from eventDate alone, since this schema has no started/ended marker for attributes the way structuralAtoms/socialBonds have action open/close, so a lone past date can't say whether the state it describes is still ongoing or already superseded; unchanged, legacy last-wins behavior", () => {
+    const history = [row("a", "location", "LA"), row("b", "location", "Toledo")]; // "b" (Toledo) is textually last, exactly the shape that used to win under plain last-inserted-wins
+    const eventDates = new Map([["b", "1995-06-01"]]); // "a" (LA) stays undated — an ordinary present-tense "I live in LA"
+    const resolved = resolveAttribute(history, eventDates, NOW)!;
+    expect(resolved.value).toBe("Toledo"); // NOT fixed by this change — documented, not silently promised
+  });
+
+  it("an undated ORIGINAL value correctly loses to a LATER mention with a genuinely recent, non-future eventDate — the ordinary update case, unaffected by the future-date cap", () => {
+    const history = [row("a", "location", "Austin"), row("b", "location", "Seattle")];
+    const eventDates = new Map([["b", "2025-08-01"]]); // "I moved to Seattle last year" — a real, recent, non-future date
+    const resolved = resolveAttribute(history, eventDates, NOW)!;
+    expect(resolved.value).toBe("Seattle");
+  });
+
+  it("a future-dated aspiration never becomes current, even though its own date is numerically the latest", () => {
+    const history = [row("a", "location", "LA"), row("b", "location", "Florida")];
+    const eventDates = new Map([["b", "2030-01-01"]]); // a stated future retirement plan
+    const resolved = resolveAttribute(history, eventDates, NOW)!;
+    expect(resolved.value).toBe("LA");
+  });
+
+  it("two explicitly dated facts resolve by their real date, not by which was typed later", () => {
+    const history = [row("a", "location", "Chicago"), row("b", "location", "Seattle")]; // "b" (Seattle) is textually last
+    const eventDates = new Map([
+      ["a", "2020-06-01"], // Chicago: dated LATER in real terms, even though typed first
+      ["b", "2018-01-01"] // Seattle: dated EARLIER, even though typed last
+    ]);
+    const resolved = resolveAttribute(history, eventDates, NOW)!;
+    expect(resolved.value).toBe("Chicago");
+    expect(resolved.row.id).toBe("a");
+  });
+
+  it("with no eventDate data at all (the default), resolution is byte-for-byte identical to plain last-inserted-wins", () => {
+    const history = [row("a", "location", "Austin"), row("b", "location", "Seattle")];
+    expect(resolveAttribute(history, new Map(), NOW)!.value).toBe("Seattle");
+    expect(resolveAttribute(history)!.value).toBe("Seattle"); // omitting the params entirely behaves the same
+  });
+
+  it("a same-day eventDate on the textually-last row still wins over an earlier undated row — the cap excludes only STRICTLY future dates", () => {
+    const history = [row("a", "location", "Austin"), row("b", "location", "Seattle")];
+    const eventDates = new Map([["b", NOW.slice(0, 10)]]); // dated exactly today, not future
+    expect(resolveAttribute(history, eventDates, NOW)!.value).toBe("Seattle");
+  });
+
+  it("immutable (birthdate) resolution is completely unaffected by eventDateByRowId — oldest-valid-wins regardless of dates", () => {
+    const history = [row("a", "birthdate", "1970-04-24"), row("b", "birthdate", "1983")];
+    const eventDates = new Map([
+      ["a", "1970-04-24"],
+      ["b", "2020-01-01"] // even a much "later" date on the second row must not matter for an immutable attribute
+    ]);
+    const resolved = resolveAttribute(history, eventDates, NOW)!;
+    expect(resolved.value).toBe("1970-04-24");
+    expect(resolved.conflicting.map((r) => r.value)).toEqual(["1983"]);
+  });
+});
+
+describe("resolveEntityAttribute — eventDate-aware resolution end-to-end through rebuild (perception_logs.event_at)", () => {
+  let eventLog: EventLog;
+  let projections: ProjectionsDb;
+
+  beforeEach(() => {
+    eventLog = new EventLog(freshTestDbPath(import.meta.url, "events"));
+    projections = new ProjectionsDb(freshTestDbPath(import.meta.url, "projections"));
+  });
+
+  function appendExtraction(sourceEventId: string, payload: Record<string, unknown>) {
+    return eventLog.append({
+      type: "extraction_completed",
+      actor: "system",
+      payload: { sourceEventId, extractorVersion: "message-v1", entities: [], structuralAtoms: [], socialBonds: [], attributes: [], ...payload },
+      userId: PRIMARY_USER_ID
+    });
+  }
+
+  const NOW = "2026-08-29T00:00:00.000Z"; // fixed, not wall-clock — keeps the future-date test from breaking once real time passes 2030
+
+  it("KNOWN, ACCEPTED GAP through full rebuild: a childhood location mentioned AFTER the current one, with an explicit past eventDate, still overwrites the current location — undated-vs-dated is undecidable from eventDate alone (see the pure-function test of the same name); unchanged, legacy behavior", () => {
+    const msg1 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "I live in LA.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    appendExtraction(msg1.id, { attributes: [{ entityName: "me", attribute: "location", value: "LA", eventDate: null }] });
+    const msg2 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "I grew up in Toledo back in the 90s, moved away in 1995.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    appendExtraction(msg2.id, { attributes: [{ entityName: "me", attribute: "location", value: "Toledo", eventDate: "1995-01-01" }] });
+
+    rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+
+    expect(resolveEntityAttribute(projections, PRIMARY_USER_ID, primaryEntityId(PRIMARY_USER_ID), "location", NOW)!.value).toBe("Toledo");
+  });
+
+  it("a stated future relocation plan never becomes the current location", () => {
+    const msg1 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "I live in LA.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    appendExtraction(msg1.id, { attributes: [{ entityName: "me", attribute: "location", value: "LA", eventDate: null }] });
+    const msg2 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "Once I retire I want to move to Florida.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    appendExtraction(msg2.id, { attributes: [{ entityName: "me", attribute: "location", value: "Florida", eventDate: "2030-01-01" }] });
+
+    rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+
+    expect(resolveEntityAttribute(projections, PRIMARY_USER_ID, primaryEntityId(PRIMARY_USER_ID), "location", NOW)!.value).toBe("LA");
+  });
+
+  it("a genuinely more recent, explicitly dated move still correctly becomes current, even without a same-turn undated statement", () => {
+    const msg1 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "I live in Austin.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    appendExtraction(msg1.id, { attributes: [{ entityName: "me", attribute: "location", value: "Austin", eventDate: null }] });
+    const msg2 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "I moved to Seattle last year.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    appendExtraction(msg2.id, { attributes: [{ entityName: "me", attribute: "location", value: "Seattle", eventDate: "2025-08-01" }] });
+
+    rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+
+    expect(resolveEntityAttribute(projections, PRIMARY_USER_ID, primaryEntityId(PRIMARY_USER_ID), "location", NOW)!.value).toBe("Seattle");
+  });
+});
+
 describe("resolveEntityAttribute / getCurrentAttribute — same resolver, DB-backed", () => {
   let projections: ProjectionsDb;
 
