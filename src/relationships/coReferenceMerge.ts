@@ -45,6 +45,21 @@ export interface CoReferenceMergeInfo {
   realName: string;
   /** The canonical name to create the merged entity under — always the real name (DECIDED: a real name beats a role-word placeholder outright). */
   canonicalName: string;
+  /**
+   * Alias-suppression fix: whether the LOSING side's exact name string
+   * should be kept out of the alias index going forward. True for the
+   * role-word flow (the only flow that has ever run) — a role word like
+   * "husband" must stay free to resolve to some other, unrelated anchor
+   * elsewhere in the account, so it is deliberately never registered.
+   * False is for a future real-name-vs-real-name merge, where the losing
+   * side IS a specific person's name, and leaving it unaliased would
+   * silently re-split the merge on that name's next independent mention
+   * (it would fail to resolve and spin up a fresh duplicate entity).
+   * Read directly from the fact_confirmed payload — never recomputed at
+   * replay time, since only the two name strings survive by then, not
+   * either entity's original name_kind.
+   */
+  aliasSuppressed: boolean;
 }
 
 interface StoredCoReferenceConfirmation {
@@ -54,6 +69,7 @@ interface StoredCoReferenceConfirmation {
   realStableKey: string;
   realName: string;
   canonicalName: string;
+  aliasSuppressed: boolean;
 }
 
 /**
@@ -80,7 +96,13 @@ export function computeCoReferenceMerges(events: EventRecord[]): Map<string, CoR
       typeof realName !== "string"
     )
       continue;
-    confirmations.set(event.id, { confirmationEventId: event.id, placeholderStableKey, placeholderName, realStableKey, realName, canonicalName: realName });
+    // Absent on any confirmation recorded before this field existed —
+    // every one of them ran the role-word flow, the only flow that has
+    // ever produced a coReference confirmation, so defaulting to
+    // suppressed (true) reproduces exactly what already happened rather
+    // than changing behavior for historical data on replay.
+    const aliasSuppressed = typeof payload.aliasSuppressed === "boolean" ? payload.aliasSuppressed : true;
+    confirmations.set(event.id, { confirmationEventId: event.id, placeholderStableKey, placeholderName, realStableKey, realName, canonicalName: realName, aliasSuppressed });
   }
   if (confirmations.size === 0) return new Map();
 
@@ -100,7 +122,8 @@ export function computeCoReferenceMerges(events: EventRecord[]): Map<string, CoR
       realStableKey: c.realStableKey,
       placeholderName: c.placeholderName,
       realName: c.realName,
-      canonicalName: c.canonicalName
+      canonicalName: c.canonicalName,
+      aliasSuppressed: c.aliasSuppressed
     };
     merges.set(c.placeholderStableKey, info);
     merges.set(c.realStableKey, info);

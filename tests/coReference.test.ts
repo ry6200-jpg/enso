@@ -41,12 +41,20 @@ function appendCoReferenceConfirmation(
   placeholderName: string,
   realStableKey: string,
   realName: string,
-  anchorName: string
+  anchorName: string,
+  aliasSuppressed?: boolean
 ) {
   return eventLog.append({
     type: "fact_confirmed",
     actor: "user",
-    payload: { kind: "coReference", placeholderStableKey, placeholderName, realStableKey, realName, anchorName },
+    // aliasSuppressed omitted entirely (not just undefined) when the
+    // caller doesn't pass one — matches every confirmation already on the
+    // real event log, which predates this field, so the same object
+    // shape exercises the "absent defaults to suppressed" replay path.
+    payload:
+      aliasSuppressed === undefined
+        ? { kind: "coReference", placeholderStableKey, placeholderName, realStableKey, realName, anchorName }
+        : { kind: "coReference", placeholderStableKey, placeholderName, realStableKey, realName, anchorName, aliasSuppressed },
     userId: PRIMARY_USER_ID
   });
 }
@@ -285,6 +293,57 @@ describe("co-reference merge pre-pass: folds into ONE entity across both mention
     expect(projections.findEntityIdByExactAlias(PRIMARY_USER_ID, "husband")).toBeUndefined();
     const merged = entityNamed("Ah Song")[0]!;
     expect(projections.findEntityIdByExactAlias(PRIMARY_USER_ID, "Ah Song")).toBe(merged.id);
+  });
+
+  it("an absent aliasSuppressed field defaults to suppressed, same as the real event log's pre-existing confirmations", () => {
+    const mHusband = msg("Her husband is not well.");
+    appendExtraction(mHusband.id, {
+      entities: [{ name: "Annissa", type: "person" }],
+      structuralAtoms: [{ type: "spouse_of", fromName: "husband", toName: "Annissa", action: "assert", fromNameIsRoleWord: true, toNameIsRoleWord: false }]
+    });
+    const mAhSong = msg("Ah Song is doing better now.");
+    appendExtraction(mAhSong.id, {
+      structuralAtoms: [{ type: "spouse_of", fromName: "Ah Song", toName: "Annissa", action: "assert", fromNameIsRoleWord: false, toNameIsRoleWord: false }]
+    });
+    rebuild();
+    // No 6th argument at all — the field is entirely absent from the payload, not just `undefined`.
+    appendCoReferenceConfirmation(mHusband.id, "husband", mAhSong.id, "Ah Song", "Annissa");
+    rebuild();
+
+    expect(projections.findEntityIdByExactAlias(PRIMARY_USER_ID, "husband")).toBeUndefined();
+  });
+
+  it("an unsuppressed merge (two real names) registers the losing name as an alias, so a later independent mention resolves to the canonical entity instead of spinning up a duplicate", () => {
+    const mAnSong = msg("Alice's husband An Song came by.");
+    appendExtraction(mAnSong.id, {
+      entities: [{ name: "Alice", type: "person" }, { name: "An Song", type: "person" }],
+      structuralAtoms: [{ type: "spouse_of", fromName: "An Song", toName: "Alice", action: "assert", fromNameIsRoleWord: false, toNameIsRoleWord: false }]
+    });
+    const mAhSong = msg("Ah Song is doing better now.");
+    appendExtraction(mAhSong.id, {
+      entities: [{ name: "Ah Song", type: "person" }]
+    });
+    rebuild();
+
+    // "An Song" survives — passed as realName, matching canonicalName := realName.
+    appendCoReferenceConfirmation(mAhSong.id, "Ah Song", mAnSong.id, "An Song", "Alice", false);
+    rebuild();
+
+    const canonical = entityNamed("An Song")[0]!;
+    expect(entityNamed("Ah Song")).toHaveLength(0);
+    expect(projections.findEntityIdByExactAlias(PRIMARY_USER_ID, "An Song")).toBe(canonical.id);
+    expect(projections.findEntityIdByExactAlias(PRIMARY_USER_ID, "Ah Song")).toBe(canonical.id);
+
+    // A THIRD, later message — not either founding stable-key event —
+    // mentions the losing name again on its own.
+    const mLater = msg("Spoke to Ah Song again today.");
+    appendExtraction(mLater.id, {
+      entities: [{ name: "Ah Song", type: "person" }]
+    });
+    rebuild();
+
+    expect(entityNamed("Ah Song")).toHaveLength(0); // no fresh duplicate
+    expect(projections.listEntities(PRIMARY_USER_ID).filter((e) => e.name === "An Song" || e.name === "Ah Song")).toHaveLength(1);
   });
 });
 

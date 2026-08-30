@@ -636,7 +636,7 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   let coReferenceAnswerEvent: EventRecord | undefined;
   if (coReferenceDecision?.fire && coReferenceDecision.pendingStableKey) {
     if (coReferenceDecision.direction === "confirm") {
-      const resolved = resolveCoReferenceConfirmation(coReferencePendingCandidates, coReferenceDecision.pendingStableKey);
+      const resolved = resolveCoReferenceConfirmation(coReferencePendingCandidates, coReferenceDecision.pendingStableKey, deps.projectionsDb.listEntities(input.userId));
       if (resolved) {
         coReferenceAnswerEvent = deps.eventLog.append({ type: "fact_confirmed", actor: "user", payload: resolved, userId: input.userId });
       }

@@ -254,6 +254,15 @@ export interface CoReferenceConfirmedPayload {
   realName: string;
   /** Display/audit only — the anchor has no stable-key role in the merge fold itself (see coReferenceMerge.ts), which only ever needs the two stable keys and the canonical name. */
   anchorName: string;
+  /**
+   * Alias-suppression fix: decided HERE, at confirmation time, while the
+   * placeholder side's current name_kind is still visible from
+   * projections — never inferred later at replay, when only the two name
+   * strings survive. True (suppressed, today's only real path) whenever
+   * the placeholder side is actually name_kind 'role_word'; see
+   * coReferenceMerge.ts's CoReferenceMergeInfo for what this controls.
+   */
+  aliasSuppressed: boolean;
 }
 
 /**
@@ -274,17 +283,20 @@ export interface CoReferenceConfirmedPairing {
   anchorName: string;
 }
 
-/** Turns a router-validated "confirm" decision (already checked against the pending candidate list by intentRouter.ts) into the fact_confirmed payload to append — resolved against the PENDING list (findPendingCoReferenceQuestions), never the fresh ask-eligible list: the confirming message itself ("yes, same person") won't re-mention the anchor, so the ask-eligible list's own "anchor must be live" gate would wrongly filter it out. Returns null if the caller passes something that doesn't resolve — the same defensive-second-check discipline as attestation.ts's resolveAttestation. */
-export function resolveCoReferenceConfirmation(pending: CoReferenceConfirmedPairing[], placeholderStableKey: string): CoReferenceConfirmedPayload | null {
+/** Turns a router-validated "confirm" decision (already checked against the pending candidate list by intentRouter.ts) into the fact_confirmed payload to append — resolved against the PENDING list (findPendingCoReferenceQuestions), never the fresh ask-eligible list: the confirming message itself ("yes, same person") won't re-mention the anchor, so the ask-eligible list's own "anchor must be live" gate would wrongly filter it out. Returns null if the caller passes something that doesn't resolve — the same defensive-second-check discipline as attestation.ts's resolveAttestation. `entities` (current projections snapshot) decides aliasSuppressed here, while name_kind is still visible — defaults to suppressed (true) if the placeholder entity can't be found, the same safe default replay falls back to for pre-existing data. */
+export function resolveCoReferenceConfirmation(pending: CoReferenceConfirmedPairing[], placeholderStableKey: string, entities: EntityRow[]): CoReferenceConfirmedPayload | null {
   const match = pending.find((p) => p.placeholderStableKey === placeholderStableKey);
   if (!match) return null;
+  const placeholderEntity = entities.find((e) => stableKeyOf(e) === placeholderStableKey);
+  const aliasSuppressed = placeholderEntity ? placeholderEntity.name_kind === "role_word" : true;
   return {
     kind: "coReference",
     placeholderStableKey: match.placeholderStableKey,
     placeholderName: match.placeholderName,
     realStableKey: match.realStableKey,
     realName: match.realName,
-    anchorName: match.anchorName
+    anchorName: match.anchorName,
+    aliasSuppressed
   };
 }
 

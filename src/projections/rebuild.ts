@@ -322,14 +322,22 @@ export function rebuildProjections(
    * reached). Either way, the caller's own normal cascade/owner-scoped
    * logic never runs for this call — the merge is authoritative.
    *
-   * Deliberately never registers the ROLE-WORD string as an alias: when
-   * the role-word side is the FIRST side reached, createEntity is called
-   * with the REAL name, never the raw role-word string, so
-   * registerAlias(id, name, ...) inside createEntity only ever aliases the
-   * real name. When the role-word side is the SECOND side reached,
-   * resolveRoleWordName's own call site simply never calls registerAlias
-   * at all (see below) — satisfying "the role-word string is not
-   * registered as an alias" without any extra step.
+   * Alias-suppression is a per-pairing flag on the confirmation itself
+   * (CoReferenceMergeInfo.aliasSuppressed), decided once at confirmation
+   * time and never recomputed here. Suppressed (true — every pairing that
+   * has ever actually run, and the only mode the role-word ask ever
+   * produces): the losing side's exact string is deliberately never
+   * registered as an alias below. When the role-word side is the FIRST
+   * side reached, createEntity is called with the REAL name, never the
+   * raw role-word string, so registerAlias(id, name, ...) inside
+   * createEntity only ever aliases the real name; when it's the SECOND
+   * side reached, this function's own explicit registerAlias call is
+   * skipped. Either order, a role word like "husband" stays free to
+   * resolve to some other, unrelated anchor elsewhere in the account.
+   * Unsuppressed (a real-name-vs-real-name merge): this function
+   * additionally registers whichever raw string it was just called with,
+   * so the losing real name stays searchable on any later, independent
+   * mention instead of silently re-splitting into a fresh duplicate.
    *
    * Checked against the full sourceEventIds provenance array (`[payload.
    * sourceEventId, event.id]` — the message event's own id AND the
@@ -362,10 +370,21 @@ export function rebuildProjections(
     const existing = canonicalIdByCoReferencePairing.get(info.placeholderStableKey);
     if (existing) {
       projections.touchEntity(existing, sourceEventIds, extractorVersion);
+      // Alias-suppression fix: suppressed (role-word) mode stays exactly
+      // as before — never alias the losing side's string, since a role
+      // word must stay free to resolve to some other anchor elsewhere in
+      // the account. Unsuppressed mode (a real-name-vs-real-name merge)
+      // additionally aliases whichever string this call resolved — the
+      // canonical name is already aliased via createEntity below on
+      // whichever side was reached first, so this is what keeps the
+      // LOSING real name searchable on any later, independent mention
+      // instead of silently re-splitting into a fresh duplicate entity.
+      if (!info.aliasSuppressed) registerAlias(existing, rawName, sourceEventIds);
       return existing;
     }
     const id = createEntity(info.canonicalName, extractorVersion, sourceEventIds);
     canonicalIdByCoReferencePairing.set(info.placeholderStableKey, id);
+    if (!info.aliasSuppressed) registerAlias(id, rawName, sourceEventIds);
     return id;
   }
 
