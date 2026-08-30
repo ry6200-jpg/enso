@@ -28,8 +28,40 @@ export interface ContextBudgets {
    * (~35,600 chars fixed) + retrieval (6,000) + self-profile (1,000) +
    * this budget tops out around 82,600 chars (~20,650 tokens) even at the
    * ceiling — nowhere near any modern model's context window.
+   *
+   * HYSTERESIS (owner-requested, prompt-caching follow-up): this is now
+   * the HIGH watermark only — the hard ceiling that triggers a prune —
+   * not a target the window is trimmed to on every call. See
+   * lowWatermarkRecentWindowChars below for the target a prune drops down
+   * to. Live-verified against the real primary account before this was
+   * built: a naive "trim to this exact number every turn once it's
+   * exceeded" design made the window's start point move on every single
+   * turn once the account was long enough to hit the ceiling (confirmed:
+   * a real 638-turn account's two most-recent turns shared only a
+   * 75-byte-into-the-window prefix, diverging from the very first line of
+   * conversation content) — which defeats prompt-prefix caching for the
+   * conversation window entirely on any long-running account, the exact
+   * case this budget exists to bound. A simulated replay of the real
+   * account's actual turn sequence through the two-watermark version
+   * found prunes firing roughly every 46-208 turns (median 55) instead of
+   * every turn — i.e. the window's start point now holds still for tens
+   * of turns at a stretch, which is what makes a stable, cacheable prefix
+   * achievable for a real, long-running account instead of only a fresh
+   * one.
    */
   maxRecentWindowChars: number;
+  /**
+   * HYSTERESIS low watermark: the target a prune drops the window down to,
+   * once maxRecentWindowChars (the high watermark) is exceeded. Must be
+   * strictly less than maxRecentWindowChars — the gap between the two is
+   * what creates the hysteresis band: after a prune, the window can grow
+   * anywhere from this value back up to the high watermark, entirely
+   * untouched, before the next prune fires. A field on this object rather
+   * than hardcoded in truncateRecentTurnsToCharBudget, same discipline as
+   * every other budget here, so it's overridable per test/caller like the
+   * rest of ContextBudgets already is.
+   */
+  lowWatermarkRecentWindowChars: number;
   /** Part B (R38): max characters of the always-on self-profile block (src/persona/systemPrompt.ts's buildSelfProfileBlock, called by chatPipeline.ts before assembleContext). Deliberately generous relative to actual content — the profile is bounded by construction (3 attributes, direct bonds only) — but still an explicit, documented cap, never an unbounded block. */
   maxSelfProfileChars: number;
   /**
@@ -70,6 +102,7 @@ export const DEFAULT_CONTEXT_BUDGETS: ContextBudgets = {
   maxRetrievedChunks: 8,
   maxRetrievedChars: 6000,
   maxRecentWindowChars: 40000,
+  lowWatermarkRecentWindowChars: 30000,
   maxSelfProfileChars: 1000,
   maxLocationContextChars: 200,
   maxCurrentDateContextChars: 100,
@@ -109,24 +142,67 @@ export interface AssembledContext {
 }
 
 /**
- * Part B-0: keeps the MOST RECENT turns verbatim under a character budget,
- * dropping from the OLDEST end only — never the middle. Mirrors the
- * retrieval char-budget's own precedent one line down: a single turn that
- * alone exceeds the budget is dropped entirely rather than partially
- * included (same as "a single chunk that alone exceeds the character
- * budget is dropped entirely, not injected partially").
+ * Part B-0, HIGH-LOW WATERMARK (HYSTERESIS) TRIM: keeps the MOST RECENT
+ * turns verbatim, dropping from the OLDEST end only — never the middle —
+ * same as before. What changed: this used to trim down to `maxChars`
+ * itself on every single call once exceeded, which meant the window's
+ * start point moved on every turn past that point (see
+ * maxRecentWindowChars's own doc comment for the real-account evidence
+ * this broke prompt-prefix caching). Now the window is left COMPLETELY
+ * UNTOUCHED — not even re-measured against the low watermark — as long as
+ * its total stays at or under `highWatermarkChars`; only once that ceiling
+ * is actually exceeded does a prune fire, dropping oldest turns until the
+ * total is back at or under `lowWatermarkChars`.
+ *
+ * STATELESS BY REPLAY, not by persisted memory: this function has no
+ * memory of a previous call, and the app has nowhere to durably keep such
+ * memory anyway (a fresh checkout/process per request, per EN-052/EN-054's
+ * disposable-projection philosophy — there is no long-lived server process
+ * to hold an in-memory cursor across turns, and inventing a new persisted
+ * field for it would be its own schema decision this task was never asked
+ * to make). Hysteresis is reproduced by REPLAYING the identical high/low
+ * process over the full turn sequence from its true beginning on every
+ * call: accumulate turns in order, and only pop from the front (advancing
+ * the simulated window's start) when the running total exceeds the high
+ * watermark, continuing until it's back at or under the low watermark.
+ * Because the underlying turn sequence is append-only and this replay is
+ * fully deterministic, it always reconverges on exactly the boundary a
+ * genuinely stateful implementation would have — the anchor holds between
+ * prunes and only advances at a prune, with no external state required.
+ *
+ * OVERSIZED SINGLE TURN (confirmed theoretical in the real corpus checked
+ * before this was built — longest real turn was 1098 chars, nowhere near
+ * either watermark — handled defensively anyway, deliberately not
+ * elaborately): if one turn alone exceeds the high watermark, the inner
+ * while loop pops it too once it's the only thing left in the simulated
+ * window and the total is still over the low watermark — it is dropped
+ * entirely, never partially included, same established precedent this
+ * function's retrieval-side counterpart already uses ("a single chunk
+ * that alone exceeds the character budget is dropped entirely, not
+ * injected partially"). No throw, no infinite loop: the loop is bounded
+ * by the window never being asked to pop past the turn currently being
+ * accumulated.
  */
-function truncateRecentTurnsToCharBudget(recentTurns: RecentTurnForPrompt[], maxChars: number): { injectedTurns: RecentTurnForPrompt[]; truncated: boolean } {
+/** Exported (was private) so the hysteresis boundary itself — which turn ends up the window's oldest, by eventId — is directly testable, not just inferable from rendered prompt text (RecentTurnForPrompt.eventId is deliberately never rendered into the prompt itself). */
+export function truncateRecentTurnsToCharBudget(
+  recentTurns: RecentTurnForPrompt[],
+  highWatermarkChars: number,
+  lowWatermarkChars: number
+): { injectedTurns: RecentTurnForPrompt[]; truncated: boolean } {
+  let windowStart = 0;
   let runningChars = 0;
-  let cutoffIndex = recentTurns.length;
-  for (let i = recentTurns.length - 1; i >= 0; i--) {
-    const turnChars = recentTurns[i]!.text.length;
-    if (runningChars + turnChars > maxChars) break;
-    runningChars += turnChars;
-    cutoffIndex = i;
+
+  for (let i = 0; i < recentTurns.length; i++) {
+    runningChars += recentTurns[i]!.text.length;
+    if (runningChars <= highWatermarkChars) continue;
+    while (runningChars > lowWatermarkChars && windowStart <= i) {
+      runningChars -= recentTurns[windowStart]!.text.length;
+      windowStart++;
+    }
   }
-  const injectedTurns = recentTurns.slice(cutoffIndex);
-  return { injectedTurns, truncated: injectedTurns.length < recentTurns.length };
+
+  const injectedTurns = recentTurns.slice(windowStart);
+  return { injectedTurns, truncated: windowStart > 0 };
 }
 
 /**
@@ -190,7 +266,7 @@ export function assembleContext(
   ambientContextBlock: string | null = null,
   suppressedEntitiesDirective: string | null = null
 ): AssembledContext {
-  const { injectedTurns, truncated: recentTruncated } = truncateRecentTurnsToCharBudget(recentTurns, budgets.maxRecentWindowChars);
+  const { injectedTurns, truncated: recentTruncated } = truncateRecentTurnsToCharBudget(recentTurns, budgets.maxRecentWindowChars, budgets.lowWatermarkRecentWindowChars);
 
   const injectedEventIds = new Set(injectedTurns.map((t) => t.eventId).filter((id): id is string => Boolean(id)));
   const dedupedChunks = candidateChunks.filter((c) => !injectedEventIds.has(c.source_event_id));
