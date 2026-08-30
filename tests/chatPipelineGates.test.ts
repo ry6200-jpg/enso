@@ -515,3 +515,47 @@ describe("sendMessage — coReference ask gate (Part 2): independent of the curi
     expect(payload.gateActions.coReferenceAskFired).toMatchObject({ placeholderName: "father", realName: "An Song", anchorName: "Vanessa" });
   });
 });
+
+describe("relationship retraction — the 'retracted' branch reaches the reply as a real directive, not null", () => {
+  it("a retracted outcome's directive names the specific relationship closed and reaches the assembled system prompt", async () => {
+    const annissaId = newId();
+    const msg = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "Annissa is my sister.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    projectionsDb.insertEntity({
+      id: annissaId,
+      user_id: PRIMARY_USER_ID,
+      name: "Annissa",
+      confirmed: 0,
+      source_event_ids: JSON.stringify([msg.id]),
+      extractor_version: "message-v7",
+      pending_disambiguation: null,
+      created_at: new Date().toISOString()
+    });
+    projectionsDb.insertStructuralAtom({
+      id: newId(),
+      user_id: PRIMARY_USER_ID,
+      type: "sibling_of",
+      from_entity_id: annissaId,
+      to_entity_id: primaryEntityId(PRIMARY_USER_ID),
+      basis: "stated",
+      interval_start: null,
+      interval_end: null,
+      source_event_ids: JSON.stringify([msg.id]),
+      created_at: new Date().toISOString()
+    });
+
+    deps.intentRouter = fakeIntentRouter({
+      decision: decisionWith({ relationshipRetraction: { fire: true, firstName: "Annissa", secondName: "me", relationType: "sibling_of" } })
+    });
+
+    const result = await sendMessage(deps, { userId: PRIMARY_USER_ID, text: "Annissa is not my sister.", recentTurns: [] });
+
+    // The specific confirmation — not the generic "no such relationship" or ambiguity directives this same axis also has.
+    expect(result.debug.systemPrompt).toContain("sibling");
+    expect(result.debug.systemPrompt).toContain("Annissa");
+    // The unconditional clause — present regardless of whether this particular test's message named anyone else.
+    expect(result.debug.systemPrompt).toMatch(/do NOT imply/);
+
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.gateActions.relationshipRetractionEventId).not.toBeNull();
+  });
+});

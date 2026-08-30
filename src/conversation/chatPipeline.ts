@@ -54,6 +54,7 @@ import {
 import {
   buildAmbiguousRetractionDirective,
   buildNotFoundRetractionDirective,
+  buildRelationshipRetractedDirective,
   buildUnresolvableRetractionDirective,
   resolveRelationshipRetraction
 } from "../relationships/relationshipRetraction.js";
@@ -685,11 +686,17 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
 
   // Relationship retraction: single-shot, resolved once, here — unlike
   // mergeRequest/typoMerge, there is no propose-then-confirm turn shape at
-  // all (the relationship either exists to close or it doesn't), so a
-  // "retracted" outcome is appended after the reply below with no
-  // directive of its own, same as mergeRequest's "confirmed" outcome —
-  // recognizing what the owner already said, not something Enso's own
-  // reply needs to execute.
+  // all (the relationship either exists to close or it doesn't). Unlike
+  // mergeRequest's "confirmed" outcome, a "retracted" outcome here DOES
+  // get its own directive (buildRelationshipRetractedDirective) — live-
+  // caught gap: with no directive, a reply naturally responds to
+  // whatever the owner's own sentence said, not to what was actually
+  // written, and a message retracting two relationships (this axis only
+  // ever resolves one, by design) produced a reply that read as though
+  // both were handled when only one was. No EN-073 verification needed
+  // though: unlike an ask/proposal, there's no state a missed directive
+  // would wrongly consume — the fact_corrected event is already written
+  // by the time this reply is generated either way.
   const relationshipRetractionDecision = routerResult?.decision.relationshipRetraction;
   const relationshipRetractionOutcome =
     relationshipRetractionDecision?.fire && relationshipRetractionDecision.firstName && relationshipRetractionDecision.secondName && relationshipRetractionDecision.relationType
@@ -711,7 +718,9 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
         ? buildAmbiguousRetractionDirective(relationshipRetractionOutcome.name, relationshipRetractionOutcome.matchNames)
         : relationshipRetractionOutcome?.outcome === "notFound"
           ? buildNotFoundRetractionDirective(relationshipRetractionOutcome.firstName, relationshipRetractionOutcome.secondName, relationshipRetractionOutcome.relationType)
-          : null;
+          : relationshipRetractionOutcome?.outcome === "retracted"
+            ? buildRelationshipRetractedDirective(relationshipRetractionOutcome.payload)
+            : null;
 
   // EN-047/048: cheap literal-trigger layer always wins outright; otherwise
   // the router's own register judgment (already fail-safed to "natural" on
@@ -851,8 +860,11 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
 
   // Relationship retraction: a "retracted" outcome is appended
   // unconditionally, same "recognizing what the owner already said"
-  // discipline as mergeRequest's "confirmed" outcome above — no reply-text
-  // verification needed, and no pending state to record either (single-shot).
+  // discipline as mergeRequest's "confirmed" outcome above — the event is
+  // written regardless of what the reply says, so no EN-073 verification
+  // gates this append (unlike an ask/proposal, nothing here is protecting
+  // consumable state from a directive that went unexecuted); no pending
+  // state to record either (single-shot).
   let relationshipRetractionEvent: EventRecord | undefined;
   if (relationshipRetractionOutcome?.outcome === "retracted") {
     relationshipRetractionEvent = deps.eventLog.append({ type: "fact_corrected", actor: "user", payload: relationshipRetractionOutcome.payload, userId: input.userId });

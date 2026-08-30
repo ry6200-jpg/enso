@@ -9,6 +9,7 @@ import { buildSelfProfile } from "../src/projections/peopleView.js";
 import {
   buildAmbiguousRetractionDirective,
   buildNotFoundRetractionDirective,
+  buildRelationshipRetractedDirective,
   buildUnresolvableRetractionDirective,
   resolveRelationshipRetraction,
   type RelationshipRetractionPayload
@@ -139,6 +140,31 @@ describe("resolveRelationshipRetraction", () => {
     expect(outcome).toEqual({ outcome: "unresolvable", name: "Nobody Real" });
     expect(buildUnresolvableRetractionDirective("Nobody Real")).toContain("Nobody Real");
     expect(projections.listEntities(PRIMARY_USER_ID)).toHaveLength(0);
+  });
+});
+
+describe("buildRelationshipRetractedDirective", () => {
+  it("confirms the specific relationship closed, by name and type", () => {
+    const directive = buildRelationshipRetractedDirective({ kind: "relationshipRetraction", store: "structuralAtom", relationType: "sibling_of", targetStableKey: "01A", firstName: "Annissa", secondName: "me" });
+    expect(directive).toContain("Annissa");
+    expect(directive).toContain("sibling");
+  });
+
+  it("names a different relationship correctly too — not a fixed string", () => {
+    const directive = buildRelationshipRetractedDirective({ kind: "relationshipRetraction", store: "socialBond", relationType: "friend", targetStableKey: "01B", firstName: "Alice", secondName: "me" });
+    expect(directive).toContain("Alice");
+    expect(directive).toContain("friend");
+    expect(directive).not.toContain("Annissa");
+    expect(directive).not.toContain("sibling");
+  });
+
+  it("the unconditional 'do not imply others were also handled' clause is present regardless of which relationship was actually closed — the function has no way to know what else the message named, so it must hold every time", () => {
+    const first = buildRelationshipRetractedDirective({ kind: "relationshipRetraction", store: "structuralAtom", relationType: "sibling_of", targetStableKey: "01A", firstName: "Annissa", secondName: "me" });
+    const second = buildRelationshipRetractedDirective({ kind: "relationshipRetraction", store: "socialBond", relationType: "colleague", targetStableKey: "01C", firstName: "Bob", secondName: "me" });
+    for (const directive of [first, second]) {
+      expect(directive).toMatch(/do NOT imply/);
+      expect(directive).toMatch(/only actually updated this one/);
+    }
   });
 });
 

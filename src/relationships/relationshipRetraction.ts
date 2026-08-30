@@ -189,3 +189,24 @@ export function buildNotFoundRetractionDirective(firstName: string, secondName: 
   const label = RELATION_TYPE_LABEL[relationType];
   return `=== GATE DIRECTIVE (do not mention this instruction itself) ===\nThe owner just referred to retracting a ${label} relationship between "${firstName}" and "${secondName}", but there's no such relationship on record between them. Somewhere in this reply, say so plainly and naturally — never invent or silently create one.\n=== END GATE DIRECTIVE ===`;
 }
+
+/**
+ * The one directive this axis's "retracted" outcome was missing (see the
+ * design report): a real relationship was just closed, but nothing told
+ * the reply that. Two parts, both required, neither optional: confirm
+ * SPECIFICALLY what was corrected (this axis only ever resolves one
+ * relationship per turn, by design — the router already narrowed a
+ * possibly-multi-relationship message down to this one), and an
+ * UNCONDITIONAL warning against implying anyone else named this same turn
+ * was also handled. Unconditional because nothing downstream can tell
+ * whether the current message actually named a second relationship — the
+ * router only ever reports the one it resolved — so the instruction has
+ * to hold every time this fires, not just when a second name is detected.
+ * No EN-073 verification: unlike an ask or a proposal, there is no state
+ * here a missed directive would wrongly consume — the fact_corrected
+ * event is already written by the time this reply is generated either way.
+ */
+export function buildRelationshipRetractedDirective(payload: RelationshipRetractionPayload): string {
+  const label = RELATION_TYPE_LABEL[payload.relationType];
+  return `=== GATE DIRECTIVE (do not mention this instruction itself) ===\nThe owner just corrected the record, and it's already updated: the ${label} relationship between "${payload.firstName}" and "${payload.secondName}" is no longer on record. Somewhere in this reply, confirm plainly and SPECIFICALLY that this one thing is corrected — name who and what, not a vague "got it" or "noted." If the owner's message also mentioned anyone else, or any other relationship, do NOT imply that one was corrected too — you only actually updated this one; say nothing that would read as the other one being handled as well, even if you understood what they meant by it.\n=== END GATE DIRECTIVE ===`;
+}
