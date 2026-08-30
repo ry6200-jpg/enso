@@ -145,4 +145,48 @@ describe("role-word gender disambiguation: a bare role word resolves to the matc
     expect(entityNamed("mother")).toHaveLength(1); // ambiguous (both Alice and Elena are female) — a NEW placeholder is created, nothing guessed
     expect(projections.listStructuralAtoms(PRIMARY_USER_ID, "parent_of")).toHaveLength(3);
   });
+
+  it("post-merge re-mention, spouse_of: 'Alice's husband' resolves to the already-merged An Song, bypassing the merge record entirely (spouse_of is symmetric, unlike parent_of above)", () => {
+    const mHusband = msg("Alice mentioned her husband is not well.");
+    appendExtraction(mHusband.id, {
+      entities: [{ name: "Alice", type: "person" }],
+      structuralAtoms: [{ type: "spouse_of", fromName: "husband", toName: "Alice", action: "assert", fromNameIsRoleWord: true, toNameIsRoleWord: false }]
+    });
+    const mAnSong = msg("Alice's husband is An Song.");
+    appendExtraction(mAnSong.id, {
+      entities: [{ name: "An Song", type: "person" }],
+      structuralAtoms: [{ type: "spouse_of", fromName: "An Song", toName: "Alice", action: "assert", fromNameIsRoleWord: false, toNameIsRoleWord: false }]
+    });
+    appendCoReferenceConfirmation(mHusband.id, "husband", mAnSong.id, "An Song", "Alice");
+    rebuild();
+
+    const anSongBefore = entityNamed("An Song")[0]!;
+    expect(resolveEntityAttribute(projections, PRIMARY_USER_ID, anSongBefore.id, "gender")?.value).toBe("male");
+    expect(entityNamed("husband")).toHaveLength(0); // merged, same as the parent_of case above
+
+    // A genuinely NEW message, sharing no ids with mHusband/mAnSong — the
+    // same post-merge re-mention shape as the parent_of test above.
+    // resolveCoReferenceMerge is keyed on mHusband.id/mAnSong.id and will
+    // fail to match THIS message's own source-event ids; disambiguation is
+    // what has to resolve it, or it doesn't resolve at all.
+    const mLater = msg("Her husband called again today.");
+    appendExtraction(mLater.id, {
+      structuralAtoms: [{ type: "spouse_of", fromName: "husband", toName: "Alice", action: "assert", fromNameIsRoleWord: true, toNameIsRoleWord: false }]
+    });
+    rebuild();
+
+    expect(entityNamed("husband")).toHaveLength(0); // no new placeholder created
+    expect(projections.listStructuralAtoms(PRIMARY_USER_ID, "spouse_of")).toHaveLength(1); // resolved onto the EXISTING An Song<->Alice atom, no second
+
+    const aliceAfter = entityNamed("Alice")[0]!;
+    const anSongAfter = entityNamed("An Song")[0]!;
+    const husbandAtom = projections
+      .listStructuralAtoms(PRIMARY_USER_ID, "spouse_of")
+      .find(
+        (a) =>
+          (a.from_entity_id === anSongAfter.id && a.to_entity_id === aliceAfter.id) ||
+          (a.from_entity_id === aliceAfter.id && a.to_entity_id === anSongAfter.id)
+      );
+    expect(husbandAtom).toBeDefined();
+  });
 });
