@@ -1,6 +1,7 @@
 import { newId } from "../ids.js";
 import type { EntityAttributeRow, ProjectionsDb } from "../projections/db.js";
 import type { AttributeType, ProvenanceKind } from "../projections/attributeVocabulary.js";
+import { isGenderValue } from "../projections/attributeVocabulary.js";
 import { MONTH_NAMES, parseIsoDate } from "../zodiac/zodiac.js";
 
 /**
@@ -155,9 +156,18 @@ export const ATTRIBUTE_MUTABILITY: Record<AttributeType, AttributeMutability> = 
  * detector, inverted, catches this the same structural way regardless of
  * which attribute the misbinding lands on, without hand-writing a second
  * pattern that could disagree with what "date-shaped" already means here.
+ *
+ * gender: strict vocabulary (attributeVocabulary.ts's GENDER_VALUES —
+ * "male" | "female" only), app-level, never a DB CHECK constraint (see
+ * that file's own comment for why). Real production data had a bare
+ * pronoun ("she") land in this field with nothing to catch it before this
+ * check existed — this closes that gap at both read-time and write-time,
+ * since isPlausibleWriteTimeValue below calls straight through to this
+ * function for every non-birthdate attribute.
  */
 export function isValidAttributeValue(attribute: EntityAttributeRow["attribute"], value: string): boolean {
   if (attribute === "birthdate") return parseIsoDate(value) !== null;
+  if (attribute === "gender") return isGenderValue(value);
   return parseIsoDate(value) === null;
 }
 

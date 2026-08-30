@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { EventLog } from "../src/events/eventLog.js";
 import { ProjectionsDb } from "../src/projections/db.js";
 import { primaryEntityId, rebuildProjections } from "../src/projections/rebuild.js";
-import { assertAttribute, getCurrentAttribute, resolveAttribute, resolveEntityAttribute, type ResolvedAttribute } from "../src/perception/attributes.js";
+import { assertAttribute, getCurrentAttribute, isValidAttributeValue, resolveAttribute, resolveEntityAttribute, type ResolvedAttribute } from "../src/perception/attributes.js";
 import { getPrimaryUserBirthdate, getPrimaryUserAttribute } from "../src/projections/peopleView.js";
 import { getChineseZodiacSign, getWesternZodiacSign } from "../src/zodiac/zodiac.js";
 import type { EntityAttributeRow } from "../src/projections/db.js";
@@ -75,13 +75,20 @@ describe("resolveAttribute — pure function (R36/R37: mutability, not format, i
     expect(resolveAttribute(history)!.value).toBe("still anything");
   });
 
-  it("mutable (gender/sexual_orientation/life_stage, EN-114): latest wins, never flagged as a conflict — same model as occupation, deliberately NOT birthdate's immutable model", () => {
-    for (const attribute of ["gender", "sexual_orientation", "life_stage"] as const) {
+  it("mutable (sexual_orientation/life_stage, EN-114): latest wins, never flagged as a conflict — same model as occupation, deliberately NOT birthdate's immutable model. Free text, no vocabulary — unlike gender (see the next test), neither has format validation.", () => {
+    for (const attribute of ["sexual_orientation", "life_stage"] as const) {
       const history = [row("a", attribute, "first stated value"), row("b", attribute, "a later clarification")];
       const resolved = resolveAttribute(history)!;
       expect(resolved.value).toBe("a later clarification");
       expect(resolved.conflicting).toEqual([]);
     }
+  });
+
+  it("mutable (gender, role-word disambiguation batch): latest wins, never flagged as a conflict — same mutability model as occupation, but values must be in-vocabulary (male/female)", () => {
+    const history = [row("a", "gender", "male"), row("b", "gender", "female")];
+    const resolved = resolveAttribute(history)!;
+    expect(resolved.value).toBe("female");
+    expect(resolved.conflicting).toEqual([]);
   });
 
   it("EN-115 (mutable): a stated value silently supersedes an inferred one, even when the inferred row is LATER — never flagged as a conflict", () => {
@@ -577,5 +584,28 @@ describe("fact_corrected attribute-value correction, via full rebuild (item 4 #2
 
     expect(result.attributeCorrectionsApplied).toBe(0);
     expect(getPrimaryUserBirthdate(projections, PRIMARY_USER_ID)).toBeNull();
+  });
+});
+
+describe("isValidAttributeValue — gender vocabulary (role-word disambiguation batch)", () => {
+  it("accepts male and female", () => {
+    expect(isValidAttributeValue("gender", "male")).toBe(true);
+    expect(isValidAttributeValue("gender", "female")).toBe(true);
+  });
+
+  it("rejects a bare pronoun — the real production data bug this closes ('she' landed in the gender field with nothing to catch it)", () => {
+    expect(isValidAttributeValue("gender", "she")).toBe(false);
+    expect(isValidAttributeValue("gender", "he")).toBe(false);
+  });
+
+  it("rejects anything else outside the vocabulary — case-sensitive, no synonyms, no free text", () => {
+    expect(isValidAttributeValue("gender", "Male")).toBe(false);
+    expect(isValidAttributeValue("gender", "nonbinary")).toBe(false);
+    expect(isValidAttributeValue("gender", "")).toBe(false);
+  });
+
+  it("other attributes are unaffected by the gender vocabulary check", () => {
+    expect(isValidAttributeValue("occupation", "she")).toBe(true);
+    expect(isValidAttributeValue("sexual_orientation", "gay")).toBe(true);
   });
 });

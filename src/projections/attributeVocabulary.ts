@@ -49,11 +49,11 @@ export function isAttributeType(value: string): value is AttributeType {
 /**
  * Provenance kind (EN-114): whether an entity_attributes row came from the
  * owner directly stating it, or was inferred by Enso from a pattern of
- * other evidence. Nothing writes 'inferred' yet — this exists so residence
- * inference (spec: "deliberately NOT built, blocked... entity_attributes
- * carries no stated-vs-inferred distinction") and any future inference
- * work has a column and resolution behavior to write into, without a
- * second schema-touching pass later.
+ * other evidence. First real writer of 'inferred' is the gender-derivation
+ * hook in rebuild.ts (role-word disambiguation batch) — this column and
+ * the residence-inference note in the spec both predate it; this exists so
+ * that and any future inference work has a column and resolution behavior
+ * to write into, without a second schema-touching pass later.
  */
 export const PROVENANCE_KINDS = ["stated", "inferred"] as const;
 
@@ -61,4 +61,30 @@ export type ProvenanceKind = (typeof PROVENANCE_KINDS)[number];
 
 export function isProvenanceKind(value: string): value is ProvenanceKind {
   return (PROVENANCE_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * Gender value vocabulary (role-word disambiguation batch). Deliberately
+ * minimal — "male" | "female" only, exactly what the named use (resolving
+ * which of an owner's two parents a bare role word like "father" refers
+ * to) needs, no wider. App-level validation only (perception/attributes.ts's
+ * isValidAttributeValue), never a DB CHECK constraint on entity_attributes.
+ * value — matching the existing precedent for birthdate/location/
+ * occupation, none of which are CHECK-constrained on value either, and
+ * keeping any future widening a plain array edit rather than the
+ * rebuild-in-place CHECK-constraint migration EN-114's own precedent
+ * required (see CLAUDE.md's migration-discipline note). sexual_orientation
+ * deliberately has NO defined vocabulary and no derivation of any kind —
+ * abandoned after the schema-decision investigation found the inferable
+ * signals (spouse-gender pairing, pronoun resolution) too false-positive-
+ * prone and resting on an extraction-schema gap (bare pronouns aren't
+ * captured at all); it stays free text, stated-only, exactly as it always
+ * was.
+ */
+export const GENDER_VALUES = ["male", "female"] as const;
+
+export type GenderValue = (typeof GENDER_VALUES)[number];
+
+export function isGenderValue(value: string): value is GenderValue {
+  return (GENDER_VALUES as readonly string[]).includes(value);
 }

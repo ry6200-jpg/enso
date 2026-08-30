@@ -1,7 +1,7 @@
 import { newId } from "../ids.js";
 import type { EventRecord } from "../events/schema.js";
 import { UpcasterRegistry } from "../upcasters/registry.js";
-import { assertAttribute, ATTRIBUTE_MUTABILITY } from "../perception/attributes.js";
+import { assertAttribute, ATTRIBUTE_MUTABILITY, resolveEntityAttribute } from "../perception/attributes.js";
 import { computeEclipsedEventIds } from "../attachments/uploadDeletion.js";
 import { computeCoReferenceMerges } from "../relationships/coReferenceMerge.js";
 import {
@@ -14,7 +14,7 @@ import {
 import { assertParentOf, assertSiblingOf, assertSpouseOf, closeSpouseOf, deriveSiblingsFromParents } from "../relationships/structuralAtoms.js";
 import { closeBond, openBond } from "../relationships/socialBonds.js";
 import type { ProjectionsDb } from "./db.js";
-import type { AttributeType } from "./attributeVocabulary.js";
+import type { AttributeType, GenderValue } from "./attributeVocabulary.js";
 import { clusterEpisodeMarkers, type EpisodeMarkerEvent, type EpisodeMarkerKind } from "./episodes.js";
 
 interface ExtractionCompletedPayload {
@@ -106,6 +106,65 @@ export interface RebuildResult {
 }
 
 const UNKNOWN_EXTRACTOR_VERSION = "unknown";
+
+/**
+ * Role-word gender derivation (role-word disambiguation batch). English
+ * only, deliberately hardcoded and deliberately incomplete — a gap here
+ * means "no gender derived," never a wrong guess. Gender-neutral kinship
+ * words (partner, cousin, sibling, parent, spouse, child, guardian, ex)
+ * are deliberately absent — see the schema-decision investigation this
+ * batch's build prompt references for why inferring gender from a
+ * genuinely neutral word would be actively wrong, not just uninformative.
+ * Keyed by the SAME normalized lowercase form `resolveRoleWordName` already
+ * computes (`lower`), so a lookup here never needs its own normalization.
+ */
+const ROLE_WORD_GENDER: Record<string, GenderValue> = {
+  father: "male",
+  dad: "male",
+  papa: "male",
+  husband: "male",
+  brother: "male",
+  uncle: "male",
+  son: "male",
+  grandfather: "male",
+  grandpa: "male",
+  nephew: "male",
+  boyfriend: "male",
+  mother: "female",
+  mom: "female",
+  mama: "female",
+  wife: "female",
+  sister: "female",
+  aunt: "female",
+  daughter: "female",
+  grandmother: "female",
+  grandma: "female",
+  niece: "female",
+  girlfriend: "female"
+};
+
+/**
+ * The subset of ROLE_WORD_GENDER that also maps onto a specific GATED_TYPES
+ * relation (parent_of/spouse_of) — role-word disambiguation (Task 3) only
+ * makes structural sense for these: "father"/"mother"-family words always
+ * mean "look at the owner's parent_of atoms" (owner is the CHILD side);
+ * "husband"/"wife" always mean "look at the owner's spouse_of atoms"
+ * (symmetric — owner can be either side). Words outside this subset
+ * (brother, uncle, son, ...) still get a derived gender written (the
+ * broader map above), they just never drive disambiguation — sibling_of/
+ * socialBonds have no "owner's counterparty" concept parent_of/spouse_of
+ * disambiguation relies on here.
+ */
+const ROLE_WORD_RELATION: Record<string, "parent_of" | "spouse_of"> = {
+  father: "parent_of",
+  dad: "parent_of",
+  papa: "parent_of",
+  mother: "parent_of",
+  mom: "parent_of",
+  mama: "parent_of",
+  husband: "spouse_of",
+  wife: "spouse_of"
+};
 
 function normalize(name: string): string {
   return name.trim().toLowerCase();
@@ -409,6 +468,98 @@ export function rebuildProjections(
   }
 
   /**
+   * Role-word gender derivation (role-word disambiguation batch): writes an
+   * INFERRED gender row for entityId when the role word being resolved
+   * (already lowercased/normalized) implies one, via ROLE_WORD_GENDER.
+   * Called at every point a role word resolves to an entity id that didn't
+   * already have one BEFORE this call — both the co-reference-merge
+   * canonical-creation path and the ordinary new-placeholder path, never on
+   * a cache-hit/reuse path (the gender was already derived the first time).
+   * No perception-log entry is written, matching EN-115's own precedent
+   * (peopleView.ts): an inferred row has no real "the owner told me this"
+   * moment to log, and resolveEntityAttribute's mutable-attribute
+   * resolution works correctly without one (falls back to insertion order
+   * when no event-dated perception log exists, same as any other undated
+   * row). assertAttribute's own write-time validation (isPlausibleWriteTimeValue
+   * -> isValidAttributeValue) still applies, so this can never write
+   * anything outside GENDER_VALUES even if ROLE_WORD_GENDER is ever
+   * miswritten by a future edit.
+   */
+  function deriveRoleWordGender(entityId: string, roleWordLower: string, sourceEventIds: string[]): void {
+    const gender = ROLE_WORD_GENDER[roleWordLower];
+    if (!gender) return;
+    assertAttribute(projections, userId, entityId, "gender", gender, sourceEventIds, "inferred");
+  }
+
+  /**
+   * Role-word disambiguation (Task 3): when a role word maps onto a gated
+   * relation (ROLE_WORD_RELATION — parent_of or spouse_of) and the owner
+   * already has REAL, named (never role_word) counterparties of that
+   * relation on record, checks each one's CURRENT gender (stated or
+   * derived, via resolveEntityAttribute — a stated value already wins over
+   * an inferred one, so this never needs its own tie-break) against the
+   * gender the role word implies. Resolves directly to that counterparty
+   * ONLY when EXACTLY ONE matches — zero or multiple matches are both left
+   * to the caller's existing placeholder-creation fallback, never guessed.
+   * parent_of's owner is always the CHILD (to_entity_id); spouse_of is
+   * symmetric, so the owner can be on either side and the counterparty is
+   * whichever side isn't the owner. Placeholder (name_kind === 'role_word')
+   * counterparties are excluded from the candidate pool — a role word
+   * should never resolve onto ANOTHER unnamed placeholder, only onto an
+   * already-identified real person; a role-word counterparty here always
+   * means the earlier owner-scoped role-word search (this function's own
+   * caller, just above where this runs) would already have caught the
+   * exact-name case, so nothing eligible is ever skipped by excluding it.
+   *
+   * REAL LIMITATION, confirmed by direct testing, not theoretical: a
+   * "stated" gender written via the `attributes` array is NEVER visible
+   * here, in ANY rebuild, however the events are ordered — this function
+   * runs during the structuralAtoms/socialBonds/entities loop (this file's
+   * FIRST full pass over `events`), and `payload.attributes` is processed
+   * in a SEPARATE, LATER full pass over `events` (this file's second
+   * `for (const event of events)` loop, well below this one) that hasn't
+   * run yet for ANY event, including earlier ones, while this loop is
+   * still in progress. A stated gender from a prior, already-completed
+   * rebuild does not help either — rebuild always drops projections and
+   * replays from empty, so nothing persists across separate rebuild()
+   * calls. The only gender this function can ever actually see is one
+   * ALREADY written inline during THIS SAME structuralAtoms loop —
+   * deriveRoleWordGender's own two call sites, both of which run
+   * synchronously before any later mention's resolution. In practice this
+   * means disambiguation only fires for counterparties that arrived via a
+   * role-word derivation (a bare mention, or a co-reference merge) —
+   * not one asserted through the `attributes` array in the same rebuild.
+   * Not fixed here — reordering the two passes is a larger, separate
+   * decision with its own tradeoffs for the rest of resolution, outside
+   * this task's scope.
+   */
+  function findGenderDisambiguationMatch(ownerEntityId: string, roleWordLower: string): string | undefined {
+    const relation = ROLE_WORD_RELATION[roleWordLower];
+    const impliedGender = ROLE_WORD_GENDER[roleWordLower];
+    if (!relation || !impliedGender) return undefined;
+
+    const entityById = new Map(projections.listEntities(userId).map((e) => [e.id, e]));
+    const counterpartyIds = new Set<string>();
+    for (const atom of projections.listStructuralAtoms(userId, relation)) {
+      if (atom.interval_end !== null) continue;
+      if (relation === "parent_of") {
+        if (atom.to_entity_id === ownerEntityId) counterpartyIds.add(atom.from_entity_id);
+      } else {
+        if (atom.from_entity_id === ownerEntityId) counterpartyIds.add(atom.to_entity_id);
+        else if (atom.to_entity_id === ownerEntityId) counterpartyIds.add(atom.from_entity_id);
+      }
+    }
+
+    const matches: string[] = [];
+    for (const counterpartyId of counterpartyIds) {
+      if (entityById.get(counterpartyId)?.name_kind === "role_word") continue;
+      const gender = resolveEntityAttribute(projections, userId, counterpartyId, "gender")?.value;
+      if (gender === impliedGender) matches.push(counterpartyId);
+    }
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+
+  /**
    * Role-word placeholder fix: resolves an UNNAMED kinship/role mention
    * ("father", "older sister") deliberately bypassing the ordinary alias
    * cascade above — that cascade matches on the bare string alone, which is
@@ -428,6 +579,16 @@ export function rebuildProjections(
    * call sites below) always creates fresh rather than searching for a
    * match at all: an extra placeholder entity is the accepted cost, a
    * false merge across two different people's unnamed relatives is not.
+   *
+   * Role-word disambiguation (Task 3), inserted between the exact-name
+   * reuse search above and placeholder creation below: when the exact-name
+   * search misses (no placeholder under this word for this owner exists
+   * yet — including the case where one existed but was later folded into a
+   * real name by a co-reference merge, so this word can never find it by
+   * name again), findGenderDisambiguationMatch gets a chance to resolve
+   * straight to an already-identified real counterparty instead of
+   * creating yet another placeholder. See that function's own comment for
+   * exactly what "match" means.
    */
   function resolveRoleWordName(rawName: string, eventId: string, extractorVersion: string, sourceEventIds: string[], ownerEntityId: string | undefined): string {
     const trimmed = rawName.trim();
@@ -439,6 +600,7 @@ export function rebuildProjections(
 
     const merged = resolveCoReferenceMerge(trimmed, extractorVersion, sourceEventIds);
     if (merged) {
+      deriveRoleWordGender(merged, lower, sourceEventIds);
       mentionResolution.set(cacheKey, merged);
       return merged;
     }
@@ -451,6 +613,13 @@ export function rebuildProjections(
         projections.touchEntity(existing.id, sourceEventIds, extractorVersion);
         mentionResolution.set(cacheKey, existing.id);
         return existing.id;
+      }
+
+      const disambiguated = findGenderDisambiguationMatch(ownerEntityId, lower);
+      if (disambiguated) {
+        projections.touchEntity(disambiguated, sourceEventIds, extractorVersion);
+        mentionResolution.set(cacheKey, disambiguated);
+        return disambiguated;
       }
     }
 
@@ -467,6 +636,7 @@ export function rebuildProjections(
       owner_entity_id: ownerEntityId ?? null,
       created_at: new Date().toISOString()
     });
+    deriveRoleWordGender(id, lower, sourceEventIds);
     mentionResolution.set(cacheKey, id);
     return id;
   }
