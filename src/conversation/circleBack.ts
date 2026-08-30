@@ -290,8 +290,8 @@ export function verifyCircleBackExecuted(replyText: string, candidateName: strin
  * "location" and "occupation" — the two entity_attributes types not
  * already covered by selfBirthdateGate.ts's own separate, unconditional,
  * higher-priority mechanism, which stays completely untouched by this
- * file. gender/sexual_orientation/life_stage (EN-114) and relationship
- * status (modelled via social_bonds, not an attribute at all — see the
+ * file. gender/life_stage (EN-114) and relationship status (modelled via
+ * social_bonds, not an attribute at all — see the
  * schema-decision investigation this batch's build prompt references) now
  * exist or are representable in the data model, but are deliberately NOT
  * wired into proactive curiosity-asking here: whether/how Enso should ever

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { ATTRIBUTE_TYPES, type AttributeType } from "../../src/projections/attributeVocabulary.js";
 
-/** "sexual_orientation" -> "Sexual orientation" — generic so a vocabulary addition needs no matching UI-label edit here. */
+/** "life_stage" -> "Life stage" — generic so a vocabulary addition needs no matching UI-label edit here. */
 function attributeLabel(attribute: AttributeType): string {
   const spaced = attribute.replace(/_/g, " ");
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);

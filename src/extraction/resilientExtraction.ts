@@ -50,7 +50,20 @@ import { DEFAULT_RETRY_CONFIG, retryWithBackoff, type RetryConfig } from "./retr
 // absent flag as false ("not a role word", i.e. today's exact behavior),
 // so nothing regresses for already-cached content until it is naturally
 // re-extracted under this version.
-export const MESSAGE_EXTRACTOR_VERSION = "message-v5";
+// v6 (sexual_orientation deprecation): removed from ATTRIBUTE_TYPES
+// entirely (attributeVocabulary.ts) — TAXONOMY_JSON_SCHEMA's attribute
+// enum no longer accepts it, and the ATTRIBUTE INTERVAL RULE sentence no
+// longer names it. A genuine extraction schema shape change (a
+// previously-valid enum value is now invalid) and prompt-text change (the
+// interval rule's own listed attributes) together — bumped per the same
+// discipline as every entry above: a cached entry under v5 could carry a
+// sexual_orientation value the current schema can no longer even express,
+// and letting that ambiguity persist through the cache is exactly what
+// this discipline exists to prevent. Old cached extractions with a
+// sexual_orientation entry are unaffected by the bump itself (nothing
+// re-validates cached JSON against the live schema); a future reprocess
+// under v6 simply never produces a new one.
+export const MESSAGE_EXTRACTOR_VERSION = "message-v6";
 export const ATTACHMENT_EXTRACTOR_VERSION = "attachment-v1";
 
 export interface MessageExtractionCompletedPayload {

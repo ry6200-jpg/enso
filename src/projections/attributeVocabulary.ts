@@ -29,16 +29,35 @@
  * RouterDecision.curiosityTurn.attribute (same reason), and peopleView.ts's
  * SELF_PROFILE_ATTRIBUTE_ORDER (what's injected into the live persona
  * system prompt every turn). Deriving those from the full vocabulary would
- * silently start asking about / injecting gender, sexual_orientation, and
- * life_stage into live conversation with no product/wording decision ever
- * made about it — exactly the kind of behavior change this schema-and-
- * plumbing batch is not authorized to make. Those sites keep their own
- * explicit, hand-curated lists on purpose; only sites that legitimately
- * mean "the full current vocabulary" (storage, validation, attestation/
- * correction of anything already on record, admin/UI enumeration) import
- * from here.
+ * silently start asking about / injecting gender or life_stage into live
+ * conversation with no product/wording decision ever made about it —
+ * exactly the kind of behavior change this schema-and-plumbing batch is
+ * not authorized to make. Those sites keep their own explicit, hand-curated
+ * lists on purpose; only sites that legitimately mean "the full current
+ * vocabulary" (storage, validation, attestation/correction of anything
+ * already on record, admin/UI enumeration) import from here.
+ *
+ * sexual_orientation REMOVED (deprecation batch, post-EN-129): deprecated
+ * entirely, not replaced. Application-level removal only — no code path
+ * can create, validate, or read this as a first-class attribute type
+ * anymore, and the extraction schema no longer offers it as a value the
+ * model can output. Does NOT retroactively touch the SQL CHECK constraint
+ * on any already-existing entity_attributes table (including production):
+ * db.ts's migrateEntityAttributesCheckConstraint (EN-114) detects a
+ * pending migration by checking whether the vocabulary's LAST marker is
+ * present in the table's stored CREATE-TABLE SQL — removing a MIDDLE
+ * element (sexual_orientation sat before life_stage, the marker) doesn't
+ * change that check at all, so an already-EN-114-migrated database (this
+ * account's included) is read back as "already current" and the OLD,
+ * WIDER CHECK constraint — still permitting sexual_orientation at the raw
+ * SQL level — is never rebuilt. Deliberately not addressed here: a
+ * narrowing CHECK-constraint migration needs an explicit decision about
+ * any pre-existing sexual_orientation rows (the rebuild-in-place copy step
+ * would fail its own new CHECK constraint if any survive), which is a
+ * real, potentially destructive question this batch was not asked to
+ * resolve and should not guess at.
  */
-export const ATTRIBUTE_TYPES = ["birthdate", "location", "occupation", "gender", "sexual_orientation", "life_stage"] as const;
+export const ATTRIBUTE_TYPES = ["birthdate", "location", "occupation", "gender", "life_stage"] as const;
 
 export type AttributeType = (typeof ATTRIBUTE_TYPES)[number];
 
@@ -74,12 +93,12 @@ export function isProvenanceKind(value: string): value is ProvenanceKind {
  * keeping any future widening a plain array edit rather than the
  * rebuild-in-place CHECK-constraint migration EN-114's own precedent
  * required (see CLAUDE.md's migration-discipline note). sexual_orientation
- * deliberately has NO defined vocabulary and no derivation of any kind —
- * abandoned after the schema-decision investigation found the inferable
- * signals (spouse-gender pairing, pronoun resolution) too false-positive-
- * prone and resting on an extraction-schema gap (bare pronouns aren't
- * captured at all); it stays free text, stated-only, exactly as it always
- * was.
+ * itself is no longer part of the vocabulary at all (deprecation batch,
+ * post-EN-129) — it was never given a defined vocabulary while it existed,
+ * having been abandoned for inference after the schema-decision
+ * investigation found the inferable signals (spouse-gender pairing,
+ * pronoun resolution) too false-positive-prone and resting on an
+ * extraction-schema gap (bare pronouns aren't captured at all).
  */
 export const GENDER_VALUES = ["male", "female"] as const;
 

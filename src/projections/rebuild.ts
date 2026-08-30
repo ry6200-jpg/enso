@@ -14,7 +14,7 @@ import {
 import { assertParentOf, assertSiblingOf, assertSpouseOf, closeSpouseOf, deriveSiblingsFromParents } from "../relationships/structuralAtoms.js";
 import { closeBond, openBond } from "../relationships/socialBonds.js";
 import type { ProjectionsDb } from "./db.js";
-import type { AttributeType, GenderValue } from "./attributeVocabulary.js";
+import { isAttributeType, type AttributeType, type GenderValue } from "./attributeVocabulary.js";
 import { clusterEpisodeMarkers, type EpisodeMarkerEvent, type EpisodeMarkerKind } from "./episodes.js";
 
 interface ExtractionCompletedPayload {
@@ -99,6 +99,15 @@ export interface RebuildResult {
   maxOpenParentsForAnyChild: number;
   socialBondsApplied: number;
   attributesApplied: number;
+  /**
+   * A historical extraction_completed event asserted an attribute type no
+   * longer in ATTRIBUTE_TYPES (e.g. sexual_orientation, deprecated — see
+   * the deprecation batch) — never written, never crashes the rebuild.
+   * Visible here so a deprecated-vocabulary replay gap is never silent to
+   * a caller, matching every other write-outcome counter on this struct.
+   * 0 whenever nothing in the event log predates a vocabulary narrowing.
+   */
+  deprecatedAttributesSkipped: number;
   /** Entities created via the lowest-confidence fuzzy/phonetic path or a same-counterparty kinship conflict — flagged, never auto-merged (EN-012). */
   pendingDisambiguations: number;
   /** EN-037 Phase 8.5: episodes clustered from episodeMarkers this rebuild — see projections/episodes.ts's clusterEpisodeMarkers. */
@@ -808,6 +817,7 @@ export function rebuildProjections(
   // (rather than in entities/structuralAtoms/socialBonds within the same
   // event) still resolves consistently via the same per-event cache.
   let attributesApplied = 0;
+  let deprecatedAttributesSkipped = 0;
   for (const event of events) {
     if (event.type !== "extraction_completed") continue;
     if (eclipsedEventIds.has(event.id)) continue; // EN-065: same exclusion as above, kept consistent across both passes
@@ -815,6 +825,29 @@ export function rebuildProjections(
     const extractorVersion = payload.extractorVersion ?? UNKNOWN_EXTRACTOR_VERSION;
     for (const attr of payload.attributes ?? []) {
       const entityId = resolveName(attr.entityName, event.id, extractorVersion, [payload.sourceEventId, event.id]);
+
+      // Deprecated-attribute replay guard (post-EN-129 vocabulary
+      // narrowing): a historical extraction_completed event can carry an
+      // attribute type no longer in ATTRIBUTE_TYPES (sexual_orientation,
+      // deprecated) — attr.attribute is a raw string from stored JSON, not
+      // type-checked at runtime, so nothing else here would catch it
+      // before it reached assertAttribute -> insertEntityAttribute's raw
+      // SQL INSERT, which would throw a real, uncaught SQLite CHECK
+      // constraint violation and crash the entire rebuild (confirmed
+      // directly, not assumed, against a fresh-schema table). The entity
+      // mention itself still resolves above — a person is still being
+      // talked about even when a specific fact about them can no longer
+      // be stored — mirroring assertAttribute's own existing precedent
+      // for an implausible VALUE (entity resolves, only the write is
+      // skipped). Logged loudly, never silent, same discipline as every
+      // other rejected-write path in this file.
+      if (!isAttributeType(attr.attribute)) {
+        // eslint-disable-next-line no-console
+        console.error(`rebuildProjections: skipped a deprecated attribute type ${JSON.stringify(attr.attribute)} on entity ${entityId} (event ${event.id}) — no longer in ATTRIBUTE_TYPES, never written.`);
+        deprecatedAttributesSkipped++;
+        continue;
+      }
+
       // Absent action = "open": every extraction cached before Phase 2
       // (message-v3 and earlier) has no action field at all, and resolves
       // exactly as it always did — an unconditional "open" default is what
@@ -1051,6 +1084,7 @@ export function rebuildProjections(
     maxOpenParentsForAnyChild,
     socialBondsApplied,
     attributesApplied,
+    deprecatedAttributesSkipped,
     pendingDisambiguations,
     episodesBuilt: episodeRows.length
   };

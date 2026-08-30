@@ -64,7 +64,7 @@ describe("computeEntityDirectory (admin-only entity view, part 2)", () => {
     const id = insertEntity("Marcus", []);
     addAttribute(id, "location", "Seattle");
     const [entry] = computeEntityDirectory(projections, PRIMARY_USER_ID, new Map(), NOW);
-    expect(entry!.attributes).toEqual({ birthdate: null, location: "Seattle", occupation: null, gender: null, sexual_orientation: null, life_stage: null });
+    expect(entry!.attributes).toEqual({ birthdate: null, location: "Seattle", occupation: null, gender: null, life_stage: null });
   });
 
   it("bond constellation includes bonds to the primary user, labeled '(you)'", () => {
@@ -127,7 +127,7 @@ describe("computeEntityDirectory (admin-only entity view, part 2)", () => {
 
 describe("computeFillRates (admin-only entity view, part 2)", () => {
   it("zero entities produces zero rates, not a division-by-zero fabrication", () => {
-    expect(computeFillRates(projections, PRIMARY_USER_ID)).toEqual({ birthdate: 0, location: 0, occupation: 0, gender: 0, sexual_orientation: 0, life_stage: 0, totalEntities: 0 });
+    expect(computeFillRates(projections, PRIMARY_USER_ID)).toEqual({ birthdate: 0, location: 0, occupation: 0, gender: 0, life_stage: 0, totalEntities: 0 });
   });
 
   it("computes a real fill rate across multiple entities", () => {

@@ -25,9 +25,8 @@ export const ROUTER_JSON_SCHEMA = {
         // Deliberately NOT derived from ATTRIBUTE_TYPES — a curated subset,
         // same reason as circleBack.ts's SELF_FACT_ATTRIBUTES (see
         // attributeVocabulary.ts's header comment): proactive curiosity-
-        // asking about gender/sexual_orientation/life_stage is a real
-        // product/wording decision this schema-and-plumbing batch does not
-        // make.
+        // asking about gender/life_stage is a real product/wording decision
+        // this schema-and-plumbing batch does not make.
         attribute: { type: ["string", "null"], enum: ["location", "occupation", null] },
         probeType: { type: ["string", "null"] }
       },

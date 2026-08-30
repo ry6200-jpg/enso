@@ -127,9 +127,9 @@ export interface EntityAttributeRow {
   /**
    * Phase 2 temporal markers (owner-requested schema migration): mirrors
    * structural_atoms/social_bonds' own interval_start/interval_end naming
-   * exactly, for a MUTABLE attribute only (location, occupation,
-   * gender, sexual_orientation, life_stage — never birthdate, which has no
-   * closed state). interval_start is the real narrative date the value
+   * exactly, for a MUTABLE attribute only (location, occupation, gender,
+   * life_stage — never birthdate, which has no closed state).
+   * interval_start is the real narrative date the value
    * became true (from the extractor's own eventDate, when stated);
    * interval_end, following the SAME precedent closeBond/closeStructuralAtom
    * already use, is the TOLD-time (event.recordedAt) of the message that

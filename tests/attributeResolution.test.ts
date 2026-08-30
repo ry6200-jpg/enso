@@ -75,13 +75,11 @@ describe("resolveAttribute — pure function (R36/R37: mutability, not format, i
     expect(resolveAttribute(history)!.value).toBe("still anything");
   });
 
-  it("mutable (sexual_orientation/life_stage, EN-114): latest wins, never flagged as a conflict — same model as occupation, deliberately NOT birthdate's immutable model. Free text, no vocabulary — unlike gender (see the next test), neither has format validation.", () => {
-    for (const attribute of ["sexual_orientation", "life_stage"] as const) {
-      const history = [row("a", attribute, "first stated value"), row("b", attribute, "a later clarification")];
-      const resolved = resolveAttribute(history)!;
-      expect(resolved.value).toBe("a later clarification");
-      expect(resolved.conflicting).toEqual([]);
-    }
+  it("mutable (life_stage, EN-114): latest wins, never flagged as a conflict — same model as occupation, deliberately NOT birthdate's immutable model. Free text, no vocabulary — unlike gender (see the next test), it has no format validation. (sexual_orientation was the other free-text member of this trio; removed from the vocabulary entirely — deprecation batch, post-EN-129.)", () => {
+    const history = [row("a", "life_stage", "first stated value"), row("b", "life_stage", "a later clarification")];
+    const resolved = resolveAttribute(history)!;
+    expect(resolved.value).toBe("a later clarification");
+    expect(resolved.conflicting).toEqual([]);
   });
 
   it("mutable (gender, role-word disambiguation batch): latest wins, never flagged as a conflict — same mutability model as occupation, but values must be in-vocabulary (male/female)", () => {
@@ -606,6 +604,6 @@ describe("isValidAttributeValue — gender vocabulary (role-word disambiguation 
 
   it("other attributes are unaffected by the gender vocabulary check", () => {
     expect(isValidAttributeValue("occupation", "she")).toBe(true);
-    expect(isValidAttributeValue("sexual_orientation", "gay")).toBe(true);
+    expect(isValidAttributeValue("life_stage", "empty nester")).toBe(true);
   });
 });

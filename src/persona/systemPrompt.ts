@@ -72,7 +72,6 @@ const SELF_PROFILE_ATTRIBUTE_LABEL: Record<SelfProfile["attributes"][number]["at
   location: "Location",
   occupation: "Occupation",
   gender: "Gender",
-  sexual_orientation: "Sexual orientation",
   life_stage: "Life stage"
 };
 

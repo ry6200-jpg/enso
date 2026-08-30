@@ -88,9 +88,9 @@ export interface SelfProfile {
 // circleBack.ts's SELF_FACT_ATTRIBUTES (see attributeVocabulary.ts's
 // header comment). This drives what gets injected into the LIVE persona
 // system prompt every turn (buildSelfProfileBlock); silently including
-// gender/sexual_orientation/life_stage here the moment they exist in
-// storage would be a real behavior change with no wording/framing
-// decision ever made about it — out of scope for schema-and-plumbing.
+// gender/life_stage here the moment they exist in storage would be a
+// real behavior change with no wording/framing decision ever made about
+// it — out of scope for schema-and-plumbing.
 const SELF_PROFILE_ATTRIBUTE_ORDER = ["birthdate", "location", "occupation"] as const;
 
 function structuralAtomRelationshipLabel(type: "parent_of" | "spouse_of" | "sibling_of", ownerIsFromSide: boolean): string {
