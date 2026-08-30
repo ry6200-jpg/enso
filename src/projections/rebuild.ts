@@ -20,7 +20,16 @@ interface ExtractionCompletedPayload {
   sourceEventId: string;
   extractorVersion?: string;
   entities?: { name: string }[];
-  structuralAtoms?: { type: "parent_of" | "spouse_of" | "sibling_of"; fromName: string; toName: string; action: "assert" | "close"; explicitlyNewPerson?: boolean }[];
+  structuralAtoms?: {
+    type: "parent_of" | "spouse_of" | "sibling_of";
+    fromName: string;
+    toName: string;
+    action: "assert" | "close";
+    explicitlyNewPerson?: boolean;
+    /** Absent on any payload cached before v5 (role-word placeholder fix) — treated as false ("not a role word"), preserving pre-fix behavior for old cached extractions until they're naturally re-extracted. */
+    fromNameIsRoleWord?: boolean;
+    toNameIsRoleWord?: boolean;
+  }[];
   socialBonds?: {
     type: "friend" | "colleague" | "mentor_of" | "neighbor" | "classmate" | "romantic";
     fromName: string;
@@ -29,6 +38,8 @@ interface ExtractionCompletedPayload {
     basis: "inferred" | "stated";
     action: "open" | "close";
     explicitlyNewPerson?: boolean;
+    fromNameIsRoleWord?: boolean;
+    toNameIsRoleWord?: boolean;
   }[];
   attributes?: { entityName: string; attribute: AttributeType; value: string; eventDate: string | null; action?: "open" | "close" }[];
   episodeMarkers?: { kind: EpisodeMarkerKind; text: string }[];
@@ -305,6 +316,124 @@ export function rebuildProjections(
     return created;
   }
 
+  /**
+   * Role-word placeholder fix: resolves an UNNAMED kinship/role mention
+   * ("father", "older sister") deliberately bypassing the ordinary alias
+   * cascade above — that cascade matches on the bare string alone, which is
+   * exactly what let two different people's unnamed relatives collide onto
+   * one entity (the real bug: "her father" and a later, unrelated "father"
+   * mention resolving to the same node purely because both wrote the
+   * literal word "father"). Never calls registerAlias either, so a
+   * role-word entity's bare name never enters the SHARED alias index the
+   * ordinary cascade (and findEntityIdByExactAlias, used by chat-turn
+   * mention matching) reads from — structurally, not just by convention,
+   * this makes a future unscoped "father" mention unable to accidentally
+   * match this entity via the normal path.
+   *
+   * Matching is scoped by ownerEntityId instead: reuses an existing
+   * role-word entity only when both the normalized name AND the derived
+   * owner match. A null ownerEntityId (owner undetermined — see the two
+   * call sites below) always creates fresh rather than searching for a
+   * match at all: an extra placeholder entity is the accepted cost, a
+   * false merge across two different people's unnamed relatives is not.
+   */
+  function resolveRoleWordName(rawName: string, eventId: string, extractorVersion: string, sourceEventIds: string[], ownerEntityId: string | undefined): string {
+    const trimmed = rawName.trim();
+    const lower = normalize(trimmed);
+
+    const cacheKey = `${eventId}|role:${lower}|${ownerEntityId ?? "none"}`;
+    const cached = mentionResolution.get(cacheKey);
+    if (cached) return cached;
+
+    if (ownerEntityId) {
+      const existing = projections
+        .listEntities(userId)
+        .find((e) => e.name_kind === "role_word" && e.owner_entity_id === ownerEntityId && normalize(e.name) === lower);
+      if (existing) {
+        projections.touchEntity(existing.id, sourceEventIds, extractorVersion);
+        mentionResolution.set(cacheKey, existing.id);
+        return existing.id;
+      }
+    }
+
+    const id = newId();
+    projections.insertEntity({
+      id,
+      user_id: userId,
+      name: trimmed,
+      confirmed: 0,
+      source_event_ids: JSON.stringify([...sourceEventIds].sort()),
+      extractor_version: extractorVersion,
+      pending_disambiguation: null,
+      name_kind: "role_word",
+      owner_entity_id: ownerEntityId ?? null,
+      created_at: new Date().toISOString()
+    });
+    mentionResolution.set(cacheKey, id);
+    return id;
+  }
+
+  /**
+   * Resolves one fromName/toName pair for a structural atom or social bond,
+   * routing each side through resolveName (ordinary cascade) or
+   * resolveRoleWordName (owner-scoped, see above) depending on which side,
+   * if either, the extractor flagged as a role word. Owner derivation is
+   * purely structural (no new extraction field): whichever side is NOT the
+   * role word, already resolved, IS the owner — for "her father" that's
+   * toName ("Annissa"); for "me" + "older sister" it's fromName ("me").
+   * When exactly one side is a role word, that side MUST resolve after the
+   * other (its owner needs the other side's real id), which is why this
+   * reorders resolution for that case only — the neither-role-word path
+   * keeps the original fromId-then-toId order unchanged, so every existing
+   * kinship-conflict/counterparty behavior is untouched.
+   */
+  function resolvePair(
+    fromName: string,
+    toName: string,
+    fromIsRoleWord: boolean,
+    toIsRoleWord: boolean,
+    eventId: string,
+    extractorVersion: string,
+    sourceEventIds: string[],
+    explicitlyNewPerson: boolean | undefined,
+    conflictContext?: { structuralAtomType: string }
+  ): { fromId: string; toId: string } {
+    if (fromIsRoleWord && toIsRoleWord) {
+      // Neither side has a real-name anchor to derive an owner from — the
+      // named edge case where the owner cannot be determined at all.
+      const fromId = resolveRoleWordName(fromName, eventId, extractorVersion, sourceEventIds, undefined);
+      const toId = resolveRoleWordName(toName, eventId, extractorVersion, sourceEventIds, undefined);
+      return { fromId, toId };
+    }
+    if (fromIsRoleWord) {
+      const toId = resolveName(toName, eventId, extractorVersion, sourceEventIds, {
+        explicitlyNewPerson,
+        ...(conflictContext ? { structuralAtomType: conflictContext.structuralAtomType, counterpartyEntityId: plainLookup(fromName) } : {})
+      });
+      const fromId = resolveRoleWordName(fromName, eventId, extractorVersion, sourceEventIds, toId);
+      return { fromId, toId };
+    }
+    if (toIsRoleWord) {
+      const fromId = resolveName(fromName, eventId, extractorVersion, sourceEventIds, {
+        explicitlyNewPerson,
+        ...(conflictContext ? { structuralAtomType: conflictContext.structuralAtomType, counterpartyEntityId: plainLookup(toName) } : {})
+      });
+      const toId = resolveRoleWordName(toName, eventId, extractorVersion, sourceEventIds, fromId);
+      return { fromId, toId };
+    }
+    // Neither side is a role word: unchanged, original behavior.
+    const roughToId = plainLookup(toName);
+    const fromId = resolveName(fromName, eventId, extractorVersion, sourceEventIds, {
+      explicitlyNewPerson,
+      ...(conflictContext ? { structuralAtomType: conflictContext.structuralAtomType, counterpartyEntityId: roughToId } : {})
+    });
+    const toId = resolveName(toName, eventId, extractorVersion, sourceEventIds, {
+      explicitlyNewPerson,
+      ...(conflictContext ? { structuralAtomType: conflictContext.structuralAtomType, counterpartyEntityId: fromId } : {})
+    });
+    return { fromId, toId };
+  }
+
   let extractionsConsumed = 0;
   let structuralAtomsApplied = 0;
   let socialBondsApplied = 0;
@@ -331,15 +460,17 @@ export function rebuildProjections(
     // processed.
     for (const atom of payload.structuralAtoms ?? []) {
       const isAssert = atom.action === "assert";
-      const roughToId = plainLookup(atom.toName);
-      const fromId = resolveName(atom.fromName, event.id, extractorVersion, provenance, {
-        explicitlyNewPerson: atom.explicitlyNewPerson,
-        ...(isAssert ? { structuralAtomType: atom.type, counterpartyEntityId: roughToId } : {})
-      });
-      const toId = resolveName(atom.toName, event.id, extractorVersion, provenance, {
-        explicitlyNewPerson: atom.explicitlyNewPerson,
-        ...(isAssert ? { structuralAtomType: atom.type, counterpartyEntityId: fromId } : {})
-      });
+      const { fromId, toId } = resolvePair(
+        atom.fromName,
+        atom.toName,
+        atom.fromNameIsRoleWord ?? false,
+        atom.toNameIsRoleWord ?? false,
+        event.id,
+        extractorVersion,
+        provenance,
+        atom.explicitlyNewPerson,
+        isAssert ? { structuralAtomType: atom.type } : undefined
+      );
 
       if (atom.type === "parent_of") {
         assertParentOf(projections, userId, fromId, toId, provenance);
@@ -359,8 +490,17 @@ export function rebuildProjections(
     }
 
     for (const bond of payload.socialBonds ?? []) {
-      const fromId = resolveName(bond.fromName, event.id, extractorVersion, provenance, { explicitlyNewPerson: bond.explicitlyNewPerson });
-      const toId = resolveName(bond.toName, event.id, extractorVersion, provenance, { explicitlyNewPerson: bond.explicitlyNewPerson });
+      const { fromId, toId } = resolvePair(
+        bond.fromName,
+        bond.toName,
+        bond.fromNameIsRoleWord ?? false,
+        bond.toNameIsRoleWord ?? false,
+        event.id,
+        extractorVersion,
+        provenance,
+        bond.explicitlyNewPerson,
+        undefined
+      );
       if (bond.action === "open") {
         openBond(projections, userId, {
           type: bond.type,

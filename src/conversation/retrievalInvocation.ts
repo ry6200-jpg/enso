@@ -78,6 +78,15 @@ export function findAllMentionedEntityIds(message: string, projectionsDb: Projec
     if (found.length >= maxEntities) break;
     const entityId = projectionsDb.findEntityIdByExactAlias(userId, word);
     if (!entityId || seenEntityIds.has(entityId)) continue;
+    // Role-word placeholder fix: a role-word entity (e.g. "father" in "her
+    // father is not well") must never be offered to the NAMED PEOPLE
+    // dossier block as if it were a directly-addressable named person —
+    // that would read as Enso having a real dossier on someone literally
+    // named "Father". Filtered here, upstream of dossier-building, so
+    // every consumer downstream of this function (chatPipeline.ts) is
+    // covered by construction, not by remembering to check at each site.
+    const entity = projectionsDb.getEntityById(entityId);
+    if (entity?.name_kind === "role_word") continue;
     seenEntityIds.add(entityId);
     found.push(entityId);
   }

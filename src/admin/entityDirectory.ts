@@ -44,6 +44,10 @@ export interface EntityDirectoryEntry {
   bonds: EntityBondView[];
   /** This entity's own relationship class to the primary user specifically, if any — the first one found, since accretion means there can be more than one (see social_bonds' own "bonds accrete" note). */
   relationshipClassToPrimary: string | null;
+  /** Role-word placeholder fix: 'role_word' for an unnamed kinship/role placeholder ("father", "older sister"), null for an ordinary named entity. Deliberately NOT excluded from this view — an admin auditing entity quality needs to see exactly these to verify the fix is working, the opposite of peopleView's dossier, which excludes them from what Enso can present as a named person (see retrievalInvocation.ts's findAllMentionedEntityIds). */
+  nameKind: "role_word" | null;
+  /** Role-word placeholder fix: which entity this placeholder was derived to belong to (structural_atoms/social_bonds' other, already-resolved side), or null when no owner could be determined. */
+  ownerEntityId: string | null;
   mentionCount: number;
   firstMentionAt: string | null;
   lastMentionAt: string | null;
@@ -121,6 +125,8 @@ export function computeEntityDirectory(projections: ProjectionsDb, userId: strin
       attributes,
       bonds: entityBonds,
       relationshipClassToPrimary,
+      nameKind: entity.name_kind ?? null,
+      ownerEntityId: entity.owner_entity_id ?? null,
       mentionCount: ids.length,
       firstMentionAt,
       lastMentionAt,

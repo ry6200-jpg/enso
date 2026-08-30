@@ -41,6 +41,16 @@ export interface StructuralAtomMention {
   action: "assert" | "close";
   /** EN-012, ported from old Enso: true ONLY on an explicit signal this name refers to a different person than one already known — rare, default false. */
   explicitlyNewPerson: boolean;
+  /**
+   * Role-word placeholder fix: true when fromName/toName is an unnamed
+   * kinship/role fallback ("father", "older sister") rather than a real
+   * name — the model reports the judgment it already makes when deciding
+   * whether to write a real name or fall back to the role word, same shape
+   * as explicitlyNewPerson. Deliberately not a closed word list anywhere in
+   * this codebase (see taxonomySchema.ts's prompt rule for why).
+   */
+  fromNameIsRoleWord: boolean;
+  toNameIsRoleWord: boolean;
 }
 
 /**
@@ -59,6 +69,9 @@ export interface SocialBondMention {
   action: "open" | "close";
   /** EN-012, ported from old Enso: true ONLY on an explicit signal this name refers to a different person than one already known — rare, default false. */
   explicitlyNewPerson: boolean;
+  /** Role-word placeholder fix: see StructuralAtomMention's own doc comment above — identical meaning and reasoning, applied to socialBonds' fromName/toName. */
+  fromNameIsRoleWord: boolean;
+  toNameIsRoleWord: boolean;
 }
 
 /**

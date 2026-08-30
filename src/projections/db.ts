@@ -22,6 +22,37 @@ export interface EntityRow {
    */
   pending_disambiguation: string | null; // JSON PendingDisambiguation, or null
   created_at: string;
+  /**
+   * Role-word placeholder fix: 'role_word' when this entity was created from
+   * an unnamed kinship/role mention ("her father", "my older sister") rather
+   * than a real name — never a closed classifier list (a retired four-word
+   * list already failed live once); the extractor reports this per-mention,
+   * on structuralAtoms/socialBonds' fromNameIsRoleWord/toNameIsRoleWord,
+   * because it already makes this judgment internally when deciding whether
+   * to write a real name or fall back to the role word. null for an
+   * ordinary named entity, which is every entity created before this
+   * column existed. Set once at createEntity and never re-evaluated here —
+   * upgrading a placeholder to a real name is co-reference's job (EN-101),
+   * a separate later fix. Optional on this interface for the same
+   * call-site-compatibility reason provenance_kind is (EntityAttributeRow,
+   * above): insertEntity defaults it to null when omitted.
+   */
+  name_kind?: "role_word" | null;
+  /**
+   * Role-word placeholder fix: which OTHER entity this placeholder belongs
+   * to, e.g. "father" in "her father is not well" owned by Annissa. Derived
+   * structurally at resolution time from the non-role-word side of the SAME
+   * structural_atom/social_bond (never stored ambient state, never
+   * recomputed on read) — never a new extraction field, since the atom
+   * itself already carries this relationship. null when no owner could be
+   * determined (both sides of the same atom were role words, or the mention
+   * carried no atom context at all) — a null-owner placeholder never
+   * matches an existing entity in the resolution cascade; a false merge
+   * across two different people's unnamed relatives is worse than an extra
+   * placeholder entity. Optional on this interface for the same reason
+   * name_kind is.
+   */
+  owner_entity_id?: string | null;
 }
 
 export interface EntityAliasRow {
@@ -194,7 +225,9 @@ export class ProjectionsDb {
         source_event_ids TEXT NOT NULL,
         extractor_version TEXT NOT NULL,
         pending_disambiguation TEXT,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        name_kind TEXT,
+        owner_entity_id TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_entities_user_id ON entities(user_id);
 
@@ -316,6 +349,21 @@ export class ProjectionsDb {
     // needed, never a rebuild-breaking distinction.
     this.migrateEntityAttributesAddColumn("interval_start", `TEXT`);
     this.migrateEntityAttributesAddColumn("interval_end", `TEXT`);
+    // Role-word placeholder fix: plain nullable columns, no CHECK/DEFAULT —
+    // stays on the cheap idempotent ADD COLUMN path (same reasoning as the
+    // interval columns above), never the rename/recreate CHECK-constraint
+    // migration EN-114 needed. NULL on every pre-existing row reads as
+    // "ordinary named entity, no owner" — the correct default, not a
+    // breaking distinction.
+    this.migrateEntitiesAddColumn("name_kind", `TEXT`);
+    this.migrateEntitiesAddColumn("owner_entity_id", `TEXT`);
+  }
+
+  /** Same idempotent ADD COLUMN pattern as migrateEntityAttributesAddColumn below, targeting `entities` instead. */
+  private migrateEntitiesAddColumn(column: string, definition: string): void {
+    const columns = this.db.prepare(`PRAGMA table_info(entities)`).all() as { name: string }[];
+    if (columns.some((c) => c.name === column)) return;
+    this.db.exec(`ALTER TABLE entities ADD COLUMN ${column} ${definition}`);
   }
 
   /**
@@ -393,10 +441,14 @@ export class ProjectionsDb {
   insertEntity(row: EntityRow): void {
     this.db
       .prepare(
-        `INSERT INTO entities (id, user_id, name, confirmed, source_event_ids, extractor_version, pending_disambiguation, created_at)
-         VALUES (@id, @user_id, @name, @confirmed, @source_event_ids, @extractor_version, @pending_disambiguation, @created_at)`
+        `INSERT INTO entities (id, user_id, name, confirmed, source_event_ids, extractor_version, pending_disambiguation, created_at, name_kind, owner_entity_id)
+         VALUES (@id, @user_id, @name, @confirmed, @source_event_ids, @extractor_version, @pending_disambiguation, @created_at, @name_kind, @owner_entity_id)`
       )
-      .run(row);
+      .run({
+        ...row,
+        name_kind: row.name_kind ?? null,
+        owner_entity_id: row.owner_entity_id ?? null
+      });
   }
 
   insertEntityAlias(row: EntityAliasRow): void {

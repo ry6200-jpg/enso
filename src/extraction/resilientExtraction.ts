@@ -39,7 +39,18 @@ import { DEFAULT_RETRY_CONFIG, retryWithBackoff, type RetryConfig } from "./retr
 // FUTURE re-extraction of that same content is eligible to pick up a real
 // "close" the fixed prompt can now express, rather than being silently
 // served the old, action-less cached result forever.
-export const MESSAGE_EXTRACTOR_VERSION = "message-v4";
+// v5 (role-word placeholder fix): StructuralAtomMention/SocialBondMention
+// gained two new REQUIRED fields, `fromNameIsRoleWord`/`toNameIsRoleWord`
+// (providers/types.ts, taxonomySchema.ts) — a genuine extraction schema
+// shape change, the classifier the fix's design report concluded was the
+// only reliable non-blocklist option (the model already makes this exact
+// judgment internally when choosing what to write for fromName/toName).
+// A message cached under v4 has neither field on its structuralAtoms/
+// socialBonds entries at all; rebuild.ts's local payload type treats an
+// absent flag as false ("not a role word", i.e. today's exact behavior),
+// so nothing regresses for already-cached content until it is naturally
+// re-extracted under this version.
+export const MESSAGE_EXTRACTOR_VERSION = "message-v5";
 export const ATTACHMENT_EXTRACTOR_VERSION = "attachment-v1";
 
 export interface MessageExtractionCompletedPayload {

@@ -186,7 +186,14 @@ export function findEligibleCircleBackCandidates(eventLog: EventLog, projections
   const messageTextById = buildMessageTextById(userTurns);
 
   for (const entity of allEntities) {
-    if (isEstablished(projections, userId, entity.id)) continue;
+    // Role-word placeholder fix: an entity established only via a
+    // role-word placeholder (e.g. "father" in "her father is not well")
+    // still needs a real-name question — isEstablished alone would
+    // permanently disqualify it the moment its one bond exists, since it
+    // has no way to distinguish a placeholder from an actually-known
+    // person. Widened, not replaced: a genuinely unestablished entity is
+    // still eligible exactly as before.
+    if (isEstablished(projections, userId, entity.id) && entity.name_kind !== "role_word") continue;
 
     const sourceIds = (JSON.parse(entity.source_event_ids) as string[]).slice().sort();
     const earliestId = sourceIds[0];

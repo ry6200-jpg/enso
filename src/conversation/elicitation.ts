@@ -528,6 +528,14 @@ export function findLayer3Candidate(eventLog: EventLog, projections: Projections
   const anchors = allEntities
     .filter((e) => isEstablished(projections, userId, e.id))
     .filter((e) => !hasStructuralAtom(projections, userId, e.id))
+    // Role-word placeholder fix: a role-word entity (e.g. "father" in "her
+    // father is not well") is never a valid Layer 3 anchor — Enso must
+    // never ask "how did you meet father." hasStructuralAtom above already
+    // excludes most of these (they usually arise from a structural atom),
+    // but a role word can also arrive via a socialBonds mention with no
+    // structural atom at all, so this is a separate, explicit exclusion,
+    // not redundant with the filter above.
+    .filter((e) => e.name_kind !== "role_word")
     .filter((e) => !wasTopicDismissed(eventLog, userId, e.name, JSON.parse(e.source_event_ids) as string[]))
     .map((e) => {
       const sourceIds = (JSON.parse(e.source_event_ids) as string[]).slice().sort();
