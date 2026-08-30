@@ -63,7 +63,21 @@ import { DEFAULT_RETRY_CONFIG, retryWithBackoff, type RetryConfig } from "./retr
 // sexual_orientation entry are unaffected by the bump itself (nothing
 // re-validates cached JSON against the live schema); a future reprocess
 // under v6 simply never produces a new one.
-export const MESSAGE_EXTRACTOR_VERSION = "message-v6";
+// v7 (knownPeopleNames role-word reinforcement fix): turnMemoryRefresh.ts's
+// knownPeopleNames — an EXTRACTION INPUT, not the schema itself, but the
+// exact same class of change as v3's Abby-bug fix (a prompt-behavior
+// change, bumped anyway) — now excludes role_word placeholder entities
+// and de-duplicates. contentHash covers only the raw message text, never
+// knownPeopleNames, so without this bump a reprocess of an
+// already-cached message would silently keep serving a result produced
+// under the OLD, unfiltered list — exactly the staleness this
+// discipline exists to prevent. Real corpus, confirmed live: the
+// unfiltered list let an established role-word placeholder (e.g.
+// "mother") sit in knownPeopleNames indefinitely, which the taxonomy
+// prompt's own instruction to reuse a listed name verbatim then pulled
+// the model toward reasserting on later mentions — the opposite of the
+// list's actual purpose.
+export const MESSAGE_EXTRACTOR_VERSION = "message-v7";
 export const ATTACHMENT_EXTRACTOR_VERSION = "attachment-v1";
 
 export interface MessageExtractionCompletedPayload {

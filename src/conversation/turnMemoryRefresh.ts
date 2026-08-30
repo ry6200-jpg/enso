@@ -26,7 +26,25 @@ export interface TurnMemoryRefreshDeps {
  */
 export async function refreshMemoryAfterTurn(deps: TurnMemoryRefreshDeps, userId: string, messageEventId: string): Promise<void> {
   const messageEvent = deps.eventLog.getById(messageEventId)!;
-  const knownPeopleNames = deps.projectionsDb.listEntities(userId).map((e) => e.name);
+  // Role-word placeholders (name_kind === "role_word", e.g. "father")
+  // excluded — real corpus, confirmed live: the taxonomy prompt's own
+  // knownPeopleNames instruction tells the model to reuse an entry from
+  // this list VERBATIM rather than a "kinship term or role," with no way
+  // to distinguish a placeholder from a genuine name once both are just
+  // strings in the same array. Once a role word is established as an
+  // entity, it stays in this list on every future turn (never a one-shot
+  // consumption), so the mechanism meant to make "mom" resolve to Elena
+  // instead makes "father" self-reinforce as the permanent "name" for
+  // that person — confirmed directly against real production data (an
+  // extraction event asserting parent_of with fromName "mother" and
+  // fromNameIsRoleWord FALSE, on a message where "mother" was already in
+  // this list from an earlier turn's placeholder) and reproduced live,
+  // twice, on a synthetic "Vanessa's dad is An Song" test. De-duplicated
+  // too — the same unfiltered map let a role word accumulate multiple
+  // identical entries (the real corpus shows "mother" and "husband" each
+  // listed twice) for no reason; a Set collapses that regardless of which
+  // entities remain after the role-word filter.
+  const knownPeopleNames = [...new Set(deps.projectionsDb.listEntities(userId).filter((e) => e.name_kind !== "role_word").map((e) => e.name))];
 
   // Item 7's root cause: the message being extracted may be a short,
   // elliptical answer to whatever Enso itself just asked (a bare date

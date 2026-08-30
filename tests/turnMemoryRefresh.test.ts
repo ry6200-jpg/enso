@@ -8,6 +8,7 @@ import { EMBEDDING_DIMENSIONS, type Embedder } from "../src/embeddings/embedder.
 import { freshTestDbPath } from "../src/test/dbPath.js";
 import { PRIMARY_USER_ID } from "../src/test/seed.js";
 import { PROACTIVE_OPENER_MESSAGE } from "../src/persona/proactiveOpener.js";
+import { newId } from "../src/ids.js";
 
 let eventLog: EventLog;
 let projectionsDb: ProjectionsDb;
@@ -92,5 +93,77 @@ describe("refreshMemoryAfterTurn (item 7: preceding-reply lookup)", () => {
 
     await refreshMemoryAfterTurn({ eventLog, projectionsDb, retrievalDb, embedder, extractionRouter }, PRIMARY_USER_ID, secondMessage.id);
     expect(received).toBeUndefined();
+  });
+});
+
+function insertNamedEntity(projections: ProjectionsDb, name: string, extra: Partial<{ name_kind: "role_word" | null; owner_entity_id: string | null }> = {}) {
+  const id = newId();
+  projections.insertEntity({
+    id,
+    user_id: PRIMARY_USER_ID,
+    name,
+    confirmed: 0,
+    source_event_ids: "[]",
+    extractor_version: "message-v7",
+    pending_disambiguation: null,
+    created_at: new Date().toISOString(),
+    ...extra
+  });
+  return id;
+}
+
+describe("refreshMemoryAfterTurn: knownPeopleNames excludes role-word placeholders and de-duplicates (knownPeopleNames reinforcement fix)", () => {
+  function captureKnownPeopleNames() {
+    let received: string[] | undefined;
+    const extractionRouter: ExtractionRouter = {
+      extract: async (request) => {
+        received = request.knownPeopleNames;
+        return {
+          provider: "openai",
+          model: "gpt-5.6-terra",
+          taxonomy: { entities: [], statedFeelings: [], episodeMarkers: [], structuralAtoms: [], socialBonds: [], attributes: [] },
+          usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 }
+        };
+      }
+    };
+    return { extractionRouter, getReceived: () => received };
+  }
+
+  it("a role_word entity does not appear in knownPeopleNames", async () => {
+    const vanessaId = insertNamedEntity(projectionsDb, "Vanessa");
+    insertNamedEntity(projectionsDb, "father", { name_kind: "role_word", owner_entity_id: vanessaId });
+    const message = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "another update", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+
+    const { extractionRouter, getReceived } = captureKnownPeopleNames();
+    await refreshMemoryAfterTurn({ eventLog, projectionsDb, retrievalDb, embedder, extractionRouter }, PRIMARY_USER_ID, message.id);
+
+    expect(getReceived()).toContain("Vanessa");
+    expect(getReceived()).not.toContain("father");
+  });
+
+  it("an ordinary named entity still appears", async () => {
+    insertNamedEntity(projectionsDb, "Elena");
+    const message = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "another update", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+
+    const { extractionRouter, getReceived } = captureKnownPeopleNames();
+    await refreshMemoryAfterTurn({ eventLog, projectionsDb, retrievalDb, embedder, extractionRouter }, PRIMARY_USER_ID, message.id);
+
+    expect(getReceived()).toEqual(["Elena"]);
+  });
+
+  it("duplicates collapse — the real corpus shows the same unfiltered map listing 'mother'/'husband' twice each", async () => {
+    // Two distinct entity rows sharing the literal name "Elena" (e.g. a
+    // dangling-twin shape) — knownPeopleNames must still list it once.
+    insertNamedEntity(projectionsDb, "Elena");
+    insertNamedEntity(projectionsDb, "Elena");
+    insertNamedEntity(projectionsDb, "Marcus");
+    const message = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "another update", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+
+    const { extractionRouter, getReceived } = captureKnownPeopleNames();
+    await refreshMemoryAfterTurn({ eventLog, projectionsDb, retrievalDb, embedder, extractionRouter }, PRIMARY_USER_ID, message.id);
+
+    const received = getReceived()!;
+    expect(received.filter((n) => n === "Elena")).toHaveLength(1);
+    expect(received).toContain("Marcus");
   });
 });
