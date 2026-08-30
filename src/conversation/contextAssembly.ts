@@ -266,7 +266,8 @@ export function assembleContext(
   ambientContextBlock: string | null = null,
   suppressedEntitiesDirective: string | null = null,
   coReferenceAskDirective: string | null = null,
-  mergeRequestDirective: string | null = null
+  mergeRequestDirective: string | null = null,
+  typoMergeAskDirective: string | null = null
 ): AssembledContext {
   const { injectedTurns, truncated: recentTruncated } = truncateRecentTurnsToCharBudget(recentTurns, budgets.maxRecentWindowChars, budgets.lowWatermarkRecentWindowChars);
 
@@ -304,7 +305,10 @@ export function assembleContext(
   // coReferenceAskDirective, for the same reason: an owner-initiated merge
   // recognition is never mutually exclusive with a curiosity ask, an
   // attestation, or a role-word co-reference ask in the same turn.
-  const trailingDirectives = [gateDirective, coReferenceAskDirective, suppressedEntitiesDirective, mergeRequestDirective].filter((d): d is string => d !== null);
+  // typoMergeAskDirective is appended the same independent way — an
+  // Enso-noticed suspected typo is never mutually exclusive with anything
+  // else that fires this turn either.
+  const trailingDirectives = [gateDirective, coReferenceAskDirective, suppressedEntitiesDirective, mergeRequestDirective, typoMergeAskDirective].filter((d): d is string => d !== null);
   const systemPrompt = trailingDirectives.length > 0 ? `${baseSystemPrompt}\n\n${trailingDirectives.join("\n\n")}` : baseSystemPrompt;
 
   return {

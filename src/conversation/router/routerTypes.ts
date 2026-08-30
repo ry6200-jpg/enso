@@ -16,6 +16,8 @@ import type { CoReferenceCandidate, CoReferenceConfirmedPairing } from "../coRef
 export type { CoReferenceCandidate, CoReferenceConfirmedPairing };
 import type { PendingMergeProposal } from "../../relationships/ownerInitiatedMerge.js";
 export type { PendingMergeProposal };
+import type { TypoMergeCandidate, TypoMergePendingPairing } from "../../relationships/typoMerge.js";
+export type { TypoMergeCandidate, TypoMergePendingPairing };
 
 export interface CircleBackCandidate {
   /** The entity's CURRENT projection id — valid for this turn's router selection only. Never persisted for cross-turn matching (see stableKey): entity ids are reassigned on every rebuild (EN-054), a real bug found live in Phase 7 when attempt-tracking briefly keyed off this instead. */
@@ -149,6 +151,10 @@ export interface RouterRequest {
    * two names on its own. Null whenever no proposal is pending.
    */
   mergePendingProposal: PendingMergeProposal | null;
+  /** Enso-initiated typo detection: pairs eligible to ASK about this turn — the router may only ever ask about a pairKey already in this list. */
+  typoMergeAskCandidates: TypoMergeCandidate[];
+  /** Typo-merge questions already asked, awaiting an answer — the router may only ever confirm/dismiss a pairKey already in this list. */
+  typoMergePendingCandidates: TypoMergePendingPairing[];
 }
 
 export type RetrievalModeDecision = "hybrid" | "entity" | "recency";
@@ -235,6 +241,32 @@ export interface RouterDecision {
     survivingName: string | null;
   };
   /**
+   * Enso-initiated typo detection. Unlike coReference (neither side is a
+   * role-word placeholder to answer FOR) or mergeRequest (the owner never
+   * said anything — Enso is the one raising the suspicion), this axis's
+   * own ask IS the survivor proposal, so there is no separate propose turn
+   * the way mergeRequest needs one. pendingStableKey is a PAIR key (both
+   * sides' stable keys, sorted and joined — see typoMerge.ts's pairKey),
+   * never a single side's, since neither side is more "the identity" than
+   * the other.
+   * - direction="ask": pendingStableKey MUST match a typoMergeAskCandidates
+   *   entry. survivingName MUST be null (nothing to confirm yet).
+   * - direction="confirm": the CURRENT message agrees with the proposed
+   *   survivor OR names the other one instead. pendingStableKey MUST match
+   *   a typoMergePendingCandidates entry; survivingName is the explicit
+   *   name if the owner named one, null to accept whatever was proposed.
+   * - direction="dismiss": the CURRENT message clearly says these are
+   *   different people. pendingStableKey MUST match a
+   *   typoMergePendingCandidates entry; survivingName MUST be null.
+   * fire MUST be false, every other field null, whenever none applies.
+   */
+  typoMerge: {
+    fire: boolean;
+    direction: "ask" | "confirm" | "dismiss" | null;
+    pendingStableKey: string | null;
+    survivingName: string | null;
+  };
+  /**
    * EN-048's "real layer": the router's own semantic judgment on whether
    * THIS turn calls for the conditional zen register, independent of the
    * cheap literal-trigger-phrase check (src/conversation/voiceMode.ts) —
@@ -307,6 +339,7 @@ export const SAFE_DEFAULT_DECISION: RouterDecision = {
   attestation: { isAffirmation: false, entityName: null, attribute: null, value: null },
   coReference: { fire: false, direction: null, pendingStableKey: null },
   mergeRequest: { fire: false, firstName: null, secondName: null, survivingName: null },
+  typoMerge: { fire: false, direction: null, pendingStableKey: null, survivingName: null },
   register: { mode: "natural" },
   ambientContext: { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null },
   travelContext: { relevant: false, destinationHint: null }

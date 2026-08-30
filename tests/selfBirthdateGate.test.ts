@@ -33,7 +33,9 @@ function appendSelfBirthdateFiredReply(): void {
       coReferenceAskFired: null,
       coReferenceAnswerEventId: null,
       mergeProposalFired: null,
-      mergeAnswerEventId: null
+      mergeAnswerEventId: null,
+      typoMergeAskFired: null,
+      typoMergeAnswerEventId: null
     }
   };
   eventLog.append({ type: "reply_sent", actor: "enso", payload, userId: PRIMARY_USER_ID });

@@ -18,7 +18,9 @@ const BASE_REQUEST: RouterRequest = {
   coReferencePendingCandidates: [],
   coReferenceConfirmedPairings: [],
   coReferenceAskCandidates: [],
-  mergePendingProposal: null
+  mergePendingProposal: null,
+  typoMergeAskCandidates: [],
+  typoMergePendingCandidates: []
 };
 
 function fakeResult(provider: "openai" | "gemini", decision: RouterDecision): RouterCallResult {
@@ -233,6 +235,35 @@ describe("createIntentRouter — per-axis validation against candidate lists", (
     const result = await router.route(BASE_REQUEST);
 
     expect(result.decision.mergeRequest).toEqual({ fire: false, firstName: null, secondName: null, survivingName: null });
+  });
+
+  it("typo-merge: keeps direction=\"ask\" when the pairKey is eligible AND one of the two names is live in the current message", async () => {
+    const request = {
+      ...BASE_REQUEST,
+      message: "An Song came by again today.",
+      typoMergeAskCandidates: [{ kind: "typoMerge" as const, pairKey: "01A|01B", firstStableKey: "01A", firstName: "An Song", secondStableKey: "01B", secondName: "Ah Song", proposedSurvivorName: "An Song", attemptNumber: 1 as const }]
+    };
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ typoMerge: { fire: true, direction: "ask", pendingStableKey: "01A|01B", survivingName: null } })));
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(request);
+
+    expect(result.decision.typoMerge).toEqual({ fire: true, direction: "ask", pendingStableKey: "01A|01B", survivingName: null });
+  });
+
+  it("typo-merge: the gate holds — suppresses direction=\"ask\" when NEITHER name is live in the current message, even though the pairKey is a real candidate", async () => {
+    const request = {
+      ...BASE_REQUEST,
+      message: "Just an ordinary update, nothing about anyone in particular.",
+      typoMergeAskCandidates: [{ kind: "typoMerge" as const, pairKey: "01A|01B", firstStableKey: "01A", firstName: "An Song", secondStableKey: "01B", secondName: "Ah Song", proposedSurvivorName: "An Song", attemptNumber: 1 as const }]
+    };
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ typoMerge: { fire: true, direction: "ask", pendingStableKey: "01A|01B", survivingName: null } })));
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(request);
+
+    expect(result.decision.typoMerge).toEqual({ fire: false, direction: null, pendingStableKey: null, survivingName: null });
+    expect(result.failureReason).toContain("neither name is live");
   });
 
   it("suppresses attestation when the (entityName, attribute, value) triple doesn't exactly match a recent claim", async () => {

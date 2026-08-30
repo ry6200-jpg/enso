@@ -113,15 +113,24 @@ export type MergeRequestOutcome =
   | { outcome: "propose"; proposal: PendingMergeProposal }
   | { outcome: "confirmed"; payload: CoReferenceConfirmedPayload };
 
-function buildConfirmedPayload(survivor: EntityRow, losing: EntityRow): CoReferenceConfirmedPayload | null {
-  const survivorKey = stableKeyOf(survivor);
-  const losingKey = stableKeyOf(losing);
-  if (!survivorKey || !losingKey) return null;
+/** Everything the coReference merge fold actually needs about one side — stable key plus display name, never a full EntityRow, so this is reusable from a live roster (ownerInitiatedMerge) OR a stored pending record built on an earlier turn (typoMerge, which no longer has EntityRow objects on hand). */
+export interface StableNamedEntity {
+  name: string;
+  stableKey: string;
+}
+
+/**
+ * The ONE place a coReference-merge CoReferenceConfirmedPayload gets built,
+ * shared by both merge origins (owner-initiated and typo-detected) — "the
+ * merge itself reuses the owner-initiated path" means literally this
+ * function, not a second copy of its shape.
+ */
+export function buildCoReferenceMergePayload(survivor: StableNamedEntity, losing: StableNamedEntity): CoReferenceConfirmedPayload {
   return {
     kind: "coReference",
-    placeholderStableKey: losingKey,
+    placeholderStableKey: losing.stableKey,
     placeholderName: losing.name,
-    realStableKey: survivorKey,
+    realStableKey: survivor.stableKey,
     realName: survivor.name,
     // No natural "anchor" for a real-name-vs-real-name merge (unlike a
     // role-word collision, which is always relative to someone) — display/
@@ -138,6 +147,13 @@ function buildConfirmedPayload(survivor: EntityRow, losing: EntityRow): CoRefere
     anchorName: "",
     aliasSuppressed: false
   };
+}
+
+function buildConfirmedPayload(survivor: EntityRow, losing: EntityRow): CoReferenceConfirmedPayload | null {
+  const survivorKey = stableKeyOf(survivor);
+  const losingKey = stableKeyOf(losing);
+  if (!survivorKey || !losingKey) return null;
+  return buildCoReferenceMergePayload({ name: survivor.name, stableKey: survivorKey }, { name: losing.name, stableKey: losingKey });
 }
 
 /**

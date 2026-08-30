@@ -137,6 +137,63 @@ function validateDecision(raw: RouterDecision, request: RouterRequest): { decisi
     decision.mergeRequest = NO_ACTION_MERGE_REQUEST;
   }
 
+  // Enso-initiated typo detection: pendingStableKey is a PAIR key (see
+  // typoMerge.ts's pairKey), validated against a candidate list exactly
+  // like coReference above — "ask" against typoMergeAskCandidates,
+  // "confirm"/"dismiss" against typoMergePendingCandidates.
+  // survivingName is free text (same treatment as mergeRequest's own,
+  // resolved downstream) but only meaningful for "confirm" — suppressed
+  // to null otherwise, the same "no sub-field where it doesn't apply"
+  // discipline every other axis gets.
+  const NO_ACTION_TYPO_MERGE = { fire: false, direction: null, pendingStableKey: null, survivingName: null } as const;
+
+  if (decision.typoMerge.fire) {
+    if (decision.typoMerge.direction === "ask") {
+      const candidate = request.typoMergeAskCandidates.find((c) => c.pairKey === decision.typoMerge.pendingStableKey);
+      if (!candidate) {
+        reasons.push(`typoMerge.pendingStableKey ${JSON.stringify(decision.typoMerge.pendingStableKey)} is not an eligible typo-merge ask candidate — suppressed`);
+        decision.typoMerge = NO_ACTION_TYPO_MERGE;
+      } else {
+        // GATING (settled): fire only when one of the two names is live in
+        // the CURRENT message — enforced here, in code, not left to the
+        // model's own prompt-reading alone (unlike coReference's own ask
+        // condition), since a wrong typo guess is cheap enough to prevent
+        // structurally rather than merely discourage in prose. Never a
+        // standing whole-roster scan.
+        const lowerMessage = request.message.toLowerCase();
+        const nameLive = lowerMessage.includes(candidate.firstName.toLowerCase()) || lowerMessage.includes(candidate.secondName.toLowerCase());
+        if (!nameLive) {
+          reasons.push(`typoMerge.direction="ask" for pairKey ${JSON.stringify(decision.typoMerge.pendingStableKey)} but neither name is live in the current message — suppressed (narrow gate, never a standing scan)`);
+          decision.typoMerge = NO_ACTION_TYPO_MERGE;
+        } else if (decision.typoMerge.survivingName !== null) {
+          reasons.push("typoMerge.survivingName set on an ask — suppressed to null");
+          decision.typoMerge = { ...decision.typoMerge, survivingName: null };
+        }
+      }
+    } else if (decision.typoMerge.direction === "confirm") {
+      const known = request.typoMergePendingCandidates.some((c) => c.pairKey === decision.typoMerge.pendingStableKey);
+      if (!known) {
+        reasons.push(`typoMerge.pendingStableKey ${JSON.stringify(decision.typoMerge.pendingStableKey)} is not a pending typo-merge question — suppressed`);
+        decision.typoMerge = NO_ACTION_TYPO_MERGE;
+      }
+    } else if (decision.typoMerge.direction === "dismiss") {
+      const known = request.typoMergePendingCandidates.some((c) => c.pairKey === decision.typoMerge.pendingStableKey);
+      if (!known) {
+        reasons.push(`typoMerge.pendingStableKey ${JSON.stringify(decision.typoMerge.pendingStableKey)} is not a pending typo-merge question — suppressed`);
+        decision.typoMerge = NO_ACTION_TYPO_MERGE;
+      } else if (decision.typoMerge.survivingName !== null) {
+        reasons.push("typoMerge.survivingName set on a dismiss — suppressed to null");
+        decision.typoMerge = { ...decision.typoMerge, survivingName: null };
+      }
+    } else {
+      reasons.push(`typoMerge.direction ${JSON.stringify(decision.typoMerge.direction)} is not a recognized direction — suppressed`);
+      decision.typoMerge = NO_ACTION_TYPO_MERGE;
+    }
+  } else if (decision.typoMerge.direction !== null || decision.typoMerge.pendingStableKey !== null || decision.typoMerge.survivingName !== null) {
+    reasons.push("typoMerge had a sub-field set while fire=false — suppressed entirely");
+    decision.typoMerge = NO_ACTION_TYPO_MERGE;
+  }
+
   const NO_ACTION_AMBIENT_CONTEXT = { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null } as const;
 
   if (decision.ambientContext.relevant) {
@@ -235,6 +292,7 @@ export function createIntentRouter(
           decision.attestation.isAffirmation ||
           decision.coReference.fire ||
           decision.mergeRequest.fire ||
+          decision.typoMerge.fire ||
           decision.register.mode === "zen" ||
           decision.ambientContext.relevant ||
           decision.travelContext.relevant)
@@ -246,6 +304,7 @@ export function createIntentRouter(
           attestation: { isAffirmation: false, entityName: null, attribute: null, value: null },
           coReference: { fire: false, direction: null, pendingStableKey: null },
           mergeRequest: { fire: false, firstName: null, secondName: null, survivingName: null },
+          typoMerge: { fire: false, direction: null, pendingStableKey: null, survivingName: null },
           register: { mode: "natural" },
           ambientContext: { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null },
           travelContext: { relevant: false, destinationHint: null }

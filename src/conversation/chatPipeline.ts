@@ -41,6 +41,16 @@ import {
   verifyMergeProposalExecuted,
   type PendingMergeProposal
 } from "../relationships/ownerInitiatedMerge.js";
+import {
+  buildTypoMergeAskDirective,
+  findPendingTypoMergeQuestions,
+  findTypoMergeCandidates,
+  resolveTypoMergeConfirmation,
+  resolveTypoMergeDismissal,
+  verifyTypoMergeAskExecuted,
+  type TypoMergeCandidate,
+  type TypoMergePendingPairing
+} from "../relationships/typoMerge.js";
 import { recentAttributeClaims, resolveAttestation, type FactConfirmedPayload } from "./attestation.js";
 import { decideVoiceMode, hasZenTriggerPhrase } from "./voiceMode.js";
 import type { IntentRouter, RouterResult } from "./router/intentRouter.js";
@@ -217,6 +227,19 @@ export interface ReplySentPayload {
     mergeProposalFired: PendingMergeProposal | null;
     /** The fact_confirmed event id this turn produced, if the mergeRequest axis resolved an owner-initiated merge outright (survivor stated, or answering a pending proposal). */
     mergeAnswerEventId: string | null;
+    /**
+     * Enso-initiated typo detection: non-null only when the typoMerge ASK
+     * fired AND EN-073-style verification confirmed the reply actually
+     * asked (verifyTypoMergeAskExecuted, requiring both names — this ask
+     * poses an identity question, not a survivor confirmation, so it needs
+     * the stricter both-names check, not mergeProposalFired's looser one).
+     * findTypoMergeCandidates' own attempt cap/cooldown, and
+     * findPendingTypoMergeQuestions' answer recognition, both derive from
+     * a scan of this field, never a new event type.
+     */
+    typoMergeAskFired: { pairKey: string; firstStableKey: string; firstName: string; secondStableKey: string; secondName: string; proposedSurvivorName: string } | null;
+    /** The fact_confirmed or fact_corrected event id this turn produced, if the typoMerge axis recognized a validated confirm/dismiss answer. */
+    typoMergeAnswerEventId: string | null;
   };
   /**
    * Item 8 round-trip survival: non-null whenever this turn had an
@@ -464,6 +487,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   let coReferenceConfirmedPairings: CoReferenceConfirmedPairing[] = [];
   let coReferenceAskCandidates: CoReferenceCandidate[] = [];
   let mergePendingProposal: PendingMergeProposal | null = null;
+  let typoMergeAskCandidates: TypoMergeCandidate[] = [];
+  let typoMergePendingCandidates: TypoMergePendingPairing[] = [];
 
   if (input.retrievalOverride) {
     // Test/override hook (Part 1): bypasses the router entirely, no gates.
@@ -503,6 +528,13 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     // standing proposal is never a proactive-curiosity action gated by
     // curiosityTurnEligible.
     mergePendingProposal = findPendingMergeProposal(deps.eventLog, input.userId);
+    // Enso-initiated typo detection: ask candidates suppressed during
+    // winding-down, same manners-only reasoning as coReferenceAskCandidates
+    // above (never gated on curiosityTurnEligible or the shared cooldown).
+    // Pending (answer-recognition) candidates computed unconditionally,
+    // same as every other answer-recognition list here.
+    typoMergeAskCandidates = isWindingDown(recentTurns) ? [] : findTypoMergeCandidates(deps.eventLog, deps.projectionsDb, input.userId);
+    typoMergePendingCandidates = findPendingTypoMergeQuestions(deps.eventLog, input.userId);
 
     routerResult = await deps.intentRouter.route({
       message: effectiveText,
@@ -523,7 +555,9 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       coReferencePendingCandidates,
       coReferenceConfirmedPairings,
       coReferenceAskCandidates,
-      mergePendingProposal
+      mergePendingProposal,
+      typoMergeAskCandidates,
+      typoMergePendingCandidates
     });
 
     const r = routerResult.decision.retrieval;
@@ -628,6 +662,19 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
           ? buildMergeProposalDirective(mergeOutcome.proposal.proposedSurvivorName, mergeOutcome.proposal.losingName)
           : null;
 
+  // Enso-initiated typo detection: same independent-directive treatment as
+  // coReferenceAskDirective/mergeRequestDirective above — the ask IS the
+  // survivor proposal (no separate propose step, unlike mergeRequest),
+  // never mutually exclusive with any other gate this turn. "confirm"/
+  // "dismiss" need no directive (recognizing the owner's own answer) and
+  // are appended after the reply below, alongside the other answer paths.
+  const typoMergeDecision = routerResult?.decision.typoMerge;
+  const typoMergeAskCandidateMatched: TypoMergeCandidate | null =
+    typoMergeDecision?.fire && typoMergeDecision.direction === "ask"
+      ? (typoMergeAskCandidates.find((c) => c.pairKey === typoMergeDecision.pendingStableKey) ?? null)
+      : null;
+  const typoMergeAskDirective = typoMergeAskCandidateMatched ? buildTypoMergeAskDirective(typoMergeAskCandidateMatched) : null;
+
   // EN-047/048: cheap literal-trigger layer always wins outright; otherwise
   // the router's own register judgment (already fail-safed to "natural" on
   // any failure or uncertified tier — SAFE_DEFAULT_DECISION); with no
@@ -667,7 +714,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     ambientContextBlock,
     suppressedEntitiesDirective,
     coReferenceAskDirective,
-    mergeRequestDirective
+    mergeRequestDirective,
+    typoMergeAskDirective
   );
 
   const callResult = await deps.chatRouter.reply({ system: assembled.systemPrompt, history: [], latestMessage: effectiveText });
@@ -727,6 +775,39 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       : null;
   if (mergeOutcome?.outcome === "confirmed") {
     mergeAnswerEvent = deps.eventLog.append({ type: "fact_confirmed", actor: "user", payload: mergeOutcome.payload, userId: input.userId });
+  }
+
+  // Enso-initiated typo detection: the ASK needs EN-073 verification
+  // (verifyTypoMergeAskExecuted, both names — see that function's own
+  // comment for why this differs from mergeProposalFired's looser check)
+  // since findPendingTypoMergeQuestions derives next turn's recognition
+  // from the reply having actually asked. "confirm"/"dismiss" are
+  // recognizing the owner's own answer and are appended unconditionally,
+  // same discipline as the merge-confirm case just above.
+  const typoMergeAskFiredThisTurn =
+    typoMergeAskCandidateMatched && verifyTypoMergeAskExecuted(typoMergeAskCandidateMatched, callResult.text)
+      ? {
+          pairKey: typoMergeAskCandidateMatched.pairKey,
+          firstStableKey: typoMergeAskCandidateMatched.firstStableKey,
+          firstName: typoMergeAskCandidateMatched.firstName,
+          secondStableKey: typoMergeAskCandidateMatched.secondStableKey,
+          secondName: typoMergeAskCandidateMatched.secondName,
+          proposedSurvivorName: typoMergeAskCandidateMatched.proposedSurvivorName
+        }
+      : null;
+  let typoMergeAnswerEvent: EventRecord | undefined;
+  if (typoMergeDecision?.fire && typoMergeDecision.pendingStableKey) {
+    if (typoMergeDecision.direction === "confirm") {
+      const resolved = resolveTypoMergeConfirmation(typoMergePendingCandidates, typoMergeDecision.pendingStableKey, typoMergeDecision.survivingName);
+      if (resolved) {
+        typoMergeAnswerEvent = deps.eventLog.append({ type: "fact_confirmed", actor: "user", payload: resolved, userId: input.userId });
+      }
+    } else if (typoMergeDecision.direction === "dismiss") {
+      const resolved = resolveTypoMergeDismissal(typoMergePendingCandidates, typoMergeDecision.pendingStableKey);
+      if (resolved) {
+        typoMergeAnswerEvent = deps.eventLog.append({ type: "fact_corrected", actor: "user", payload: resolved, userId: input.userId });
+      }
+    }
   }
 
   const payload: ReplySentPayload = {
@@ -805,7 +886,9 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
         : null,
       coReferenceAnswerEventId: coReferenceAnswerEvent?.id ?? null,
       mergeProposalFired: mergeProposalFiredThisTurn,
-      mergeAnswerEventId: mergeAnswerEvent?.id ?? null
+      mergeAnswerEventId: mergeAnswerEvent?.id ?? null,
+      typoMergeAskFired: typoMergeAskFiredThisTurn,
+      typoMergeAnswerEventId: typoMergeAnswerEvent?.id ?? null
     },
     attachmentContext: attachmentInfo
       ? { sourceEventId: input.attachmentEventId!, filename: attachmentInfo.filename, kind: attachmentInfo.kind, contentInjected: attachmentBlock !== null }

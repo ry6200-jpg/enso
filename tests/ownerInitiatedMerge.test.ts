@@ -202,7 +202,9 @@ describe("findPendingMergeProposal", () => {
         coReferenceAskFired: null,
         coReferenceAnswerEventId: null,
         mergeProposalFired: proposal,
-        mergeAnswerEventId: null
+        mergeAnswerEventId: null,
+        typoMergeAskFired: null,
+        typoMergeAnswerEventId: null
       }
     };
     return eventLog.append({ type: "reply_sent", actor: "enso", payload, userId: PRIMARY_USER_ID });

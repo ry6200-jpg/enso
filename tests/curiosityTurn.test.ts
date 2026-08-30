@@ -73,6 +73,8 @@ function recordFired(inReplyToEventId: string, gateActions: Partial<ReplySentPay
       coReferenceAnswerEventId: null,
       mergeProposalFired: null,
       mergeAnswerEventId: null,
+      typoMergeAskFired: null,
+      typoMergeAnswerEventId: null,
       ...gateActions
     }
   };

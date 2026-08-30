@@ -90,7 +90,9 @@ describe("sendMessage — backward compatibility (no intentRouter configured)", 
       coReferenceAskFired: null,
       coReferenceAnswerEventId: null,
       mergeProposalFired: null,
-      mergeAnswerEventId: null
+      mergeAnswerEventId: null,
+      typoMergeAskFired: null,
+      typoMergeAnswerEventId: null
     });
   });
 });
@@ -142,7 +144,9 @@ describe("sendMessage — EN-083 uncertified-tier gate bypass (verification item
       coReferenceAskFired: null,
       coReferenceAnswerEventId: null,
       mergeProposalFired: null,
-      mergeAnswerEventId: null
+      mergeAnswerEventId: null,
+      typoMergeAskFired: null,
+      typoMergeAnswerEventId: null
     });
     expect(payload.router.certified).toBe(false);
   });

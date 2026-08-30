@@ -65,6 +65,17 @@ export const ROUTER_JSON_SCHEMA = {
       required: ["fire", "firstName", "secondName", "survivingName"],
       additionalProperties: false
     },
+    typoMerge: {
+      type: "object",
+      properties: {
+        fire: { type: "boolean" },
+        direction: { type: ["string", "null"], enum: ["ask", "confirm", "dismiss", null] },
+        pendingStableKey: { type: ["string", "null"] },
+        survivingName: { type: ["string", "null"] }
+      },
+      required: ["fire", "direction", "pendingStableKey", "survivingName"],
+      additionalProperties: false
+    },
     register: {
       type: "object",
       properties: {
@@ -94,7 +105,7 @@ export const ROUTER_JSON_SCHEMA = {
       additionalProperties: false
     }
   },
-  required: ["retrieval", "curiosityTurn", "attestation", "coReference", "mergeRequest", "register", "ambientContext", "travelContext"],
+  required: ["retrieval", "curiosityTurn", "attestation", "coReference", "mergeRequest", "typoMerge", "register", "ambientContext", "travelContext"],
   additionalProperties: false
 } as const;
 
@@ -162,8 +173,20 @@ export function buildRouterSystemPrompt(request: RouterRequest): string {
   const mergePendingProposalBlock = request.mergePendingProposal
     ? `- "${request.mergePendingProposal.firstName}" and "${request.mergePendingProposal.secondName}" are being merged; proposed survivor: "${request.mergePendingProposal.proposedSurvivorName}" — awaiting the owner's yes or a correction`
     : "(no merge proposal currently awaiting an answer)";
+  const typoMergeAskBlock =
+    request.typoMergeAskCandidates.length > 0
+      ? request.typoMergeAskCandidates
+          .map((c) => `- pairKey="${c.pairKey}": "${c.firstName}" and "${c.secondName}" look like they could be the same name, spelled differently — worth checking; you'd propose "${c.proposedSurvivorName}"`)
+          .join("\n")
+      : "(no typo-variant pair eligible to ask about this turn)";
+  const typoMergePendingBlock =
+    request.typoMergePendingCandidates.length > 0
+      ? request.typoMergePendingCandidates
+          .map((c) => `- pairKey="${c.pairKey}": asked whether "${c.firstName}" and "${c.secondName}" are the same person (proposed "${c.proposedSurvivorName}") — not yet answered`)
+          .join("\n")
+      : "(no typo-merge question currently pending an answer)";
 
-  return `You are a routing judgment layer for a personal journaling assistant, deciding eight things about the CURRENT user message below. Return ONLY the JSON the schema requires — no prose.
+  return `You are a routing judgment layer for a personal journaling assistant, deciding nine things about the CURRENT user message below. Return ONLY the JSON the schema requires — no prose.
 
 CURRENT MESSAGE: ${JSON.stringify(request.message)}
 
@@ -224,9 +247,22 @@ fire MUST be false, and every other field null, whenever the current message doe
 Merge proposal awaiting an answer:
 ${mergePendingProposalBlock}
 
-6. REGISTER — should the reply use the quieter, more restrained "zen" register instead of the ordinary conversational one? Default to "natural" — this is the overwhelming majority case. Choose "zen" only when the CURRENT message shows genuine overwhelm, the owner visibly looping on the same problem without new ground being covered across recent turns, or an explicit ask to zoom out or step back — judge this from the actual content and tone of the message and recent conversation, not from whether it contains a specific trigger word: someone genuinely overwhelmed frequently does NOT use that word at all. Do not choose "zen" for an ordinary emotional moment that a warm, plain reply already handles well, and do not choose it for a technical or practical exchange with no emotional weight at all.
+6. TYPO MERGE — do two names already on record below look like the SAME person, just spelled differently — a typo, not two different people who happen to share a similar name? Unlike MERGE REQUEST above, the owner hasn't said anything about this; you are the one noticing.
 
-7. AMBIENT CONTEXT — is a real weather/local-time/walking-distance lookup worth making for THIS turn? Default to relevant=false — this is the overwhelming majority case, and it costs real API calls, so only fire it when there's real value. GOVERNING RULE, the ONLY question that matters: is there a live decision or concern already on the table that this data would actually inform? Location being merely KNOWN is never enough on its own — that produces an assistant appending a helpful fact to every turn, which is exactly the failure this gate exists to prevent.
+- direction="ask": fire ONLY when a pair listed below is genuinely worth raising NOW — meaning the CURRENT message mentions at least ONE of the two names in the pair, not just that the pair exists somewhere on record. This is deliberately narrow: a typo match is a guess, never a detected defect, and firing across the whole roster at once risks a run of unprompted identity questions — waiting for one of the names to come up naturally costs nothing, since two unrelated people who happen to share a near-spelling cost nothing by staying split. pendingStableKey MUST exactly match one pairKey tagged below under "eligible to ask about."
+- direction="confirm": the CURRENT message answers a pending question below by agreeing ("yes," "right," "that's him") OR by naming a specific one of the two spellings to keep instead ("no, it's actually X") — either way this means the owner agrees they're the same person. pendingStableKey MUST match a pairKey below; survivingName is the exact spelling the owner named if they named one, null if they just agreed (you'll use whichever was already proposed).
+- direction="dismiss": the CURRENT message clearly says these are TWO DIFFERENT PEOPLE ("no, different people," "those are two different Ah Songs," "not the same") — a real rejection of the pairing, not silence or a change of subject. pendingStableKey MUST match a pairKey below. This is PERMANENT — once dismissed, this exact pair is never raised again, so only use it when the owner is clearly, deliberately rejecting the pairing, never as a default when merely uncertain.
+- fire MUST be false, direction/pendingStableKey/survivingName all null, whenever none of these three clearly applies — when in doubt, fire=false, exactly like CO-REFERENCE above.
+
+Typo-variant pairs eligible to ask about this turn:
+${typoMergeAskBlock}
+
+Typo-merge questions asked, awaiting an answer:
+${typoMergePendingBlock}
+
+7. REGISTER — should the reply use the quieter, more restrained "zen" register instead of the ordinary conversational one? Default to "natural" — this is the overwhelming majority case. Choose "zen" only when the CURRENT message shows genuine overwhelm, the owner visibly looping on the same problem without new ground being covered across recent turns, or an explicit ask to zoom out or step back — judge this from the actual content and tone of the message and recent conversation, not from whether it contains a specific trigger word: someone genuinely overwhelmed frequently does NOT use that word at all. Do not choose "zen" for an ordinary emotional moment that a warm, plain reply already handles well, and do not choose it for a technical or practical exchange with no emotional weight at all.
+
+8. AMBIENT CONTEXT — is a real weather/local-time/walking-distance lookup worth making for THIS turn? Default to relevant=false — this is the overwhelming majority case, and it costs real API calls, so only fire it when there's real value. GOVERNING RULE, the ONLY question that matters: is there a live decision or concern already on the table that this data would actually inform? Location being merely KNOWN is never enough on its own — that produces an assistant appending a helpful fact to every turn, which is exactly the failure this gate exists to prevent.
 
 Owner's own coordinates available this turn: ${request.ownLocationAvailable ? "yes" : "no"}. If "no", ownSituation MUST be false no matter what — there is nothing to fetch.
 
@@ -240,7 +276,7 @@ ${ambientCandidatesBlock}
 
 If none of the above genuinely applies, relevant MUST be false and every other field null/false — do not set relevant=true "just in case" one of the fields might end up useful.
 
-8. TRAVEL CONTEXT — is a real, live-traffic drive-time/distance lookup worth making for THIS turn? Default to relevant=false — this costs a real API call and, like ambient context above, is worth almost nothing on most turns. GOVERNING RULE, the same shape as ambient context's: the owner must be facing an actual timing or attendance decision right now — whether to leave, how much time to allow, whether a drive is worth it — never "a destination is knowable, so check it." This is never for idle travel trivia and never volunteered into a reply as an ETA — see the ambient-travel persona instruction for how the data (once fetched) is actually allowed to shape a reply.
+9. TRAVEL CONTEXT — is a real, live-traffic drive-time/distance lookup worth making for THIS turn? Default to relevant=false — this costs a real API call and, like ambient context above, is worth almost nothing on most turns. GOVERNING RULE, the same shape as ambient context's: the owner must be facing an actual timing or attendance decision right now — whether to leave, how much time to allow, whether a drive is worth it — never "a destination is knowable, so check it." This is never for idle travel trivia and never volunteered into a reply as an ETA — see the ambient-travel persona instruction for how the data (once fetched) is actually allowed to shape a reply.
 
 Owner's own home/residence on record: ${request.primaryResidenceKnown ? "yes" : "no"}.
 

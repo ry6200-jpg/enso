@@ -119,7 +119,9 @@ describe("Validation bank — router flags (EN-075)", () => {
       coReferencePendingCandidates: [],
       coReferenceConfirmedPairings: [],
       coReferenceAskCandidates: [],
-      mergePendingProposal: null
+      mergePendingProposal: null,
+      typoMergeAskCandidates: [],
+      typoMergePendingCandidates: []
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
@@ -144,7 +146,9 @@ describe("Validation bank — router flags (EN-075)", () => {
       coReferencePendingCandidates: [],
       coReferenceConfirmedPairings: [],
       coReferenceAskCandidates: [],
-      mergePendingProposal: null
+      mergePendingProposal: null,
+      typoMergeAskCandidates: [],
+      typoMergePendingCandidates: []
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
@@ -169,7 +173,9 @@ describe("Validation bank — router flags (EN-075)", () => {
       coReferencePendingCandidates: [],
       coReferenceConfirmedPairings: [],
       coReferenceAskCandidates: [],
-      mergePendingProposal: null
+      mergePendingProposal: null,
+      typoMergeAskCandidates: [],
+      typoMergePendingCandidates: []
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
@@ -194,7 +200,9 @@ describe("Validation bank — router flags (EN-075)", () => {
       coReferencePendingCandidates: [],
       coReferenceConfirmedPairings: [],
       coReferenceAskCandidates: [],
-      mergePendingProposal: null
+      mergePendingProposal: null,
+      typoMergeAskCandidates: [],
+      typoMergePendingCandidates: []
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
@@ -219,7 +227,9 @@ describe("Validation bank — router flags (EN-075)", () => {
       coReferencePendingCandidates: [],
       coReferenceConfirmedPairings: [],
       coReferenceAskCandidates: [],
-      mergePendingProposal: null
+      mergePendingProposal: null,
+      typoMergeAskCandidates: [],
+      typoMergePendingCandidates: []
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
@@ -244,7 +254,9 @@ describe("Validation bank — router flags (EN-075)", () => {
       coReferencePendingCandidates: [],
       coReferenceConfirmedPairings: [],
       coReferenceAskCandidates: [],
-      mergePendingProposal: null
+      mergePendingProposal: null,
+      typoMergeAskCandidates: [],
+      typoMergePendingCandidates: []
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
