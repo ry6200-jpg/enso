@@ -3,6 +3,7 @@ import type { EventRecord } from "../events/schema.js";
 import { UpcasterRegistry } from "../upcasters/registry.js";
 import { assertAttribute, ATTRIBUTE_MUTABILITY } from "../perception/attributes.js";
 import { computeEclipsedEventIds } from "../attachments/uploadDeletion.js";
+import { computeCoReferenceMerges } from "../relationships/coReferenceMerge.js";
 import {
   findFuzzyNameMatch,
   findUnambiguousPartialNameMatch,
@@ -163,6 +164,19 @@ export function rebuildProjections(
   // note on the EN-066 attestation exception this does NOT yet implement.
   const eclipsedEventIds = computeEclipsedEventIds(events);
 
+  // Co-reference merge fold (EN-101/Bug fix 2 of 2): a second pre-pass,
+  // parallel to eclipsedEventIds above and following the exact same
+  // precedent — read the WHOLE log up front so a confirmation can affect
+  // how mentions resolve regardless of where in the log it falls, never a
+  // row-moving/backfill step after the fact. See coReferenceMerge.ts.
+  const coReferenceMerges = computeCoReferenceMerges(events);
+  // pairingKey (placeholderStableKey) -> the canonical entity id actually
+  // created for it THIS replay. Populated the first time EITHER side of a
+  // confirmed pairing is reached in the main loop below; consulted on the
+  // second. Never persisted — recomputed fresh every rebuild, same as
+  // every other in-memory index here.
+  const canonicalIdByCoReferencePairing = new Map<string, string>();
+
   const lastOutcomeBySourceId = new Map<string, "completed" | "failed">();
   for (const event of events) {
     if (event.type === "extraction_completed") {
@@ -215,6 +229,65 @@ export function rebuildProjections(
     return id;
   }
 
+  /**
+   * Co-reference merge fold, the shared creation-point check (Bug fix 2 of
+   * 2): called from BOTH resolveName and resolveRoleWordName, before
+   * either does anything else. If the CURRENT event's id is one of the two
+   * stable keys a confirmed (and not retracted) pairing names, this either
+   * creates the canonical entity now (first side reached — under the REAL
+   * name, via the ordinary createEntity path, so name_kind/owner_entity_id
+   * come out null exactly as an ordinary entity's would, no special-casing
+   * needed) or returns the id already created for it (second side
+   * reached). Either way, the caller's own normal cascade/owner-scoped
+   * logic never runs for this call — the merge is authoritative.
+   *
+   * Deliberately never registers the ROLE-WORD string as an alias: when
+   * the role-word side is the FIRST side reached, createEntity is called
+   * with the REAL name, never the raw role-word string, so
+   * registerAlias(id, name, ...) inside createEntity only ever aliases the
+   * real name. When the role-word side is the SECOND side reached,
+   * resolveRoleWordName's own call site simply never calls registerAlias
+   * at all (see below) — satisfying "the role-word string is not
+   * registered as an alias" without any extra step.
+   *
+   * Checked against the full sourceEventIds provenance array (`[payload.
+   * sourceEventId, event.id]` — the message event's own id AND the
+   * extraction_completed event's id), never the bare `eventId` the
+   * per-event mention cache uses: a stable key (circleBack.ts's own
+   * convention, `sourceIds[0]` after sort) is always the MESSAGE event's
+   * id, since it sorts lexicographically before the extraction event it
+   * produced — but resolveName/resolveRoleWordName's own `eventId`
+   * parameter is the EXTRACTION event's id. Checking only `eventId` here
+   * would never match a stable key at all; checking the whole provenance
+   * array matches correctly regardless of which of the two happens to be
+   * the stable key convention elsewhere.
+   *
+   * ALSO checked against the raw name string being resolved, not just the
+   * event id — a real bug caught by this fix's own FAST tests: a
+   * stable-key event is a MESSAGE event id, and other, unrelated names are
+   * routinely mentioned in that SAME message (the anchor itself, almost
+   * always — "her husband is not well" mentions both "husband" and
+   * "Annissa" in one message, sharing one stable-key event). Matching on
+   * event id alone misfired on every co-mentioned name sharing that
+   * event id with the placeholder/real side; the name check is what keeps
+   * the merge scoped to the two specific names it's actually about.
+   */
+  function resolveCoReferenceMerge(rawName: string, extractorVersion: string, sourceEventIds: string[]): string | undefined {
+    const matchedKey = sourceEventIds.find((id) => coReferenceMerges.has(id));
+    const info = matchedKey ? coReferenceMerges.get(matchedKey) : undefined;
+    if (!info) return undefined;
+    const lower = normalize(rawName);
+    if (lower !== normalize(info.placeholderName) && lower !== normalize(info.realName)) return undefined;
+    const existing = canonicalIdByCoReferencePairing.get(info.placeholderStableKey);
+    if (existing) {
+      projections.touchEntity(existing, sourceEventIds, extractorVersion);
+      return existing;
+    }
+    const id = createEntity(info.canonicalName, extractorVersion, sourceEventIds);
+    canonicalIdByCoReferencePairing.set(info.placeholderStableKey, id);
+    return id;
+  }
+
   function candidateList(): NameCandidate[] {
     return projections.listEntities(userId).map((e) => ({ id: e.id, name: e.name }));
   }
@@ -247,6 +320,12 @@ export function rebuildProjections(
     const cacheKey = `${eventId}|${lower}`;
     const cached = mentionResolution.get(cacheKey);
     if (cached) return cached;
+
+    const merged = resolveCoReferenceMerge(trimmed, extractorVersion, sourceEventIds);
+    if (merged) {
+      mentionResolution.set(cacheKey, merged);
+      return merged;
+    }
 
     let candidateId = aliasExactIndex.get(lower);
     let viaNormalized = false;
@@ -344,6 +423,12 @@ export function rebuildProjections(
     const cacheKey = `${eventId}|role:${lower}|${ownerEntityId ?? "none"}`;
     const cached = mentionResolution.get(cacheKey);
     if (cached) return cached;
+
+    const merged = resolveCoReferenceMerge(trimmed, extractorVersion, sourceEventIds);
+    if (merged) {
+      mentionResolution.set(cacheKey, merged);
+      return merged;
+    }
 
     if (ownerEntityId) {
       const existing = projections
@@ -676,6 +761,16 @@ export function rebuildProjections(
   let attributeCorrectionsApplied = 0;
   for (const event of events) {
     if (event.type !== "fact_corrected") continue;
+    // Co-reference retraction (Bug fix 2 of 2): handled entirely by the
+    // computeCoReferenceMerges pre-pass above, never here — this loop runs
+    // AFTER the main resolution loop has already finished, far too late
+    // for a fold that needs entities to be "born correct." Explicit `kind`
+    // discriminator, checked before anything else touches the payload:
+    // this variant carries no `entityName` at all, and the ordinary
+    // resolveCorrectionTargetEntity(payload.targetEventId, payload.entityName)
+    // call below would call .trim() on undefined and throw if it ever
+    // reached a coReferenceRetraction payload unguarded.
+    if ((event.payload as { kind?: string }).kind === "coReferenceRetraction") continue;
     const payload = event.payload as FactCorrectedPayload;
     const entityId = resolveCorrectionTargetEntity(payload.targetEventId, payload.entityName);
     if (!entityId) continue; // nothing to correct — the target produced no entity under that name
@@ -719,6 +814,11 @@ export function rebuildProjections(
   let confirmationsApplied = 0;
   for (const event of events) {
     if (event.type !== "fact_confirmed") continue;
+    // Co-reference confirmation (Bug fix 2 of 2): same reasoning as the
+    // coReferenceRetraction guard above — handled entirely by the
+    // pre-pass, never by this post-loop handler, and this variant carries
+    // no `entityName` at all either.
+    if ((event.payload as { kind?: string }).kind === "coReference") continue;
     const payload = event.payload as FactConfirmedPayload;
     const entityId = resolveCorrectionTargetEntity(payload.targetEventId, payload.entityName);
     if (!entityId) continue;

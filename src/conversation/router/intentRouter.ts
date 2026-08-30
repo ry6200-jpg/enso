@@ -61,6 +61,12 @@ function validateDecision(raw: RouterDecision, request: RouterRequest): { decisi
         reasons.push(`curiosityTurn.attribute ${JSON.stringify(decision.curiosityTurn.attribute)} is not an eligible selfFact candidate — suppressed`);
         decision.curiosityTurn = NO_ACTION_CURIOSITY_TURN;
       }
+    } else if (decision.curiosityTurn.kind === "coReference") {
+      const known = request.curiosityCandidates.some((c) => c.kind === "coReference" && c.candidate.placeholderStableKey === decision.curiosityTurn.probeType);
+      if (!known) {
+        reasons.push(`curiosityTurn.probeType ${JSON.stringify(decision.curiosityTurn.probeType)} is not an eligible coReference candidate — suppressed`);
+        decision.curiosityTurn = NO_ACTION_CURIOSITY_TURN;
+      }
     } else if (decision.curiosityTurn.kind === "elicitation") {
       const known = request.curiosityCandidates.some(
         (c) =>
@@ -86,6 +92,30 @@ function validateDecision(raw: RouterDecision, request: RouterRequest): { decisi
       reasons.push("attestation does not exactly match a recently surfaced claim — suppressed");
       decision.attestation = { isAffirmation: false, entityName: null, attribute: null, value: null };
     }
+  }
+
+  const NO_ACTION_CO_REFERENCE = { fire: false, direction: null, pendingStableKey: null } as const;
+
+  if (decision.coReference.fire) {
+    if (decision.coReference.direction === "confirm") {
+      const known = request.coReferencePendingCandidates.some((c) => c.placeholderStableKey === decision.coReference.pendingStableKey);
+      if (!known) {
+        reasons.push(`coReference.pendingStableKey ${JSON.stringify(decision.coReference.pendingStableKey)} is not an eligible pending co-reference candidate — suppressed`);
+        decision.coReference = NO_ACTION_CO_REFERENCE;
+      }
+    } else if (decision.coReference.direction === "retract") {
+      const known = request.coReferenceConfirmedPairings.some((c) => c.placeholderStableKey === decision.coReference.pendingStableKey);
+      if (!known) {
+        reasons.push(`coReference.pendingStableKey ${JSON.stringify(decision.coReference.pendingStableKey)} is not a confirmed co-reference pairing — suppressed`);
+        decision.coReference = NO_ACTION_CO_REFERENCE;
+      }
+    } else {
+      reasons.push(`coReference.direction ${JSON.stringify(decision.coReference.direction)} is not a recognized direction — suppressed`);
+      decision.coReference = NO_ACTION_CO_REFERENCE;
+    }
+  } else if (decision.coReference.direction !== null || decision.coReference.pendingStableKey !== null) {
+    reasons.push("coReference had a sub-field set while fire=false — suppressed entirely");
+    decision.coReference = NO_ACTION_CO_REFERENCE;
   }
 
   const NO_ACTION_AMBIENT_CONTEXT = { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null } as const;
@@ -180,12 +210,21 @@ export function createIntentRouter(
       }
 
       const isCertified = certifiedProviders.has(raw.provider);
-      if (!isCertified && (decision.curiosityTurn.fire || decision.attestation.isAffirmation || decision.register.mode === "zen" || decision.ambientContext.relevant || decision.travelContext.relevant)) {
+      if (
+        !isCertified &&
+        (decision.curiosityTurn.fire ||
+          decision.attestation.isAffirmation ||
+          decision.coReference.fire ||
+          decision.register.mode === "zen" ||
+          decision.ambientContext.relevant ||
+          decision.travelContext.relevant)
+      ) {
         reasons.push(`gates bypassed to no-action: decision served by uncertified tier "${raw.provider}" (EN-083)`);
         decision = {
           ...decision,
           curiosityTurn: { fire: false, kind: null, entityId: null, attribute: null, probeType: null },
           attestation: { isAffirmation: false, entityName: null, attribute: null, value: null },
+          coReference: { fire: false, direction: null, pendingStableKey: null },
           register: { mode: "natural" },
           ambientContext: { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null },
           travelContext: { relevant: false, destinationHint: null }

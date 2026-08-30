@@ -80,7 +80,16 @@ describe("sendMessage — backward compatibility (no intentRouter configured)", 
     const payload = result.replyEvent.payload as ReplySentPayload;
     expect(payload.router.used).toBe(false);
     expect(payload.router.provider).toBeNull();
-    expect(payload.gateActions).toEqual({ circleBackFired: null, attestationConfirmedEventId: null, selfBirthdateAskFired: false, selfFactAskFired: null, connectDotFired: false, elicitationFired: null });
+    expect(payload.gateActions).toEqual({
+      circleBackFired: null,
+      attestationConfirmedEventId: null,
+      selfBirthdateAskFired: false,
+      selfFactAskFired: null,
+      connectDotFired: false,
+      elicitationFired: null,
+      coReferenceAskFired: null,
+      coReferenceAnswerEventId: null
+    });
   });
 });
 
@@ -121,7 +130,16 @@ describe("sendMessage — EN-083 uncertified-tier gate bypass (verification item
 
     expect(result.replyText).toBe("Noted.");
     const payload = result.replyEvent.payload as ReplySentPayload;
-    expect(payload.gateActions).toEqual({ circleBackFired: null, attestationConfirmedEventId: null, selfBirthdateAskFired: false, selfFactAskFired: null, connectDotFired: false, elicitationFired: null });
+    expect(payload.gateActions).toEqual({
+      circleBackFired: null,
+      attestationConfirmedEventId: null,
+      selfBirthdateAskFired: false,
+      selfFactAskFired: null,
+      connectDotFired: false,
+      elicitationFired: null,
+      coReferenceAskFired: null,
+      coReferenceAnswerEventId: null
+    });
     expect(payload.router.certified).toBe(false);
   });
 });

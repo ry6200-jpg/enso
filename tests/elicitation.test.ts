@@ -83,7 +83,17 @@ function establishAsSpouse(entityId: string) {
 function recordReply(inReplyToEventId: string, gateActions: Partial<ReplySentPayload["gateActions"]>) {
   const payload: Partial<ReplySentPayload> = {
     inReplyToEventId,
-    gateActions: { circleBackFired: null, attestationConfirmedEventId: null, selfBirthdateAskFired: false, selfFactAskFired: null, connectDotFired: false, elicitationFired: null, ...gateActions }
+    gateActions: {
+      circleBackFired: null,
+      attestationConfirmedEventId: null,
+      selfBirthdateAskFired: false,
+      selfFactAskFired: null,
+      connectDotFired: false,
+      elicitationFired: null,
+      coReferenceAskFired: null,
+      coReferenceAnswerEventId: null,
+      ...gateActions
+    }
   };
   return eventLog.append({ type: "reply_sent", actor: "enso", payload, userId: PRIMARY_USER_ID });
 }

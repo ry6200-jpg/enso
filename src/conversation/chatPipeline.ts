@@ -20,6 +20,13 @@ import type { CurrentLocationContext } from "../location/currentLocation.js";
 import { getSessionTurnsForPrompt } from "./conversationHistory.js";
 import { buildConnectDotDirective, buildCuriosityAskDirective, findCuriosityAskCandidates, isCuriosityTurnEligible, verifyCuriosityAskExecuted } from "./circleBack.js";
 import type { CuriosityAskCandidate } from "./router/routerTypes.js";
+import {
+  findPendingCoReferenceQuestions,
+  findRetractableCoReferencePairings,
+  resolveCoReferenceConfirmation,
+  resolveCoReferenceRetraction,
+  type CoReferenceConfirmedPairing
+} from "./coReference.js";
 import { buildSelfBirthdateDirective, isSelfBirthdateEligible, verifySelfBirthdateAskExecuted } from "./selfBirthdateGate.js";
 import { recentAttributeClaims, resolveAttestation, type FactConfirmedPayload } from "./attestation.js";
 import { decideVoiceMode, hasZenTriggerPhrase } from "./voiceMode.js";
@@ -162,6 +169,21 @@ export interface ReplySentPayload {
      * entityId vs. stableKey above.
      */
     elicitationFired: { layer: 1 | 3; probeType: string; anchorEntityId?: string; anchorStableKey?: string } | null;
+    /**
+     * EN-101/Bug fix 2 of 2: non-null only when the co-reference ASK gate
+     * fired AND EN-073-verified the reply actually asked (see
+     * coReference.ts's verifyCoReferenceAskExecuted) — same decided-vs-
+     * executed discipline as every other ask gate above.
+     * findEligibleCoReferenceCandidates' own attempt cap/cooldown derives
+     * from a scan of this field, never a new event type. Distinct from
+     * coReferenceAnswerEventId below: this is the ASK side, that is the
+     * ANSWER side — they never fire on the same turn (the router's own
+     * single-slot arbitration for asking vs. a separate axis for
+     * recognizing an answer to a PRIOR ask).
+     */
+    coReferenceAskFired: { placeholderStableKey: string; placeholderName: string; realStableKey: string; realName: string; anchorName: string } | null;
+    /** The fact_confirmed or fact_corrected event id this turn produced, if the co-reference axis recognized a validated confirm/retract answer. */
+    coReferenceAnswerEventId: string | null;
   };
   /**
    * Item 8 round-trip survival: non-null whenever this turn had an
@@ -405,6 +427,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   let curiosityTurnEligible = false;
   let selfBirthdateEligible = false;
   let ambientCandidates: ReturnType<typeof ambientLocationCandidates> = [];
+  let coReferencePendingCandidates: CoReferenceConfirmedPairing[] = [];
+  let coReferenceConfirmedPairings: CoReferenceConfirmedPairing[] = [];
 
   if (input.retrievalOverride) {
     // Test/override hook (Part 1): bypasses the router entirely, no gates.
@@ -423,6 +447,14 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     const knownEntities = deps.projectionsDb.listEntities(input.userId).map((e) => ({ entityId: e.id, name: e.name }));
     claims = recentAttributeClaims(deps.eventLog, deps.projectionsDb, input.userId);
     ambientCandidates = ambientLocationCandidates(deps.projectionsDb, input.userId);
+    // EN-101/Bug fix 2 of 2: the ANSWER-recognition axis's own candidate
+    // lists — distinct from curiosityCandidates' "coReference" kind above,
+    // which is the ASK side. Computed unconditionally here (not gated on
+    // curiosityTurnEligible), since answering a co-reference question is
+    // never a proactive-curiosity action gated by the same open-loop/
+    // winding-down precondition.
+    coReferencePendingCandidates = findPendingCoReferenceQuestions(deps.eventLog, input.userId);
+    coReferenceConfirmedPairings = findRetractableCoReferencePairings(deps.eventLog, input.userId);
 
     routerResult = await deps.intentRouter.route({
       message: effectiveText,
@@ -439,7 +471,9 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       recentAttributeClaims: claims,
       ambientLocationCandidates: ambientCandidates,
       ownLocationAvailable: input.ownCoordinates != null,
-      primaryResidenceKnown: getPrimaryUserAttribute(deps.projectionsDb, input.userId, "location") !== null
+      primaryResidenceKnown: getPrimaryUserAttribute(deps.projectionsDb, input.userId, "location") !== null,
+      coReferencePendingCandidates,
+      coReferenceConfirmedPairings
     });
 
     const r = routerResult.decision.retrieval;
@@ -491,7 +525,9 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
           ? (curiosityCandidates.find(
               (c) => c.kind === "elicitation" && c.probeType === curiosityDecision.probeType && (c.layer === 1 || (c.layer === 3 && c.anchorEntityId === curiosityDecision.entityId))
             ) ?? null)
-          : null;
+          : curiosityDecision?.fire && curiosityDecision.kind === "coReference"
+            ? (curiosityCandidates.find((c) => c.kind === "coReference" && c.candidate.placeholderStableKey === curiosityDecision.probeType) ?? null)
+            : null;
   const connectDotDecided = curiosityDecision?.fire === true && curiosityDecision.kind === "connectDot";
 
   const gateDirective = selfBirthdateEligible
@@ -555,6 +591,29 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     if (resolved) {
       const factPayload: FactConfirmedPayload = resolved;
       factConfirmedEvent = deps.eventLog.append({ type: "fact_confirmed", actor: "user", payload: factPayload, userId: input.userId });
+    }
+  }
+
+  // EN-101/Bug fix 2 of 2: the owner's own answer to a co-reference
+  // question, either direction, recognized by the coReference axis
+  // (separate from — and never competing for the same turn's single gate
+  // slot as — the ASK side above, which goes through curiosityTurn like
+  // any other candidate). Never a merge decided by this code: this only
+  // ever appends the event the router's ALREADY-VALIDATED decision names;
+  // the actual fold happens in rebuild.ts's pre-pass on the next rebuild.
+  let coReferenceAnswerEvent: EventRecord | undefined;
+  const coReferenceDecision = routerResult?.decision.coReference;
+  if (coReferenceDecision?.fire && coReferenceDecision.pendingStableKey) {
+    if (coReferenceDecision.direction === "confirm") {
+      const resolved = resolveCoReferenceConfirmation(coReferencePendingCandidates, coReferenceDecision.pendingStableKey);
+      if (resolved) {
+        coReferenceAnswerEvent = deps.eventLog.append({ type: "fact_confirmed", actor: "user", payload: resolved, userId: input.userId });
+      }
+    } else if (coReferenceDecision.direction === "retract") {
+      const resolved = resolveCoReferenceRetraction(coReferenceConfirmedPairings, coReferenceDecision.pendingStableKey);
+      if (resolved) {
+        coReferenceAnswerEvent = deps.eventLog.append({ type: "fact_corrected", actor: "user", payload: resolved, userId: input.userId });
+      }
     }
   }
 
@@ -622,7 +681,18 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
           ? curiosityAskFired.layer === 1
             ? { layer: 1, probeType: curiosityAskFired.probeType }
             : { layer: 3, probeType: curiosityAskFired.probeType, anchorEntityId: curiosityAskFired.anchorEntityId, anchorStableKey: curiosityAskFired.anchorStableKey }
-          : null
+          : null,
+      coReferenceAskFired:
+        curiosityAskFired?.kind === "coReference"
+          ? {
+              placeholderStableKey: curiosityAskFired.candidate.placeholderStableKey,
+              placeholderName: curiosityAskFired.candidate.placeholderName,
+              realStableKey: curiosityAskFired.candidate.realStableKey,
+              realName: curiosityAskFired.candidate.realName,
+              anchorName: curiosityAskFired.candidate.anchorName
+            }
+          : null,
+      coReferenceAnswerEventId: coReferenceAnswerEvent?.id ?? null
     },
     attachmentContext: attachmentInfo
       ? { sourceEventId: input.attachmentEventId!, filename: attachmentInfo.filename, kind: attachmentInfo.kind, contentInjected: attachmentBlock !== null }

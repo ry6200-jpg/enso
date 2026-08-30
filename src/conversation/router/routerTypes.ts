@@ -12,6 +12,8 @@
 import type { AmbientLocationCandidate } from "../ambientCandidates.js";
 export type { AmbientLocationCandidate };
 import type { AttributeType } from "../../projections/attributeVocabulary.js";
+import type { CoReferenceCandidate, CoReferenceConfirmedPairing } from "../coReference.js";
+export type { CoReferenceCandidate, CoReferenceConfirmedPairing };
 
 export interface CircleBackCandidate {
   /** The entity's CURRENT projection id — valid for this turn's router selection only. Never persisted for cross-turn matching (see stableKey): entity ids are reassigned on every rebuild (EN-054), a real bug found live in Phase 7 when attempt-tracking briefly keyed off this instead. */
@@ -73,7 +75,11 @@ export type ElicitationCandidate =
 // and circleBack.ts's SELF_FACT_ATTRIBUTES, which this must stay in sync
 // with by hand: proactive curiosity-asking is a product/wording decision,
 // not vocabulary fan-out.
-export type CuriosityAskCandidate = { kind: "thirdParty"; candidate: CircleBackCandidate } | { kind: "selfFact"; attribute: "location" | "occupation" } | ElicitationCandidate;
+export type CuriosityAskCandidate =
+  | { kind: "thirdParty"; candidate: CircleBackCandidate }
+  | { kind: "selfFact"; attribute: "location" | "occupation" }
+  | ElicitationCandidate
+  | { kind: "coReference"; candidate: CoReferenceCandidate };
 
 /** A specific attribute claim recently surfaced (in the retrieved-memory block or the prior reply) that this turn might be explicitly affirming or correcting (EN-066). Full vocabulary, not a curated subset: any attribute already on record can be affirmed or corrected reactively, regardless of whether Enso would ever proactively ASK about it (contrast CuriosityAskCandidate's "selfFact" branch below). */
 export interface RecentAttributeClaim {
@@ -112,6 +118,17 @@ export interface RouterRequest {
   ownLocationAvailable: boolean;
   /** Part 4 (ambient travel context): whether the owner has a stated home/residence on record at all (entity_attributes.location for the primary user) — the fallback destination when no specific place was named this turn. When false AND no place is named in the message, travelContext.relevant should come back false — there is nothing to route to. */
   primaryResidenceKnown: boolean;
+  /**
+   * EN-101/Bug fix 2 of 2: co-reference pairings the CURRENT message could
+   * be answering (confirming) — the router may only ever confirm a
+   * placeholderStableKey already in this list. Distinct from
+   * curiosityCandidates' own "coReference" kind: that pool is for whether
+   * to ASK the question this turn; this one is for recognizing an ANSWER
+   * to a question already asked in a prior turn.
+   */
+  coReferencePendingCandidates: CoReferenceConfirmedPairing[];
+  /** Confirmed-but-not-yet-retracted co-reference pairings the CURRENT message could be disputing — the router may only ever retract a placeholderStableKey already in this list. */
+  coReferenceConfirmedPairings: CoReferenceConfirmedPairing[];
 }
 
 export type RetrievalModeDecision = "hybrid" | "entity" | "recency";
@@ -138,12 +155,21 @@ export interface RouterDecision {
    */
   curiosityTurn: {
     fire: boolean;
-    kind: "selfFact" | "thirdParty" | "connectDot" | "elicitation" | null;
+    kind: "selfFact" | "thirdParty" | "connectDot" | "elicitation" | "coReference" | null;
     /** Set only when kind is "thirdParty" — must match a curiosityCandidates entry's entityId. Also set for a Layer 3 "elicitation" candidate (the anchor entity) — same field, same validation shape, never ambiguous since kind disambiguates which meaning applies. */
     entityId: string | null;
     /** Set only when kind is "selfFact" — must match a curiosityCandidates entry's attribute. Same deliberate curated subset as CuriosityAskCandidate above, not AttributeType. */
     attribute: "location" | "occupation" | null;
-    /** Set only when kind is "elicitation" — must match a curiosityCandidates entry's probeType (EN-097). */
+    /**
+     * Set only when kind is "elicitation" — must match a curiosityCandidates
+     * entry's probeType (EN-097). ALSO reused, when kind is "coReference"
+     * (EN-101/Bug fix 2 of 2), to carry that candidate's placeholderStableKey
+     * — deliberately not a new field: a co-reference candidate is never
+     * identified by entity id (ids are reassigned every rebuild, EN-054),
+     * and probeType is already a free-string field validated in code against
+     * the candidate list, never by a JSON-schema enum, so it fits without
+     * widening the schema.
+     */
     probeType: string | null;
   };
   attestation: {
@@ -151,6 +177,19 @@ export interface RouterDecision {
     entityName: string | null;
     attribute: AttributeType | null;
     value: string | null;
+  };
+  /**
+   * EN-101/Bug fix 2 of 2: recognizes the OWNER's own answer to a
+   * co-reference question — either direction, same call (DECIDED). Keyed
+   * by placeholderStableKey, never an entity id or entity name. "confirm"
+   * must match an entry in coReferencePendingCandidates; "retract" must
+   * match an entry in coReferenceConfirmedPairings — validated the same
+   * per-axis way attestation is, never trusted blindly.
+   */
+  coReference: {
+    fire: boolean;
+    direction: "confirm" | "retract" | null;
+    pendingStableKey: string | null;
   };
   /**
    * EN-048's "real layer": the router's own semantic judgment on whether
@@ -223,6 +262,7 @@ export const SAFE_DEFAULT_DECISION: RouterDecision = {
   retrieval: { mode: "hybrid", entityId: null, temporalWeight: 0, n: null },
   curiosityTurn: { fire: false, kind: null, entityId: null, attribute: null, probeType: null },
   attestation: { isAffirmation: false, entityName: null, attribute: null, value: null },
+  coReference: { fire: false, direction: null, pendingStableKey: null },
   register: { mode: "natural" },
   ambientContext: { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null },
   travelContext: { relevant: false, destinationHint: null }

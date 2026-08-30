@@ -14,7 +14,9 @@ const BASE_REQUEST: RouterRequest = {
   recentAttributeClaims: [{ entityName: "Elena", attribute: "location", value: "Seattle", extractionEventId: "ext1" }],
   ambientLocationCandidates: [{ entityId: "e1", name: "Elena", location: "Seattle" }],
   ownLocationAvailable: true,
-  primaryResidenceKnown: true
+  primaryResidenceKnown: true,
+  coReferencePendingCandidates: [],
+  coReferenceConfirmedPairings: []
 };
 
 function fakeResult(provider: "openai" | "gemini", decision: RouterDecision): RouterCallResult {
