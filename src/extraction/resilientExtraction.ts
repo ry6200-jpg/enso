@@ -19,7 +19,17 @@ import { DEFAULT_RETRY_CONFIG, retryWithBackoff, type RetryConfig } from "./retr
 // whether it was produced under a schema that could even represent these
 // three fields, and letting that ambiguity persist is exactly what the
 // version-bump discipline exists to prevent.
-export const MESSAGE_EXTRACTOR_VERSION = "message-v2";
+//
+// v3 (owner-reported bug, "the Abby bug"): taxonomySchema.ts's
+// buildExtractionSystemPrompt entities rule gained a DISAMBIGUATION RULE
+// against extracting a venue/business name ("The Abby", "Trader Joe's") as
+// a person — a genuine prompt-text change to extraction behavior, not a
+// schema-shape change. Bumped anyway: a message already cached under v2 was
+// produced by a prompt that had no such guard, so its cached entities array
+// may already contain a false-positive place-as-person entity. Leaving the
+// version unchanged would keep serving that stale, wrong extraction forever
+// instead of ever re-running under the fixed prompt.
+export const MESSAGE_EXTRACTOR_VERSION = "message-v3";
 export const ATTACHMENT_EXTRACTOR_VERSION = "attachment-v1";
 
 export interface MessageExtractionCompletedPayload {

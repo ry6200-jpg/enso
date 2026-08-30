@@ -333,6 +333,13 @@ function isEstablished(projections: ProjectionsDb, userId: string, entityId: str
   );
 }
 
+/** True when the entity has any Class A structural_atom (parent_of/spouse_of/sibling_of) to the primary user — see STRUCTURAL ATOM PRECEDENCE above findLayer3Candidate. Structural-atom-ness is checked independently of isEstablished's OR: an entity can be established via a social_bond alone (no structural atom) and remains a valid Layer 3 anchor. */
+function hasStructuralAtom(projections: ProjectionsDb, userId: string, entityId: string): boolean {
+  const primary = primaryEntityId(userId);
+  const connectsToPrimary = (a: string, b: string) => (a === entityId && b === primary) || (a === primary && b === entityId);
+  return projections.listStructuralAtoms(userId).some((atom) => connectsToPrimary(atom.from_entity_id, atom.to_entity_id));
+}
+
 interface DomainCoverage {
   work: boolean;
   family: boolean;
@@ -487,6 +494,24 @@ function findLayer1Candidate(eventLog: EventLog, userId: string): ElicitationCan
  * about (any probe type) within the last few selections is moved to the
  * back regardless of score — a correctly top-ranked thread still yields
  * the floor.
+ *
+ * STRUCTURAL ATOM PRECEDENCE (owner-reported bug, "the Alice bug"): an
+ * entity can carry BOTH a structural_atom (family: parent_of/spouse_of/
+ * sibling_of) and a social_bond (e.g. "friend") at once — a sister who is
+ * also described as a close friend. Before this fix, isEstablished() alone
+ * gated eligibility, so LAYER3_PROBE_TYPES' "howMet" fired for her exactly
+ * as it would for an ordinary friend, asking how the two of them met —
+ * nonsensical for someone whose relationship to the owner is structural,
+ * not one that began at a meeting. A structural_atom is a stronger, more
+ * specific fact than a social_bond ever is (it's the one CLAUDE.md and the
+ * spec both treat as authoritative kinship data, not an inferred or
+ * volunteered bond), so its presence disqualifies the entity from Layer 3
+ * (Social Bond / Key Scenes) elicitation entirely, regardless of any
+ * social_bond also on record for them — this is a precedence rule, not a
+ * merge of the two: family status wins outright rather than being weighed
+ * against friendship. This does not remove the entity from the graph or
+ * from ordinary conversation — it only takes them out of THIS candidate
+ * pool, same as wasTopicDismissed already does for a different reason.
  */
 export function findLayer3Candidate(eventLog: EventLog, projections: ProjectionsDb, userId: string): ElicitationCandidate | null {
   const userTurns = userMessageTurns(eventLog, userId);
@@ -502,6 +527,7 @@ export function findLayer3Candidate(eventLog: EventLog, projections: Projections
 
   const anchors = allEntities
     .filter((e) => isEstablished(projections, userId, e.id))
+    .filter((e) => !hasStructuralAtom(projections, userId, e.id))
     .filter((e) => !wasTopicDismissed(eventLog, userId, e.name, JSON.parse(e.source_event_ids) as string[]))
     .map((e) => {
       const sourceIds = (JSON.parse(e.source_event_ids) as string[]).slice().sort();
