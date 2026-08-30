@@ -395,6 +395,31 @@ export function buildAttachmentContextBlock(filename: string, content: string): 
   return `=== JUST SHARED (begin) ===\nThe owner just attached a file ("${filename}") to this message. Its content:\n${content}\n\nRespond to it conversationally, carrying the discussion forward using what's actually in it — the way a person would if a friend handed them something to read and started talking about it. This is NOT a request for a document summary or report; don't structure the reply as one, and don't recite the file back.\n=== JUST SHARED (end) ===`;
 }
 
+/**
+ * Task 2 Step B (prompt-caching prefix stability): segment order is
+ * deliberately GROUP A (static: persona, self-profile) then GROUP B
+ * (append-only: recent conversation) then GROUP C (volatile: date,
+ * location, ambient, entity dossier, retrieved memory, attachment) —
+ * never the reverse. GROUPS A+B form a byte-stable-or-append-only prefix
+ * across consecutive turns (see Step A's report: persona only varies on a
+ * voiceMode flip, self-profile only on an explicit self-fact change,
+ * recent-conversation only grows at its own end), which is what makes the
+ * prefix eligible for the provider's own automatic prefix caching
+ * (confirmed against current docs before this change: GPT-5.6 caches
+ * implicitly by default, no explicit breakpoint call needed or added
+ * here, minimum eligible prefix 1,024 tokens — GROUP A alone is roughly
+ * 8,900 estimated tokens, comfortably over that floor). GROUP C is placed
+ * last specifically BECAUSE every segment in it can change on any given
+ * turn (ambient signals, mentioned entities, the retrieval query, which is
+ * literally the current message's own text) — putting any of it earlier
+ * would break the stable prefix for the rest of the prompt, which is
+ * exactly the defect this reorder fixes. Trailing directives (gate /
+ * suppressed-entities) are NOT parameters of this function — they are
+ * appended by the caller (contextAssembly.ts's assembleContext) AFTER
+ * this function returns, so they remain last with no change needed here.
+ * No prompt wording, block content, or the "\n\n" separator changed —
+ * this is a reordering only.
+ */
 export function buildSystemPrompt(
   retrievedBlock: string,
   recentWindowBlock: string,
@@ -406,14 +431,17 @@ export function buildSystemPrompt(
   dateContextBlock: string | null = null,
   ambientContextBlock: string | null = null
 ): string {
+  // GROUP A - static
   const parts = [buildPersonaBlock(voiceMode)];
-  if (dateContextBlock) parts.push(dateContextBlock);
   if (selfProfileBlock) parts.push(selfProfileBlock);
+  // GROUP B - append-only
+  parts.push(recentWindowBlock);
+  // GROUP C - volatile
+  if (dateContextBlock) parts.push(dateContextBlock);
   if (locationContextBlock) parts.push(locationContextBlock);
   if (ambientContextBlock) parts.push(ambientContextBlock);
   if (entityDossierBlock) parts.push(entityDossierBlock);
   parts.push(retrievedBlock);
   if (attachmentBlock) parts.push(attachmentBlock);
-  parts.push(recentWindowBlock);
   return parts.join("\n\n");
 }
