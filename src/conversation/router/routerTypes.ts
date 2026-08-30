@@ -18,6 +18,8 @@ import type { PendingMergeProposal } from "../../relationships/ownerInitiatedMer
 export type { PendingMergeProposal };
 import type { TypoMergeCandidate, TypoMergePendingPairing } from "../../relationships/typoMerge.js";
 export type { TypoMergeCandidate, TypoMergePendingPairing };
+import type { RetractableRelationType } from "../../relationships/relationshipRetraction.js";
+export type { RetractableRelationType };
 
 export interface CircleBackCandidate {
   /** The entity's CURRENT projection id — valid for this turn's router selection only. Never persisted for cross-turn matching (see stableKey): entity ids are reassigned on every rebuild (EN-054), a real bug found live in Phase 7 when attempt-tracking briefly keyed off this instead. */
@@ -267,6 +269,37 @@ export interface RouterDecision {
     survivingName: string | null;
   };
   /**
+   * Relationship retraction: "Annissa is not my sister" closes the
+   * sibling_of atom between Annissa and the owner. Shaped like
+   * mergeRequest, not coReference/typoMerge — open-world, free-text name
+   * spans, no candidate list to validate pendingStableKey against, since
+   * this recognizes what the OWNER says the same way mergeRequest does.
+   * Its own axis rather than a widened mergeRequest: the two names here
+   * refer to DIFFERENT people (never the same person), and relationType
+   * has no home in mergeRequest's schema. relationType comes from the
+   * closed enum directly (structural-atom types plus social-bond types)
+   * — the model names it from its own reading of the sentence, no
+   * synonym table; the schema's own enum constraint is the only
+   * validation needed.
+   *
+   * Single retraction per turn, consistent with every other axis here —
+   * deliberately NOT array-shaped. A message naming two retractions
+   * ("Alice is not a friend. Annissa is not my sister.") catches one;
+   * the owner repeats the other on a later turn. Resolution (does the
+   * name resolve, is it ambiguous, does the relationship even exist)
+   * happens entirely downstream, in code, against the live roster —
+   * resolveRelationshipRetraction, never trusted from the model.
+   *
+   * fire MUST be false, every other field null, whenever the current
+   * message isn't the owner retracting a specific relationship.
+   */
+  relationshipRetraction: {
+    fire: boolean;
+    firstName: string | null;
+    secondName: string | null;
+    relationType: RetractableRelationType | null;
+  };
+  /**
    * EN-048's "real layer": the router's own semantic judgment on whether
    * THIS turn calls for the conditional zen register, independent of the
    * cheap literal-trigger-phrase check (src/conversation/voiceMode.ts) —
@@ -340,6 +373,7 @@ export const SAFE_DEFAULT_DECISION: RouterDecision = {
   coReference: { fire: false, direction: null, pendingStableKey: null },
   mergeRequest: { fire: false, firstName: null, secondName: null, survivingName: null },
   typoMerge: { fire: false, direction: null, pendingStableKey: null, survivingName: null },
+  relationshipRetraction: { fire: false, firstName: null, secondName: null, relationType: null },
   register: { mode: "natural" },
   ambientContext: { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null },
   travelContext: { relevant: false, destinationHint: null }

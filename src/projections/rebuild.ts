@@ -4,6 +4,7 @@ import { UpcasterRegistry } from "../upcasters/registry.js";
 import { assertAttribute, ATTRIBUTE_MUTABILITY, resolveEntityAttribute } from "../perception/attributes.js";
 import { computeEclipsedEventIds } from "../attachments/uploadDeletion.js";
 import { computeCoReferenceMerges } from "../relationships/coReferenceMerge.js";
+import { findRetractionTarget, type RelationshipRetractionPayload } from "../relationships/relationshipRetraction.js";
 import {
   findFuzzyNameMatch,
   findUnambiguousPartialNameMatch,
@@ -82,6 +83,8 @@ export interface RebuildResult {
   correctionsApplied: number;
   /** Item 4 #2: fact_corrected events that replaced an entity_attributes VALUE, distinct from correctionsApplied (entity-NAME corrections). */
   attributeCorrectionsApplied: number;
+  /** fact_corrected{kind:"relationshipRetraction"} events that actually closed a structural atom or social bond — never a coReferenceRetraction (that's folded in the pre-pass above, EN-101), never a target already closed or never found (idempotent no-op, not counted here). */
+  relationshipRetractionsApplied: number;
   confirmationsApplied: number;
   structuralAtomsApplied: number;
   /** Bug fix 3 of 3: parent_of/spouse_of/sibling_of atoms rejected by assertParentOf/assertSpouseOf/assertSiblingOf's semantic validation (a cycle, a self-loop, or a cross-type conflict) — never written, logged loudly, never thrown. Visible here so a rejection is never silent to a caller, matching every other write-outcome counter on this struct. */
@@ -1001,6 +1004,7 @@ export function rebuildProjections(
   // this rebuild's projection, not merely outranked by "oldest valid
   // wins" the way an ordinary new assertion would be.
   let attributeCorrectionsApplied = 0;
+  let relationshipRetractionsApplied = 0;
   for (const event of events) {
     if (event.type !== "fact_corrected") continue;
     // Co-reference retraction (Bug fix 2 of 2): handled entirely by the
@@ -1013,6 +1017,36 @@ export function rebuildProjections(
     // call below would call .trim() on undefined and throw if it ever
     // reached a coReferenceRetraction payload unguarded.
     if ((event.payload as { kind?: string }).kind === "coReferenceRetraction") continue;
+    if ((event.payload as { kind?: string }).kind === "relationshipRetraction") {
+      // Closes a standing relationship fact, never a mention — bound to
+      // the atom/bond's OWN founding stable key (findRetractionTarget),
+      // not to an extraction event via mentionResolution the way the
+      // rename/attribute-correction shapes below are. This makes the fold
+      // independent of replay order and of the correction landing in the
+      // same rebuild pass as the original assertion — deterministic on
+      // every future rebuild regardless of how many times the log has
+      // been replayed since. Idempotent by construction: findRetractionTarget
+      // only ever matches an OPEN row, so a retraction already applied on
+      // an earlier rebuild (or a duplicate retraction event) finds nothing
+      // and is a silent no-op, never a second close.
+      const payload = event.payload as RelationshipRetractionPayload;
+      const primary = primaryEntityId(userId);
+      const entities = projections.listEntities(userId);
+      if (payload.store === "structuralAtom") {
+        const atom = findRetractionTarget(projections.listStructuralAtoms(userId), entities, primary, payload);
+        if (atom) {
+          projections.closeStructuralAtom(atom.id, event.recordedAt, event.id);
+          relationshipRetractionsApplied++;
+        }
+      } else {
+        const bond = findRetractionTarget(projections.listSocialBonds(userId), entities, primary, payload);
+        if (bond) {
+          projections.closeSocialBond(bond.id, event.recordedAt, event.id);
+          relationshipRetractionsApplied++;
+        }
+      }
+      continue;
+    }
     const payload = event.payload as FactCorrectedPayload;
     const entityId = resolveCorrectionTargetEntity(payload.targetEventId, payload.entityName);
     if (!entityId) continue; // nothing to correct — the target produced no entity under that name
@@ -1097,6 +1131,7 @@ export function rebuildProjections(
     messagesCurrentlyFailed,
     correctionsApplied,
     attributeCorrectionsApplied,
+    relationshipRetractionsApplied,
     confirmationsApplied,
     structuralAtomsApplied,
     structuralAtomsRejected,

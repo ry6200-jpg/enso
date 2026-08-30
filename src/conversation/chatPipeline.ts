@@ -51,6 +51,12 @@ import {
   type TypoMergeCandidate,
   type TypoMergePendingPairing
 } from "../relationships/typoMerge.js";
+import {
+  buildAmbiguousRetractionDirective,
+  buildNotFoundRetractionDirective,
+  buildUnresolvableRetractionDirective,
+  resolveRelationshipRetraction
+} from "../relationships/relationshipRetraction.js";
 import { recentAttributeClaims, resolveAttestation, type FactConfirmedPayload } from "./attestation.js";
 import { decideVoiceMode, hasZenTriggerPhrase } from "./voiceMode.js";
 import type { IntentRouter, RouterResult } from "./router/intentRouter.js";
@@ -240,6 +246,8 @@ export interface ReplySentPayload {
     typoMergeAskFired: { pairKey: string; firstStableKey: string; firstName: string; secondStableKey: string; secondName: string; proposedSurvivorName: string } | null;
     /** The fact_confirmed or fact_corrected event id this turn produced, if the typoMerge axis recognized a validated confirm/dismiss answer. */
     typoMergeAnswerEventId: string | null;
+    /** The fact_corrected event id this turn produced, if the relationshipRetraction axis resolved a real, open relationship to close. Single-shot — no separate "fired" field, since this axis has no propose/pending turn shape to protect. */
+    relationshipRetractionEventId: string | null;
   };
   /**
    * Item 8 round-trip survival: non-null whenever this turn had an
@@ -675,6 +683,36 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       : null;
   const typoMergeAskDirective = typoMergeAskCandidateMatched ? buildTypoMergeAskDirective(typoMergeAskCandidateMatched) : null;
 
+  // Relationship retraction: single-shot, resolved once, here — unlike
+  // mergeRequest/typoMerge, there is no propose-then-confirm turn shape at
+  // all (the relationship either exists to close or it doesn't), so a
+  // "retracted" outcome is appended after the reply below with no
+  // directive of its own, same as mergeRequest's "confirmed" outcome —
+  // recognizing what the owner already said, not something Enso's own
+  // reply needs to execute.
+  const relationshipRetractionDecision = routerResult?.decision.relationshipRetraction;
+  const relationshipRetractionOutcome =
+    relationshipRetractionDecision?.fire && relationshipRetractionDecision.firstName && relationshipRetractionDecision.secondName && relationshipRetractionDecision.relationType
+      ? resolveRelationshipRetraction(
+          relationshipRetractionDecision.firstName,
+          relationshipRetractionDecision.secondName,
+          relationshipRetractionDecision.relationType,
+          input.userId,
+          deps.projectionsDb.listEntities(input.userId),
+          deps.projectionsDb.listEntityAliases(input.userId),
+          deps.projectionsDb.listStructuralAtoms(input.userId),
+          deps.projectionsDb.listSocialBonds(input.userId)
+        )
+      : null;
+  const relationshipRetractionDirective =
+    relationshipRetractionOutcome?.outcome === "unresolvable"
+      ? buildUnresolvableRetractionDirective(relationshipRetractionOutcome.name)
+      : relationshipRetractionOutcome?.outcome === "ambiguous"
+        ? buildAmbiguousRetractionDirective(relationshipRetractionOutcome.name, relationshipRetractionOutcome.matchNames)
+        : relationshipRetractionOutcome?.outcome === "notFound"
+          ? buildNotFoundRetractionDirective(relationshipRetractionOutcome.firstName, relationshipRetractionOutcome.secondName, relationshipRetractionOutcome.relationType)
+          : null;
+
   // EN-047/048: cheap literal-trigger layer always wins outright; otherwise
   // the router's own register judgment (already fail-safed to "natural" on
   // any failure or uncertified tier — SAFE_DEFAULT_DECISION); with no
@@ -715,7 +753,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     suppressedEntitiesDirective,
     coReferenceAskDirective,
     mergeRequestDirective,
-    typoMergeAskDirective
+    typoMergeAskDirective,
+    relationshipRetractionDirective
   );
 
   const callResult = await deps.chatRouter.reply({ system: assembled.systemPrompt, history: [], latestMessage: effectiveText });
@@ -810,6 +849,15 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     }
   }
 
+  // Relationship retraction: a "retracted" outcome is appended
+  // unconditionally, same "recognizing what the owner already said"
+  // discipline as mergeRequest's "confirmed" outcome above — no reply-text
+  // verification needed, and no pending state to record either (single-shot).
+  let relationshipRetractionEvent: EventRecord | undefined;
+  if (relationshipRetractionOutcome?.outcome === "retracted") {
+    relationshipRetractionEvent = deps.eventLog.append({ type: "fact_corrected", actor: "user", payload: relationshipRetractionOutcome.payload, userId: input.userId });
+  }
+
   const payload: ReplySentPayload = {
     text: callResult.text,
     provider: callResult.provider,
@@ -888,7 +936,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       mergeProposalFired: mergeProposalFiredThisTurn,
       mergeAnswerEventId: mergeAnswerEvent?.id ?? null,
       typoMergeAskFired: typoMergeAskFiredThisTurn,
-      typoMergeAnswerEventId: typoMergeAnswerEvent?.id ?? null
+      typoMergeAnswerEventId: typoMergeAnswerEvent?.id ?? null,
+      relationshipRetractionEventId: relationshipRetractionEvent?.id ?? null
     },
     attachmentContext: attachmentInfo
       ? { sourceEventId: input.attachmentEventId!, filename: attachmentInfo.filename, kind: attachmentInfo.kind, contentInjected: attachmentBlock !== null }

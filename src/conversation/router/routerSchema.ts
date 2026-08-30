@@ -1,5 +1,6 @@
 import type { RouterRequest } from "./routerTypes.js";
 import { ATTRIBUTE_TYPES } from "../../projections/attributeVocabulary.js";
+import { RETRACTABLE_RELATION_TYPES } from "../../relationships/relationshipRetraction.js";
 
 /** Structured-output JSON Schema for the router call — same strict-mode shape as taxonomySchema.ts's TAXONOMY_JSON_SCHEMA (every property required, additionalProperties false at every level). */
 export const ROUTER_JSON_SCHEMA = {
@@ -76,6 +77,17 @@ export const ROUTER_JSON_SCHEMA = {
       required: ["fire", "direction", "pendingStableKey", "survivingName"],
       additionalProperties: false
     },
+    relationshipRetraction: {
+      type: "object",
+      properties: {
+        fire: { type: "boolean" },
+        firstName: { type: ["string", "null"] },
+        secondName: { type: ["string", "null"] },
+        relationType: { type: ["string", "null"], enum: [...RETRACTABLE_RELATION_TYPES, null] }
+      },
+      required: ["fire", "firstName", "secondName", "relationType"],
+      additionalProperties: false
+    },
     register: {
       type: "object",
       properties: {
@@ -105,7 +117,7 @@ export const ROUTER_JSON_SCHEMA = {
       additionalProperties: false
     }
   },
-  required: ["retrieval", "curiosityTurn", "attestation", "coReference", "mergeRequest", "typoMerge", "register", "ambientContext", "travelContext"],
+  required: ["retrieval", "curiosityTurn", "attestation", "coReference", "mergeRequest", "typoMerge", "relationshipRetraction", "register", "ambientContext", "travelContext"],
   additionalProperties: false
 } as const;
 
@@ -186,7 +198,7 @@ export function buildRouterSystemPrompt(request: RouterRequest): string {
           .join("\n")
       : "(no typo-merge question currently pending an answer)";
 
-  return `You are a routing judgment layer for a personal journaling assistant, deciding nine things about the CURRENT user message below. Return ONLY the JSON the schema requires — no prose.
+  return `You are a routing judgment layer for a personal journaling assistant, deciding ten things about the CURRENT user message below. Return ONLY the JSON the schema requires — no prose.
 
 CURRENT MESSAGE: ${JSON.stringify(request.message)}
 
@@ -260,9 +272,16 @@ ${typoMergeAskBlock}
 Typo-merge questions asked, awaiting an answer:
 ${typoMergePendingBlock}
 
-7. REGISTER — should the reply use the quieter, more restrained "zen" register instead of the ordinary conversational one? Default to "natural" — this is the overwhelming majority case. Choose "zen" only when the CURRENT message shows genuine overwhelm, the owner visibly looping on the same problem without new ground being covered across recent turns, or an explicit ask to zoom out or step back — judge this from the actual content and tone of the message and recent conversation, not from whether it contains a specific trigger word: someone genuinely overwhelmed frequently does NOT use that word at all. Do not choose "zen" for an ordinary emotional moment that a warm, plain reply already handles well, and do not choose it for a technical or practical exchange with no emotional weight at all.
+7. RELATIONSHIP RETRACTION — is the owner saying a SPECIFIC relationship already on record is wrong and should be removed (e.g. "Annissa is not my sister," "Alice is not a friend," "we're not colleagues anymore")? This is different from MERGE REQUEST above: that's about two names being the SAME person; this is about whether the EDGE between two DIFFERENT people is correct at all.
 
-8. AMBIENT CONTEXT — is a real weather/local-time/walking-distance lookup worth making for THIS turn? Default to relevant=false — this is the overwhelming majority case, and it costs real API calls, so only fire it when there's real value. GOVERNING RULE, the ONLY question that matters: is there a live decision or concern already on the table that this data would actually inform? Location being merely KNOWN is never enough on its own — that produces an assistant appending a helpful fact to every turn, which is exactly the failure this gate exists to prevent.
+- fire=true only when the owner is clearly retracting one specific relationship claim, naming (or clearly implying "me" for) both people and the kind of relationship. firstName/secondName are verbatim spans AS THE OWNER SAID THEM — resolving them against the real roster happens afterward, in code. When the owner means themselves, report "me".
+- relationType: name it directly from your own understanding of the sentence — "sister" is sibling_of, "friend" is friend, and so on across the full set the schema allows (parent_of, spouse_of, sibling_of, friend, colleague, mentor_of, neighbor, classmate, romantic). Pick the single closest match; never invent a value outside that list.
+- If the CURRENT message retracts MORE THAN ONE relationship (e.g. "Alice is not a friend. Annissa is not my sister."), report only the FIRST one — fire on the other only if the owner repeats it on a later turn. This axis reports exactly one decision per turn, the same as every other axis here.
+- fire MUST be false, every other field null, whenever the message isn't clearly retracting a specific relationship — an ordinary mention, a NEW relationship being stated, or genuine ambiguity about which relationship is meant is never enough; when in doubt, fire=false.
+
+8. REGISTER — should the reply use the quieter, more restrained "zen" register instead of the ordinary conversational one? Default to "natural" — this is the overwhelming majority case. Choose "zen" only when the CURRENT message shows genuine overwhelm, the owner visibly looping on the same problem without new ground being covered across recent turns, or an explicit ask to zoom out or step back — judge this from the actual content and tone of the message and recent conversation, not from whether it contains a specific trigger word: someone genuinely overwhelmed frequently does NOT use that word at all. Do not choose "zen" for an ordinary emotional moment that a warm, plain reply already handles well, and do not choose it for a technical or practical exchange with no emotional weight at all.
+
+9. AMBIENT CONTEXT — is a real weather/local-time/walking-distance lookup worth making for THIS turn? Default to relevant=false — this is the overwhelming majority case, and it costs real API calls, so only fire it when there's real value. GOVERNING RULE, the ONLY question that matters: is there a live decision or concern already on the table that this data would actually inform? Location being merely KNOWN is never enough on its own — that produces an assistant appending a helpful fact to every turn, which is exactly the failure this gate exists to prevent.
 
 Owner's own coordinates available this turn: ${request.ownLocationAvailable ? "yes" : "no"}. If "no", ownSituation MUST be false no matter what — there is nothing to fetch.
 
@@ -276,7 +295,7 @@ ${ambientCandidatesBlock}
 
 If none of the above genuinely applies, relevant MUST be false and every other field null/false — do not set relevant=true "just in case" one of the fields might end up useful.
 
-9. TRAVEL CONTEXT — is a real, live-traffic drive-time/distance lookup worth making for THIS turn? Default to relevant=false — this costs a real API call and, like ambient context above, is worth almost nothing on most turns. GOVERNING RULE, the same shape as ambient context's: the owner must be facing an actual timing or attendance decision right now — whether to leave, how much time to allow, whether a drive is worth it — never "a destination is knowable, so check it." This is never for idle travel trivia and never volunteered into a reply as an ETA — see the ambient-travel persona instruction for how the data (once fetched) is actually allowed to shape a reply.
+10. TRAVEL CONTEXT — is a real, live-traffic drive-time/distance lookup worth making for THIS turn? Default to relevant=false — this costs a real API call and, like ambient context above, is worth almost nothing on most turns. GOVERNING RULE, the same shape as ambient context's: the owner must be facing an actual timing or attendance decision right now — whether to leave, how much time to allow, whether a drive is worth it — never "a destination is knowable, so check it." This is never for idle travel trivia and never volunteered into a reply as an ETA — see the ambient-travel persona instruction for how the data (once fetched) is actually allowed to shape a reply.
 
 Owner's own home/residence on record: ${request.primaryResidenceKnown ? "yes" : "no"}.
 

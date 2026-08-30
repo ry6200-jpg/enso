@@ -266,6 +266,34 @@ describe("createIntentRouter — per-axis validation against candidate lists", (
     expect(result.failureReason).toContain("neither name is live");
   });
 
+  it("relationship retraction: keeps a well-formed decision — free-text name spans, no candidate list to validate against", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ relationshipRetraction: { fire: true, firstName: "Annissa", secondName: "me", relationType: "sibling_of" } })));
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.relationshipRetraction).toEqual({ fire: true, firstName: "Annissa", secondName: "me", relationType: "sibling_of" });
+  });
+
+  it("relationship retraction: suppresses fire=true when relationType is missing", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ relationshipRetraction: { fire: true, firstName: "Annissa", secondName: "me", relationType: null } })));
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.relationshipRetraction).toEqual({ fire: false, firstName: null, secondName: null, relationType: null });
+    expect(result.failureReason).toContain("firstName/secondName/relationType missing");
+  });
+
+  it("relationship retraction: suppresses a sub-field left set while fire=false", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ relationshipRetraction: { fire: false, firstName: "Annissa", secondName: null, relationType: null } })));
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.relationshipRetraction).toEqual({ fire: false, firstName: null, secondName: null, relationType: null });
+  });
+
   it("suppresses attestation when the (entityName, attribute, value) triple doesn't exactly match a recent claim", async () => {
     const primary = vi.fn<RouterAdapter>(async () =>
       fakeResult("openai", decisionWith({ attestation: { isAffirmation: true, entityName: "Elena", attribute: "location", value: "Portland" } }))

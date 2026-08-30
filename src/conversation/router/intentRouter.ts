@@ -194,6 +194,25 @@ function validateDecision(raw: RouterDecision, request: RouterRequest): { decisi
     decision.typoMerge = NO_ACTION_TYPO_MERGE;
   }
 
+  // Relationship retraction: firstName/secondName are free text (same
+  // treatment as mergeRequest's own — resolved downstream, in code).
+  // relationType's enum membership is already enforced by the strict JSON
+  // schema (the model cannot output a value outside the fixed list in
+  // structured-output mode); the only checks needed here are the same
+  // "never a sub-field set where it doesn't apply" discipline every other
+  // axis gets, plus the minimum a retraction needs to mean anything: all
+  // three fields present when fire=true.
+  const NO_ACTION_RELATIONSHIP_RETRACTION = { fire: false, firstName: null, secondName: null, relationType: null } as const;
+  if (decision.relationshipRetraction.fire) {
+    if (!decision.relationshipRetraction.firstName || !decision.relationshipRetraction.secondName || !decision.relationshipRetraction.relationType) {
+      reasons.push("relationshipRetraction.fire=true but firstName/secondName/relationType missing — suppressed");
+      decision.relationshipRetraction = NO_ACTION_RELATIONSHIP_RETRACTION;
+    }
+  } else if (decision.relationshipRetraction.firstName !== null || decision.relationshipRetraction.secondName !== null || decision.relationshipRetraction.relationType !== null) {
+    reasons.push("relationshipRetraction had a sub-field set while fire=false — suppressed entirely");
+    decision.relationshipRetraction = NO_ACTION_RELATIONSHIP_RETRACTION;
+  }
+
   const NO_ACTION_AMBIENT_CONTEXT = { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null } as const;
 
   if (decision.ambientContext.relevant) {
@@ -293,6 +312,7 @@ export function createIntentRouter(
           decision.coReference.fire ||
           decision.mergeRequest.fire ||
           decision.typoMerge.fire ||
+          decision.relationshipRetraction.fire ||
           decision.register.mode === "zen" ||
           decision.ambientContext.relevant ||
           decision.travelContext.relevant)
@@ -305,6 +325,7 @@ export function createIntentRouter(
           coReference: { fire: false, direction: null, pendingStableKey: null },
           mergeRequest: { fire: false, firstName: null, secondName: null, survivingName: null },
           typoMerge: { fire: false, direction: null, pendingStableKey: null, survivingName: null },
+          relationshipRetraction: { fire: false, firstName: null, secondName: null, relationType: null },
           register: { mode: "natural" },
           ambientContext: { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null },
           travelContext: { relevant: false, destinationHint: null }

@@ -58,6 +58,7 @@ function recordReply(inReplyToEventId: string, gateActions: Partial<ReplySentPay
       mergeAnswerEventId: null,
       typoMergeAskFired: null,
       typoMergeAnswerEventId: null,
+      relationshipRetractionEventId: null,
       ...gateActions
     }
   };

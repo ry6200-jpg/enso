@@ -267,7 +267,8 @@ export function assembleContext(
   suppressedEntitiesDirective: string | null = null,
   coReferenceAskDirective: string | null = null,
   mergeRequestDirective: string | null = null,
-  typoMergeAskDirective: string | null = null
+  typoMergeAskDirective: string | null = null,
+  relationshipRetractionDirective: string | null = null
 ): AssembledContext {
   const { injectedTurns, truncated: recentTruncated } = truncateRecentTurnsToCharBudget(recentTurns, budgets.maxRecentWindowChars, budgets.lowWatermarkRecentWindowChars);
 
@@ -308,7 +309,12 @@ export function assembleContext(
   // typoMergeAskDirective is appended the same independent way — an
   // Enso-noticed suspected typo is never mutually exclusive with anything
   // else that fires this turn either.
-  const trailingDirectives = [gateDirective, coReferenceAskDirective, suppressedEntitiesDirective, mergeRequestDirective, typoMergeAskDirective].filter((d): d is string => d !== null);
+  // relationshipRetractionDirective is appended the same independent way —
+  // an owner-initiated retraction is never mutually exclusive with
+  // anything else that fires this turn either.
+  const trailingDirectives = [gateDirective, coReferenceAskDirective, suppressedEntitiesDirective, mergeRequestDirective, typoMergeAskDirective, relationshipRetractionDirective].filter(
+    (d): d is string => d !== null
+  );
   const systemPrompt = trailingDirectives.length > 0 ? `${baseSystemPrompt}\n\n${trailingDirectives.join("\n\n")}` : baseSystemPrompt;
 
   return {
