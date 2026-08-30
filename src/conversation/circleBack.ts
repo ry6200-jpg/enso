@@ -7,7 +7,6 @@ import type { CircleBackCandidate, CuriosityAskCandidate } from "./router/router
 import type { RecentTurnForPrompt } from "../persona/systemPrompt.js";
 import type { ReplySentPayload } from "./chatPipeline.js";
 import { buildElicitationDirective, findElicitationCandidate, justOpenedUpFromElicitation, verifyElicitationExecuted } from "./elicitation.js";
-import { buildCoReferenceAskDirective, findEligibleCoReferenceCandidates, verifyCoReferenceAskExecuted } from "./coReference.js";
 import { buildEntityDensityByMessageId, buildMessageTextById, computeInterestScore, rankByInterestWithRotation, recentlyFiredStableKeys } from "./entityInterest.js";
 
 /**
@@ -465,8 +464,6 @@ export function findCuriosityAskCandidates(eventLog: EventLog, projections: Proj
   if (selfFact.length > 0) return selfFact;
   const thirdParty = findEligibleCircleBackCandidates(eventLog, projections, userId, currentMessage);
   if (thirdParty.length > 0) return thirdParty.map((candidate) => ({ kind: "thirdParty", candidate }) as CuriosityAskCandidate);
-  const coReference = findEligibleCoReferenceCandidates(eventLog, projections, userId, currentMessage);
-  if (coReference.length > 0) return coReference.map((candidate) => ({ kind: "coReference", candidate }) as CuriosityAskCandidate);
   const elicitation = findElicitationCandidate(eventLog, projections, userId);
   return elicitation ? [elicitation] : [];
 }
@@ -495,7 +492,6 @@ export function buildConnectDotDirective(): string {
 export function buildCuriosityAskDirective(candidate: CuriosityAskCandidate): string {
   if (candidate.kind === "thirdParty") return buildCircleBackDirective(candidate.candidate.name, candidate.candidate.attemptNumber, candidate.candidate.mentionAgeLabel);
   if (candidate.kind === "selfFact") return buildSelfFactDirective(candidate.attribute);
-  if (candidate.kind === "coReference") return buildCoReferenceAskDirective(candidate.candidate);
   return buildElicitationDirective(candidate);
 }
 
@@ -510,6 +506,5 @@ export function verifySelfFactAskExecuted(attribute: "location" | "occupation", 
 export function verifyCuriosityAskExecuted(candidate: CuriosityAskCandidate, replyText: string): boolean {
   if (candidate.kind === "thirdParty") return verifyCircleBackExecuted(replyText, candidate.candidate.name);
   if (candidate.kind === "selfFact") return verifySelfFactAskExecuted(candidate.attribute, replyText);
-  if (candidate.kind === "coReference") return verifyCoReferenceAskExecuted(candidate.candidate, replyText);
   return verifyElicitationExecuted(candidate, replyText);
 }

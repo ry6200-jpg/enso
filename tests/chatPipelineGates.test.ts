@@ -9,7 +9,7 @@ import type { IntentRouter, RouterResult } from "../src/conversation/router/inte
 import { SAFE_DEFAULT_DECISION, type RouterDecision } from "../src/conversation/router/routerTypes.js";
 import { EMBEDDING_DIMENSIONS, type Embedder } from "../src/embeddings/embedder.js";
 import { newId } from "../src/ids.js";
-import { primaryEntityId } from "../src/projections/rebuild.js";
+import { primaryEntityId, rebuildProjections } from "../src/projections/rebuild.js";
 import { PRIMARY_USER_ID } from "../src/test/seed.js";
 
 /**
@@ -364,5 +364,144 @@ describe("sendMessage — EN-047/048 voice mode wiring", () => {
     expect(system).toMatch(/ZEN MODE —/);
     const payload = result.replyEvent.payload as ReplySentPayload;
     expect(payload.voiceMode).toEqual({ mode: "zen", triggeredByPhrase: true });
+  });
+});
+
+/**
+ * Part 2 (settled design): coReference removed from the curiosity-turn
+ * pool entirely — an independent gate, never behind curiosityTurnEligible,
+ * never waiting on the shared cooldown, only its own winding-down check.
+ * Builds a real role-word-placeholder/real-name collision (Vanessa's
+ * "father" -> "An Song") via genuine extraction_completed events + a real
+ * rebuild, exactly the shape live-tested this session, then returns the
+ * placeholder's stable key for the router decision to reference.
+ */
+function setupLiveCollision(log: EventLog, projections: ProjectionsDb): { placeholderStableKey: string } {
+  const mFather = log.append({
+    type: "message_sent",
+    actor: "user",
+    payload: { text: "My niece Vanessa is doing well. Her father drove her to the airport last week.", attachmentOnly: false },
+    userId: PRIMARY_USER_ID
+  });
+  log.append({
+    type: "extraction_completed",
+    actor: "system",
+    payload: {
+      sourceEventId: mFather.id,
+      extractorVersion: "message-v5",
+      kind: "message",
+      entities: [{ name: "Vanessa", type: "person" }],
+      structuralAtoms: [{ type: "parent_of", fromName: "father", toName: "Vanessa", action: "assert", fromNameIsRoleWord: true, toNameIsRoleWord: false }],
+      socialBonds: [],
+      attributes: []
+    },
+    userId: PRIMARY_USER_ID
+  });
+  const mAnSong = log.append({
+    type: "message_sent",
+    actor: "user",
+    payload: { text: "Oh and her father is An Song, by the way.", attachmentOnly: false },
+    userId: PRIMARY_USER_ID
+  });
+  log.append({
+    type: "extraction_completed",
+    actor: "system",
+    payload: {
+      sourceEventId: mAnSong.id,
+      extractorVersion: "message-v5",
+      kind: "message",
+      entities: [{ name: "An Song", type: "person" }],
+      structuralAtoms: [{ type: "parent_of", fromName: "An Song", toName: "Vanessa", action: "assert", fromNameIsRoleWord: false, toNameIsRoleWord: false }],
+      socialBonds: [],
+      attributes: []
+    },
+    userId: PRIMARY_USER_ID
+  });
+  rebuildProjections(log.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+  const placeholder = projections.listEntities(PRIMARY_USER_ID).find((e) => e.name === "father")!;
+  const placeholderStableKey = (JSON.parse(placeholder.source_event_ids) as string[]).slice().sort()[0]!;
+  return { placeholderStableKey };
+}
+
+describe("sendMessage — coReference ask gate (Part 2): independent of the curiosity pool", () => {
+  it("fires even when curiosityTurnEligible is false — no longer gated behind it", async () => {
+    const { placeholderStableKey } = setupLiveCollision(eventLog, projectionsDb);
+    // A message ending in "?" makes isCuriosityTurnEligible false (its own
+    // first check) — the curiosity pool is fully closed this turn, yet the
+    // coReference ask candidate is computed independently of that flag.
+    deps.chatRouter = fakeChatRouter("Wait, is An Song the same father you mentioned?");
+    deps.intentRouter = fakeIntentRouter({ decision: decisionWith({ coReference: { fire: true, direction: "ask", pendingStableKey: placeholderStableKey } }) });
+
+    const result = await sendMessage(deps, { userId: PRIMARY_USER_ID, text: "is that everything for today?", recentTurns: [] });
+
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.gateActions.coReferenceAskFired).toMatchObject({ placeholderName: "father", realName: "An Song", anchorName: "Vanessa" });
+  });
+
+  it("an open loop (a prior selfFactAskFired) does NOT suppress it, unlike an ordinary curiosity ask", async () => {
+    const { placeholderStableKey } = setupLiveCollision(eventLog, projectionsDb);
+    givePrimaryUserSelfFactsKnown(projectionsDb); // isolates open-loop specifically — otherwise an unknown birthdate would ALSO force curiosityTurnEligible false via selfBirthdateEligible, muddying which mechanism is actually being tested
+    // A prior reply's gateActions.selfFactAskFired makes hasOpenLoop true,
+    // hence curiosityTurnEligible false for THIS turn (verified below via
+    // circleBackFired staying null) — the coReference ask still fires.
+    eventLog.append({
+      type: "reply_sent",
+      actor: "enso",
+      payload: { text: "prior reply", inReplyToEventId: eventLog.listForUser(PRIMARY_USER_ID)[0]!.id, gateActions: { selfFactAskFired: { attribute: "occupation" } } },
+      userId: PRIMARY_USER_ID
+    });
+    deps.chatRouter = fakeChatRouter("Wait, is An Song the same father you mentioned?");
+    deps.intentRouter = fakeIntentRouter({ decision: decisionWith({ coReference: { fire: true, direction: "ask", pendingStableKey: placeholderStableKey } }) });
+
+    const result = await sendMessage(deps, { userId: PRIMARY_USER_ID, text: "another update", recentTurns: [] });
+
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.gateActions.circleBackFired).toBeNull(); // curiosity pool genuinely closed this turn
+    expect(payload.gateActions.coReferenceAskFired).toMatchObject({ placeholderName: "father", realName: "An Song", anchorName: "Vanessa" });
+  });
+
+  it("winding-down DOES suppress it — the one precondition this gate still respects", async () => {
+    const { placeholderStableKey } = setupLiveCollision(eventLog, projectionsDb);
+    deps.chatRouter = fakeChatRouter("Wait, is An Song the same father you mentioned?");
+    deps.intentRouter = fakeIntentRouter({ decision: decisionWith({ coReference: { fire: true, direction: "ask", pendingStableKey: placeholderStableKey } }) });
+
+    const result = await sendMessage(deps, {
+      userId: PRIMARY_USER_ID,
+      text: "another update",
+      recentTurns: [{ role: "user", text: "honestly I'm so burnt out right now" }]
+    });
+
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.gateActions.coReferenceAskFired).toBeNull();
+  });
+
+  it("fires alongside a curiosity ask in the SAME reply — not mutually exclusive with curiosityTurn (EN-041)", async () => {
+    const { placeholderStableKey } = setupLiveCollision(eventLog, projectionsDb);
+    givePrimaryUserSelfFactsKnown(projectionsDb); // isolates third-party circle-back eligibility from self-fact priority
+    const marcusId = newId();
+    const marcusMsg = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "My coworker Marcus helped me move.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    projectionsDb.insertEntity({
+      id: marcusId,
+      user_id: PRIMARY_USER_ID,
+      name: "Marcus",
+      confirmed: 0,
+      source_event_ids: JSON.stringify([marcusMsg.id]),
+      extractor_version: "message-v1",
+      pending_disambiguation: null,
+      created_at: new Date().toISOString()
+    });
+    deps.chatRouter = fakeChatRouter("Who is Marcus, by the way? And wait, is An Song the same father you mentioned?");
+    deps.intentRouter = fakeIntentRouter({
+      decision: decisionWith({
+        curiosityTurn: { fire: true, kind: "thirdParty", entityId: marcusId, attribute: null, probeType: null },
+        coReference: { fire: true, direction: "ask", pendingStableKey: placeholderStableKey }
+      })
+    });
+
+    const result = await sendMessage(deps, { userId: PRIMARY_USER_ID, text: "another update", recentTurns: [] });
+
+    const payload = result.replyEvent.payload as ReplySentPayload;
+    expect(payload.gateActions.circleBackFired).toMatchObject({ entityId: marcusId, name: "Marcus" });
+    expect(payload.gateActions.coReferenceAskFired).toMatchObject({ placeholderName: "father", realName: "An Song", anchorName: "Vanessa" });
   });
 });

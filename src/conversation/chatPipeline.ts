@@ -18,13 +18,17 @@ import { getDismissedEstablishedEntityNames } from "./elicitation.js";
 import { buildEntityDossier, buildSelfProfile, getPrimaryUserAttribute, MAX_ENTITY_DOSSIERS_PER_TURN } from "../projections/peopleView.js";
 import type { CurrentLocationContext } from "../location/currentLocation.js";
 import { getSessionTurnsForPrompt } from "./conversationHistory.js";
-import { buildConnectDotDirective, buildCuriosityAskDirective, findCuriosityAskCandidates, isCuriosityTurnEligible, verifyCuriosityAskExecuted } from "./circleBack.js";
+import { buildConnectDotDirective, buildCuriosityAskDirective, findCuriosityAskCandidates, isCuriosityTurnEligible, isWindingDown, verifyCuriosityAskExecuted } from "./circleBack.js";
 import type { CuriosityAskCandidate } from "./router/routerTypes.js";
 import {
+  buildCoReferenceAskDirective,
+  findEligibleCoReferenceCandidates,
   findPendingCoReferenceQuestions,
   findRetractableCoReferencePairings,
   resolveCoReferenceConfirmation,
   resolveCoReferenceRetraction,
+  verifyCoReferenceAskExecuted,
+  type CoReferenceCandidate,
   type CoReferenceConfirmedPairing
 } from "./coReference.js";
 import { buildSelfBirthdateDirective, isSelfBirthdateEligible, verifySelfBirthdateAskExecuted } from "./selfBirthdateGate.js";
@@ -173,13 +177,16 @@ export interface ReplySentPayload {
      * EN-101/Bug fix 2 of 2: non-null only when the co-reference ASK gate
      * fired AND EN-073-verified the reply actually asked (see
      * coReference.ts's verifyCoReferenceAskExecuted) — same decided-vs-
-     * executed discipline as every other ask gate above.
+     * executed discipline as every other ask gate above. Independent of
+     * curiosityTurn's single-slot arbitration (removed from that pool —
+     * live-tested starvation, see coReference.ts's file header); MAY fire
+     * alongside a curiosityTurn ask in the same reply.
      * findEligibleCoReferenceCandidates' own attempt cap/cooldown derives
      * from a scan of this field, never a new event type. Distinct from
      * coReferenceAnswerEventId below: this is the ASK side, that is the
-     * ANSWER side — they never fire on the same turn (the router's own
-     * single-slot arbitration for asking vs. a separate axis for
-     * recognizing an answer to a PRIOR ask).
+     * ANSWER side — mutually exclusive by construction (the coReference
+     * axis's own `direction` field can only be one of "ask"/"confirm"/
+     * "retract" per turn), never a separate arbitration mechanism.
      */
     coReferenceAskFired: { placeholderStableKey: string; placeholderName: string; realStableKey: string; realName: string; anchorName: string } | null;
     /** The fact_confirmed or fact_corrected event id this turn produced, if the co-reference axis recognized a validated confirm/retract answer. */
@@ -429,6 +436,7 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   let ambientCandidates: ReturnType<typeof ambientLocationCandidates> = [];
   let coReferencePendingCandidates: CoReferenceConfirmedPairing[] = [];
   let coReferenceConfirmedPairings: CoReferenceConfirmedPairing[] = [];
+  let coReferenceAskCandidates: CoReferenceCandidate[] = [];
 
   if (input.retrievalOverride) {
     // Test/override hook (Part 1): bypasses the router entirely, no gates.
@@ -455,6 +463,14 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     // winding-down precondition.
     coReferencePendingCandidates = findPendingCoReferenceQuestions(deps.eventLog, input.userId);
     coReferenceConfirmedPairings = findRetractableCoReferencePairings(deps.eventLog, input.userId);
+    // Removed from the curiosity pool (live-tested starvation — see
+    // coReference.ts's file header). Independent gate now: computed
+    // unconditionally, never behind curiosityTurnEligible, never waiting
+    // on the shared cooldown — only its own winding-down check (a manners
+    // concern about the owner's state, orthogonal to slot arbitration;
+    // hasOpenLoop deliberately does NOT apply here, see the same header
+    // comment) suppresses it down to no candidates for this turn.
+    coReferenceAskCandidates = isWindingDown(recentTurns) ? [] : findEligibleCoReferenceCandidates(deps.eventLog, deps.projectionsDb, input.userId);
 
     routerResult = await deps.intentRouter.route({
       message: effectiveText,
@@ -473,7 +489,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       ownLocationAvailable: input.ownCoordinates != null,
       primaryResidenceKnown: getPrimaryUserAttribute(deps.projectionsDb, input.userId, "location") !== null,
       coReferencePendingCandidates,
-      coReferenceConfirmedPairings
+      coReferenceConfirmedPairings,
+      coReferenceAskCandidates
     });
 
     const r = routerResult.decision.retrieval;
@@ -525,9 +542,7 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
           ? (curiosityCandidates.find(
               (c) => c.kind === "elicitation" && c.probeType === curiosityDecision.probeType && (c.layer === 1 || (c.layer === 3 && c.anchorEntityId === curiosityDecision.entityId))
             ) ?? null)
-          : curiosityDecision?.fire && curiosityDecision.kind === "coReference"
-            ? (curiosityCandidates.find((c) => c.kind === "coReference" && c.candidate.placeholderStableKey === curiosityDecision.probeType) ?? null)
-            : null;
+          : null;
   const connectDotDecided = curiosityDecision?.fire === true && curiosityDecision.kind === "connectDot";
 
   const gateDirective = selfBirthdateEligible
@@ -537,6 +552,18 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       : connectDotDecided
         ? buildConnectDotDirective()
         : null;
+
+  // Independent of gateDirective above — never competing for that single
+  // slot, per this gate's own removal from the curiosity pool (see
+  // coReference.ts). May coexist with whichever gateDirective fired this
+  // turn (EN-041's "occasionally more, two genuinely distinct gaps"),
+  // exactly like suppressedEntitiesDirective below already coexists with it.
+  const coReferenceDecision = routerResult?.decision.coReference;
+  const coReferenceAskCandidateMatched: CoReferenceCandidate | null =
+    coReferenceDecision?.fire && coReferenceDecision.direction === "ask"
+      ? (coReferenceAskCandidates.find((c) => c.placeholderStableKey === coReferenceDecision.pendingStableKey) ?? null)
+      : null;
+  const coReferenceAskDirective = coReferenceAskCandidateMatched ? buildCoReferenceAskDirective(coReferenceAskCandidateMatched) : null;
 
   // EN-047/048: cheap literal-trigger layer always wins outright; otherwise
   // the router's own register judgment (already fail-safed to "natural" on
@@ -575,7 +602,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     locationContextBlock,
     dateContextBlock,
     ambientContextBlock,
-    suppressedEntitiesDirective
+    suppressedEntitiesDirective,
+    coReferenceAskDirective
   );
 
   const callResult = await deps.chatRouter.reply({ system: assembled.systemPrompt, history: [], latestMessage: effectiveText });
@@ -583,6 +611,11 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   // EN-073: only consume curiosity-ask state (recorded below) if the reply actually executed the directive. connectDot has no cap to protect, so it's recorded purely on the decision — see chatPipeline's gateActions.connectDotFired doc comment.
   const curiosityAskFired = curiosityAskCandidate && verifyCuriosityAskExecuted(curiosityAskCandidate, callResult.text) ? curiosityAskCandidate : null;
   const selfBirthdateAskFired = selfBirthdateEligible && verifySelfBirthdateAskExecuted(callResult.text);
+  // Same EN-073 decided-vs-executed discipline, independent of the
+  // curiosity-ask verification above — this gate no longer shares
+  // curiosityAskCandidate/curiosityAskFired with the curiosity pool.
+  const coReferenceAskFiredCandidate =
+    coReferenceAskCandidateMatched && verifyCoReferenceAskExecuted(coReferenceAskCandidateMatched, callResult.text) ? coReferenceAskCandidateMatched : null;
 
   let factConfirmedEvent: EventRecord | undefined;
   const attestation = routerResult?.decision.attestation;
@@ -595,14 +628,12 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   }
 
   // EN-101/Bug fix 2 of 2: the owner's own answer to a co-reference
-  // question, either direction, recognized by the coReference axis
-  // (separate from — and never competing for the same turn's single gate
-  // slot as — the ASK side above, which goes through curiosityTurn like
-  // any other candidate). Never a merge decided by this code: this only
-  // ever appends the event the router's ALREADY-VALIDATED decision names;
-  // the actual fold happens in rebuild.ts's pre-pass on the next rebuild.
+  // question, either direction, recognized by the SAME coReference axis
+  // as the ask side above (direction "confirm"/"retract" here vs. "ask"
+  // above) — never a merge decided by this code: this only ever appends
+  // the event the router's ALREADY-VALIDATED decision names; the actual
+  // fold happens in rebuild.ts's pre-pass on the next rebuild.
   let coReferenceAnswerEvent: EventRecord | undefined;
-  const coReferenceDecision = routerResult?.decision.coReference;
   if (coReferenceDecision?.fire && coReferenceDecision.pendingStableKey) {
     if (coReferenceDecision.direction === "confirm") {
       const resolved = resolveCoReferenceConfirmation(coReferencePendingCandidates, coReferenceDecision.pendingStableKey);
@@ -682,16 +713,15 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
             ? { layer: 1, probeType: curiosityAskFired.probeType }
             : { layer: 3, probeType: curiosityAskFired.probeType, anchorEntityId: curiosityAskFired.anchorEntityId, anchorStableKey: curiosityAskFired.anchorStableKey }
           : null,
-      coReferenceAskFired:
-        curiosityAskFired?.kind === "coReference"
-          ? {
-              placeholderStableKey: curiosityAskFired.candidate.placeholderStableKey,
-              placeholderName: curiosityAskFired.candidate.placeholderName,
-              realStableKey: curiosityAskFired.candidate.realStableKey,
-              realName: curiosityAskFired.candidate.realName,
-              anchorName: curiosityAskFired.candidate.anchorName
-            }
-          : null,
+      coReferenceAskFired: coReferenceAskFiredCandidate
+        ? {
+            placeholderStableKey: coReferenceAskFiredCandidate.placeholderStableKey,
+            placeholderName: coReferenceAskFiredCandidate.placeholderName,
+            realStableKey: coReferenceAskFiredCandidate.realStableKey,
+            realName: coReferenceAskFiredCandidate.realName,
+            anchorName: coReferenceAskFiredCandidate.anchorName
+          }
+        : null,
       coReferenceAnswerEventId: coReferenceAnswerEvent?.id ?? null
     },
     attachmentContext: attachmentInfo

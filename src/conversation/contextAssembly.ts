@@ -264,7 +264,8 @@ export function assembleContext(
   locationContextBlock: string | null = null,
   dateContextBlock: string | null = null,
   ambientContextBlock: string | null = null,
-  suppressedEntitiesDirective: string | null = null
+  suppressedEntitiesDirective: string | null = null,
+  coReferenceAskDirective: string | null = null
 ): AssembledContext {
   const { injectedTurns, truncated: recentTruncated } = truncateRecentTurnsToCharBudget(recentTurns, budgets.maxRecentWindowChars, budgets.lowWatermarkRecentWindowChars);
 
@@ -292,8 +293,13 @@ export function assembleContext(
   // EN-126 item 4: suppressedEntitiesDirective is appended the same way,
   // independently of gateDirective — a restraint, not an action, so it
   // must apply regardless of which (if any) gate fires the same turn,
-  // never mutually exclusive with one.
-  const trailingDirectives = [gateDirective, suppressedEntitiesDirective].filter((d): d is string => d !== null);
+  // never mutually exclusive with one. coReferenceAskDirective is appended
+  // the same independent way, for the same reason (removed from the
+  // curiosity pool that gateDirective's curiosity branch draws from — see
+  // coReference.ts's file header) — never mutually exclusive with
+  // gateDirective, since a correction and a curiosity ask are genuinely
+  // distinct gaps (EN-041).
+  const trailingDirectives = [gateDirective, coReferenceAskDirective, suppressedEntitiesDirective].filter((d): d is string => d !== null);
   const systemPrompt = trailingDirectives.length > 0 ? `${baseSystemPrompt}\n\n${trailingDirectives.join("\n\n")}` : baseSystemPrompt;
 
   return {

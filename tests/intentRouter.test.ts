@@ -16,7 +16,8 @@ const BASE_REQUEST: RouterRequest = {
   ownLocationAvailable: true,
   primaryResidenceKnown: true,
   coReferencePendingCandidates: [],
-  coReferenceConfirmedPairings: []
+  coReferenceConfirmedPairings: [],
+  coReferenceAskCandidates: []
 };
 
 function fakeResult(provider: "openai" | "gemini", decision: RouterDecision): RouterCallResult {
@@ -164,6 +165,43 @@ describe("createIntentRouter — per-axis validation against candidate lists", (
     const result = await router.route(BASE_REQUEST);
 
     expect(result.decision.curiosityTurn).toEqual({ fire: true, kind: "connectDot", entityId: null, attribute: null, probeType: null });
+  });
+
+  it("suppresses coReference.fire (direction=ask) when the model invents a pendingStableKey not in coReferenceAskCandidates", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ coReference: { fire: true, direction: "ask", pendingStableKey: "not-a-candidate" } })));
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(BASE_REQUEST); // BASE_REQUEST.coReferenceAskCandidates is []
+
+    expect(result.decision.coReference).toEqual({ fire: false, direction: null, pendingStableKey: null });
+    expect(result.failureReason).toContain("not an eligible ask candidate");
+  });
+
+  it("keeps coReference.fire (direction=ask) when the pendingStableKey IS in coReferenceAskCandidates", async () => {
+    const request: RouterRequest = {
+      ...BASE_REQUEST,
+      coReferenceAskCandidates: [
+        {
+          kind: "coReference",
+          placeholderEntityId: "p1",
+          placeholderName: "father",
+          placeholderStableKey: "stable-p1",
+          realEntityId: "r1",
+          realName: "An Song",
+          realStableKey: "stable-r1",
+          anchorEntityId: "a1",
+          anchorName: "Vanessa",
+          relationType: "parent_of",
+          attemptNumber: 1
+        }
+      ]
+    };
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ coReference: { fire: true, direction: "ask", pendingStableKey: "stable-p1" } })));
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(request);
+
+    expect(result.decision.coReference).toEqual({ fire: true, direction: "ask", pendingStableKey: "stable-p1" });
   });
 
   it("suppresses attestation when the (entityName, attribute, value) triple doesn't exactly match a recent claim", async () => {

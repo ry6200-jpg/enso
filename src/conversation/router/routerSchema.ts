@@ -20,7 +20,7 @@ export const ROUTER_JSON_SCHEMA = {
       type: "object",
       properties: {
         fire: { type: "boolean" },
-        kind: { type: ["string", "null"], enum: ["selfFact", "thirdParty", "connectDot", "elicitation", "coReference", null] },
+        kind: { type: ["string", "null"], enum: ["selfFact", "thirdParty", "connectDot", "elicitation", null] },
         entityId: { type: ["string", "null"] },
         // Deliberately NOT derived from ATTRIBUTE_TYPES — a curated subset,
         // same reason as circleBack.ts's SELF_FACT_ATTRIBUTES (see
@@ -49,7 +49,7 @@ export const ROUTER_JSON_SCHEMA = {
       type: "object",
       properties: {
         fire: { type: "boolean" },
-        direction: { type: ["string", "null"], enum: ["confirm", "retract", null] },
+        direction: { type: ["string", "null"], enum: ["confirm", "retract", "ask", null] },
         pendingStableKey: { type: ["string", "null"] }
       },
       required: ["fire", "direction", "pendingStableKey"],
@@ -113,14 +113,18 @@ export function buildRouterSystemPrompt(request: RouterRequest): string {
               ? `- [selfFact] attribute="${c.attribute}" — you don't have the owner's ${c.attribute} on record yet`
               : c.kind === "thirdParty"
                 ? `- [thirdParty] ${c.candidate.name} (id: ${c.candidate.entityId}) — attempt ${c.candidate.attemptNumber}${c.candidate.attemptNumber === 2 ? `, first asked ${c.candidate.mentionAgeLabel} and unanswered; this would be the final attempt` : ""}`
-                : c.kind === "coReference"
-                  ? `- [coReference] probeType="${c.candidate.placeholderStableKey}" — is "${c.candidate.realName}" the same person as the "${c.candidate.placeholderName}" already mentioned in connection with ${c.candidate.anchorName}? Worth confirming so the two don't stay tangled as separate people.`
-                  : c.layer === 1
-                    ? `- [elicitation layer=1] probeType="${c.probeType}" — a name-generator prompt; helping the owner talk about someone in their life, the answer is a name`
-                    : `- [elicitation layer=3] probeType="${c.probeType}" anchor="${c.anchorName}" (id: ${c.anchorEntityId}) — a scene-deepening prompt about someone already established`
+                : c.layer === 1
+                  ? `- [elicitation layer=1] probeType="${c.probeType}" — a name-generator prompt; helping the owner talk about someone in their life, the answer is a name`
+                  : `- [elicitation layer=3] probeType="${c.probeType}" anchor="${c.anchorName}" (id: ${c.anchorEntityId}) — a scene-deepening prompt about someone already established`
           )
           .join("\n")
       : "(no eligible ask-candidates this turn)";
+  const coReferenceAskBlock =
+    request.coReferenceAskCandidates.length > 0
+      ? request.coReferenceAskCandidates
+          .map((c) => `- stableKey="${c.placeholderStableKey}": is "${c.realName}" the same person as the "${c.placeholderName}" already mentioned in connection with ${c.anchorName}? Worth confirming so the two don't stay tangled as separate people.`)
+          .join("\n")
+      : "(no co-reference collision eligible to ask about this turn)";
   const coReferencePendingBlock =
     request.coReferencePendingCandidates.length > 0
       ? request.coReferencePendingCandidates
@@ -171,7 +175,6 @@ ${curiosityCandidatesBlock}
 - kind="selfFact": attribute MUST exactly match one tagged [selfFact] above.
 - kind="thirdParty": entityId MUST exactly match one tagged [thirdParty] above.
 - kind="elicitation": probeType MUST exactly match one tagged [elicitation] above (and entityId MUST match its anchor id, for a layer=3 candidate only). Elicitation probes actively help the owner talk about themselves and the people in their life — this is not filling silence, it's opening a door; a thin or quiet thread is itself a good reason to offer one of these when nothing else fits, never a hollow generic question invented on the spot.
-- kind="coReference": probeType MUST exactly match one tagged [coReference] above (its value there is a stableKey, not a probe name — copy it verbatim). This checks whether two people already mentioned might actually be the same one — never phrase it as a records lookup or a checklist; it's a genuine "wait, is that the same person?" moment.
 
 You may instead choose kind="connectDot" (entityId, attribute, and probeType all null) when curiosityTurnEligible is true and making a connecting observation — noticing a real pattern from what you already know about this person — would serve this moment better than asking something new. Only choose this when a genuine pattern actually exists; never invent one to fill the slot.
 
@@ -182,10 +185,14 @@ If curiosityTurnEligible is true but the ask-candidate list above is empty AND n
 Recently surfaced claims this turn could affirm:
 ${claimsBlock}
 
-4. CO-REFERENCE — is the CURRENT message the owner ANSWERING a co-reference question — either confirming that two names refer to the same person, or retracting a confirmation already on record? This is NEVER about deciding whether two names are the same person yourself (that judgment is never yours to make — see kind="coReference" above, which only ever ASKS); it is only about recognizing what the owner's OWN words, right now, are doing in response to something already asked or already on record.
-- direction="confirm": the message clearly affirms a pairing listed below as "asked, not yet answered" (e.g. "yes, same person," "that's him," "right, that's her husband"). pendingStableKey MUST exactly match one stableKey below.
-- direction="retract": the message clearly disputes a pairing listed below as "currently on record" (e.g. "no, that's not the same person," "different guy," "you've got that wrong"). pendingStableKey MUST exactly match one stableKey below.
-- fire MUST be false, direction and pendingStableKey MUST be null, whenever the message doesn't clearly do one of these two things — an ordinary continuer, an unrelated reply, or genuine ambiguity about which pairing is meant is never enough; when in doubt, fire=false.
+4. CO-REFERENCE — this is a data-integrity correction, not curiosity: it exists independently of CURIOSITY TURN above and may fire in the SAME reply as a curiosityTurn ask (they are not mutually exclusive) — a duplicated entity corrupts the dossier and every downstream answer about that person, so this is never gated the way curiosity is. Three things this axis can do, exactly one per turn:
+- direction="ask": a genuine role-word/real-name collision below is worth checking now — is "X" the same person as the placeholder "Y" already mentioned? This is NEVER deciding whether they're the same person yourself (that judgment is never yours to make — it only ever ASKS, the owner decides); pendingStableKey MUST exactly match one stableKey tagged below under "eligible to ask about."
+- direction="confirm": the CURRENT message clearly affirms a pairing listed below as "asked, not yet answered" (e.g. "yes, same person," "that's him," "right, that's her husband"). pendingStableKey MUST exactly match one stableKey below.
+- direction="retract": the CURRENT message clearly disputes a pairing listed below as "currently on record" (e.g. "no, that's not the same person," "different guy," "you've got that wrong"). pendingStableKey MUST exactly match one stableKey below.
+- fire MUST be false, direction and pendingStableKey MUST be null, whenever none of these three clearly applies — an ordinary continuer, an unrelated reply, or genuine ambiguity about which pairing is meant is never enough; when in doubt, fire=false. For confirm/retract specifically: this is only ever recognizing what the owner's OWN words, right now, are doing in response to something already asked or already on record, never your own judgment about whether two names match.
+
+Co-reference collisions eligible to ask about this turn:
+${coReferenceAskBlock}
 
 Co-reference questions asked, awaiting an answer:
 ${coReferencePendingBlock}

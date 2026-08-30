@@ -19,7 +19,7 @@ function appendExtraction(sourceEventId: string, payload: Record<string, unknown
   return eventLog.append({
     type: "extraction_completed",
     actor: "system",
-    payload: { sourceEventId, extractorVersion: "message-v5", entities: [], structuralAtoms: [], socialBonds: [], attributes: [], ...payload },
+    payload: { sourceEventId, extractorVersion: "message-v5", kind: "message", entities: [], structuralAtoms: [], socialBonds: [], attributes: [], ...payload },
     userId: PRIMARY_USER_ID
   });
 }
@@ -92,17 +92,23 @@ function insertStructuralAtom(type: "parent_of" | "spouse_of", fromId: string, t
 }
 
 describe("findEligibleCoReferenceCandidates: trigger firing and not firing", () => {
-  it("fires when a role-word placeholder and a real name hold the SAME (type, anchor) slot, anchor live in the current message", () => {
-    const annissaMsg = msg("Annissa mentioned it.");
-    const annissaId = insertEntity("Annissa", [annissaMsg.id]);
-    const husbandMsg = msg("her husband is not well.");
-    const husbandId = insertEntity("husband", [husbandMsg.id], { name_kind: "role_word", owner_entity_id: annissaId });
-    insertStructuralAtom("spouse_of", husbandId, annissaId);
-    const ahSongMsg = msg("Ah Song called.");
-    const ahSongId = insertEntity("Ah Song", [ahSongMsg.id]);
-    insertStructuralAtom("spouse_of", ahSongId, annissaId);
+  it("fires when a role-word placeholder and a real name hold the SAME (type, anchor) slot, real-name atom's provenance is the most recently extracted message", () => {
+    const husbandMsg = msg("Annissa mentioned her husband is not well.");
+    appendExtraction(husbandMsg.id, {
+      entities: [{ name: "Annissa", type: "person" }],
+      structuralAtoms: [{ type: "spouse_of", fromName: "husband", toName: "Annissa", action: "assert", fromNameIsRoleWord: true, toNameIsRoleWord: false }]
+    });
+    const ahSongMsg = msg("Ah Song called, actually he's doing much better now.");
+    appendExtraction(ahSongMsg.id, {
+      entities: [{ name: "Ah Song", type: "person" }],
+      structuralAtoms: [{ type: "spouse_of", fromName: "Ah Song", toName: "Annissa", action: "assert", fromNameIsRoleWord: false, toNameIsRoleWord: false }]
+    });
+    rebuild();
+    const husbandId = entityNamed("husband")[0]!.id;
+    const ahSongId = entityNamed("Ah Song")[0]!.id;
+    const annissaId = entityNamed("Annissa")[0]!.id;
 
-    const candidates = findEligibleCoReferenceCandidates(eventLog, projections, PRIMARY_USER_ID, "Annissa mentioned Ah Song is doing better.");
+    const candidates = findEligibleCoReferenceCandidates(eventLog, projections, PRIMARY_USER_ID);
 
     expect(candidates).toHaveLength(1);
     expect(candidates[0]).toMatchObject({
@@ -126,22 +132,90 @@ describe("findEligibleCoReferenceCandidates: trigger firing and not firing", () 
     const fatherId = insertEntity("Marcus", [fatherMsg.id]);
     insertStructuralAtom("parent_of", fatherId, childId);
 
-    const candidates = findEligibleCoReferenceCandidates(eventLog, projections, PRIMARY_USER_ID, "Jamie, Elena, and Marcus went to the park.");
+    const candidates = findEligibleCoReferenceCandidates(eventLog, projections, PRIMARY_USER_ID);
+
+    expect(candidates).toEqual([]);
+  });
+});
+
+function appendCoReferenceAskReply(inReplyToEventId: string, placeholderStableKey: string, placeholderName: string, realStableKey: string, realName: string, anchorName: string) {
+  return eventLog.append({
+    type: "reply_sent",
+    actor: "enso",
+    payload: { text: "reply", inReplyToEventId, gateActions: { coReferenceAskFired: { placeholderStableKey, placeholderName, realStableKey, realName, anchorName } } },
+    userId: PRIMARY_USER_ID
+  });
+}
+
+describe("findEligibleCoReferenceCandidates: provenance-based liveness (Part 2 redesign)", () => {
+  it("fires on a pronoun reference that never names the anchor by name — liveness is provenance-based, not a text match", () => {
+    const mFather = msg("My niece Vanessa is doing well. Her father drove her to the airport last week.");
+    appendExtraction(mFather.id, {
+      entities: [{ name: "Vanessa", type: "person" }],
+      structuralAtoms: [{ type: "parent_of", fromName: "father", toName: "Vanessa", action: "assert", fromNameIsRoleWord: true, toNameIsRoleWord: false }]
+    });
+    // Never names "Vanessa" — the exact shape the old literal-substring
+    // check missed (live-confirmed this session: produced zero candidates).
+    const mAnSong = msg("Oh and her father is An Song, by the way.");
+    appendExtraction(mAnSong.id, {
+      entities: [{ name: "An Song", type: "person" }],
+      structuralAtoms: [{ type: "parent_of", fromName: "An Song", toName: "Vanessa", action: "assert", fromNameIsRoleWord: false, toNameIsRoleWord: false }]
+    });
+    rebuild();
+
+    const candidates = findEligibleCoReferenceCandidates(eventLog, projections, PRIMARY_USER_ID);
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({ placeholderName: "father", realName: "An Song", anchorName: "Vanessa", relationType: "parent_of" });
+  });
+
+  it("does NOT fire once the collision was formed several messages earlier — liveness only holds for the single most recently extracted message", () => {
+    const mFather = msg("My niece Vanessa is doing well. Her father drove her to the airport last week.");
+    appendExtraction(mFather.id, {
+      entities: [{ name: "Vanessa", type: "person" }],
+      structuralAtoms: [{ type: "parent_of", fromName: "father", toName: "Vanessa", action: "assert", fromNameIsRoleWord: true, toNameIsRoleWord: false }]
+    });
+    const mAnSong = msg("Oh and her father is An Song, by the way.");
+    appendExtraction(mAnSong.id, {
+      entities: [{ name: "An Song", type: "person" }],
+      structuralAtoms: [{ type: "parent_of", fromName: "An Song", toName: "Vanessa", action: "assert", fromNameIsRoleWord: false, toNameIsRoleWord: false }]
+    });
+    // Several unrelated turns pass — each one moves "most recently
+    // extracted message" further away from the message that formed the
+    // real-name atom.
+    for (const text of ["Anyway, work has been busy.", "Just a quiet weekend, nothing new.", "Grabbed lunch with a friend."]) {
+      const m = msg(text);
+      appendExtraction(m.id, {});
+    }
+    rebuild();
+
+    const candidates = findEligibleCoReferenceCandidates(eventLog, projections, PRIMARY_USER_ID);
 
     expect(candidates).toEqual([]);
   });
 
-  it("does NOT fire when the anchor is not mentioned in the current message — the question only fires when the anchor is already live", () => {
-    const annissaMsg = msg("Annissa mentioned it.");
-    const annissaId = insertEntity("Annissa", [annissaMsg.id]);
-    const husbandMsg = msg("her husband is not well.");
-    const husbandId = insertEntity("husband", [husbandMsg.id], { name_kind: "role_word", owner_entity_id: annissaId });
-    insertStructuralAtom("spouse_of", husbandId, annissaId);
-    const ahSongMsg = msg("Ah Song called.");
-    const ahSongId = insertEntity("Ah Song", [ahSongMsg.id]);
-    insertStructuralAtom("spouse_of", ahSongId, annissaId);
+  it("the per-pairing attempt cap still holds at 2 — a third attempt on the SAME pairing is suppressed even when otherwise live", () => {
+    const mFather = msg("My niece Vanessa is doing well. Her father drove her to the airport last week.");
+    appendExtraction(mFather.id, {
+      entities: [{ name: "Vanessa", type: "person" }],
+      structuralAtoms: [{ type: "parent_of", fromName: "father", toName: "Vanessa", action: "assert", fromNameIsRoleWord: true, toNameIsRoleWord: false }]
+    });
+    const mAnSong = msg("Oh and her father is An Song, by the way.");
+    appendExtraction(mAnSong.id, {
+      entities: [{ name: "An Song", type: "person" }],
+      structuralAtoms: [{ type: "parent_of", fromName: "An Song", toName: "Vanessa", action: "assert", fromNameIsRoleWord: false, toNameIsRoleWord: false }]
+    });
+    rebuild();
+    const [placeholder] = entityNamed("father");
+    const [real] = entityNamed("An Song");
+    const placeholderStableKey = (JSON.parse(placeholder!.source_event_ids) as string[]).slice().sort()[0]!;
+    const realStableKey = (JSON.parse(real!.source_event_ids) as string[]).slice().sort()[0]!;
 
-    const candidates = findEligibleCoReferenceCandidates(eventLog, projections, PRIMARY_USER_ID, "just an unrelated update about my day");
+    // Two prior asks already recorded on this exact pairing — the cap.
+    appendCoReferenceAskReply(mFather.id, placeholderStableKey, "father", realStableKey, "An Song", "Vanessa");
+    appendCoReferenceAskReply(mAnSong.id, placeholderStableKey, "father", realStableKey, "An Song", "Vanessa");
+
+    const candidates = findEligibleCoReferenceCandidates(eventLog, projections, PRIMARY_USER_ID);
 
     expect(candidates).toEqual([]);
   });

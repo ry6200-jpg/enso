@@ -78,8 +78,7 @@ export type ElicitationCandidate =
 export type CuriosityAskCandidate =
   | { kind: "thirdParty"; candidate: CircleBackCandidate }
   | { kind: "selfFact"; attribute: "location" | "occupation" }
-  | ElicitationCandidate
-  | { kind: "coReference"; candidate: CoReferenceCandidate };
+  | ElicitationCandidate;
 
 /** A specific attribute claim recently surfaced (in the retrieved-memory block or the prior reply) that this turn might be explicitly affirming or correcting (EN-066). Full vocabulary, not a curated subset: any attribute already on record can be affirmed or corrected reactively, regardless of whether Enso would ever proactively ASK about it (contrast CuriosityAskCandidate's "selfFact" branch below). */
 export interface RecentAttributeClaim {
@@ -122,13 +121,25 @@ export interface RouterRequest {
    * EN-101/Bug fix 2 of 2: co-reference pairings the CURRENT message could
    * be answering (confirming) — the router may only ever confirm a
    * placeholderStableKey already in this list. Distinct from
-   * curiosityCandidates' own "coReference" kind: that pool is for whether
-   * to ASK the question this turn; this one is for recognizing an ANSWER
-   * to a question already asked in a prior turn.
+   * coReferenceAskCandidates below: that pool is for whether to ASK the
+   * question this turn; this one is for recognizing an ANSWER to a
+   * question already asked in a prior turn.
    */
   coReferencePendingCandidates: CoReferenceConfirmedPairing[];
   /** Confirmed-but-not-yet-retracted co-reference pairings the CURRENT message could be disputing — the router may only ever retract a placeholderStableKey already in this list. */
   coReferenceConfirmedPairings: CoReferenceConfirmedPairing[];
+  /**
+   * Removed from the curiosity-turn pool (was findCuriosityAskCandidates'
+   * "coReference" kind) — live-tested starvation: findCuriosityAskCandidates
+   * is a strict fallthrough, and thirdParty regenerates continuously in an
+   * active account, so the coReference branch beneath it was effectively
+   * unreachable. Computed unconditionally every turn now (never gated
+   * behind curiosityTurnEligible, never waiting on the shared cooldown) —
+   * the router may only ever ask about a placeholderStableKey already in
+   * this list, validated the same per-axis way every other candidate list
+   * here is.
+   */
+  coReferenceAskCandidates: CoReferenceCandidate[];
 }
 
 export type RetrievalModeDecision = "hybrid" | "entity" | "recency";
@@ -155,20 +166,16 @@ export interface RouterDecision {
    */
   curiosityTurn: {
     fire: boolean;
-    kind: "selfFact" | "thirdParty" | "connectDot" | "elicitation" | "coReference" | null;
+    kind: "selfFact" | "thirdParty" | "connectDot" | "elicitation" | null;
     /** Set only when kind is "thirdParty" — must match a curiosityCandidates entry's entityId. Also set for a Layer 3 "elicitation" candidate (the anchor entity) — same field, same validation shape, never ambiguous since kind disambiguates which meaning applies. */
     entityId: string | null;
     /** Set only when kind is "selfFact" — must match a curiosityCandidates entry's attribute. Same deliberate curated subset as CuriosityAskCandidate above, not AttributeType. */
     attribute: "location" | "occupation" | null;
     /**
      * Set only when kind is "elicitation" — must match a curiosityCandidates
-     * entry's probeType (EN-097). ALSO reused, when kind is "coReference"
-     * (EN-101/Bug fix 2 of 2), to carry that candidate's placeholderStableKey
-     * — deliberately not a new field: a co-reference candidate is never
-     * identified by entity id (ids are reassigned every rebuild, EN-054),
-     * and probeType is already a free-string field validated in code against
-     * the candidate list, never by a JSON-schema enum, so it fits without
-     * widening the schema.
+     * entry's probeType (EN-097). No longer reused for co-reference (see
+     * the coReference axis below, which now covers ask/confirm/retract
+     * together — removed from curiosity entirely, live-tested starvation).
      */
     probeType: string | null;
   };
@@ -179,16 +186,23 @@ export interface RouterDecision {
     value: string | null;
   };
   /**
-   * EN-101/Bug fix 2 of 2: recognizes the OWNER's own answer to a
-   * co-reference question — either direction, same call (DECIDED). Keyed
-   * by placeholderStableKey, never an entity id or entity name. "confirm"
-   * must match an entry in coReferencePendingCandidates; "retract" must
-   * match an entry in coReferenceConfirmedPairings — validated the same
-   * per-axis way attestation is, never trusted blindly.
+   * EN-101/Bug fix 2 of 2, widened: the co-reference axis now covers the
+   * ASK side too, not just recognizing the OWNER's own answer — moved off
+   * curiosityTurn.kind entirely (see that field's comment) since it is not
+   * curiosity and must not compete for curiosityTurn's single slot or wait
+   * on its shared cooldown. Keyed by placeholderStableKey throughout, never
+   * an entity id or entity name (ids are reassigned every rebuild, EN-054).
+   * "ask" must match an entry in coReferenceAskCandidates; "confirm" must
+   * match an entry in coReferencePendingCandidates; "retract" must match an
+   * entry in coReferenceConfirmedPairings — validated the same per-axis way
+   * attestation is, never trusted blindly. "ask" may fire in the same turn
+   * as a curiosityTurn ask (EN-041's "occasionally more, two genuinely
+   * distinct gaps" — a correction and a curiosity gap are about as distinct
+   * as two gaps get); nothing here forces mutual exclusion with curiosityTurn.
    */
   coReference: {
     fire: boolean;
-    direction: "confirm" | "retract" | null;
+    direction: "confirm" | "retract" | "ask" | null;
     pendingStableKey: string | null;
   };
   /**

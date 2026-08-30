@@ -117,7 +117,8 @@ describe("Validation bank — router flags (EN-075)", () => {
       ownLocationAvailable: false,
       primaryResidenceKnown: false,
       coReferencePendingCandidates: [],
-      coReferenceConfirmedPairings: []
+      coReferenceConfirmedPairings: [],
+      coReferenceAskCandidates: []
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
@@ -140,7 +141,8 @@ describe("Validation bank — router flags (EN-075)", () => {
       ownLocationAvailable: false,
       primaryResidenceKnown: false,
       coReferencePendingCandidates: [],
-      coReferenceConfirmedPairings: []
+      coReferenceConfirmedPairings: [],
+      coReferenceAskCandidates: []
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
@@ -163,7 +165,8 @@ describe("Validation bank — router flags (EN-075)", () => {
       ownLocationAvailable: false,
       primaryResidenceKnown: false,
       coReferencePendingCandidates: [],
-      coReferenceConfirmedPairings: []
+      coReferenceConfirmedPairings: [],
+      coReferenceAskCandidates: []
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
@@ -186,7 +189,8 @@ describe("Validation bank — router flags (EN-075)", () => {
       ownLocationAvailable: false,
       primaryResidenceKnown: false,
       coReferencePendingCandidates: [],
-      coReferenceConfirmedPairings: []
+      coReferenceConfirmedPairings: [],
+      coReferenceAskCandidates: []
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
@@ -209,7 +213,8 @@ describe("Validation bank — router flags (EN-075)", () => {
       ownLocationAvailable: false,
       primaryResidenceKnown: false,
       coReferencePendingCandidates: [],
-      coReferenceConfirmedPairings: []
+      coReferenceConfirmedPairings: [],
+      coReferenceAskCandidates: []
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);
@@ -232,7 +237,8 @@ describe("Validation bank — router flags (EN-075)", () => {
       ownLocationAvailable: false,
       primaryResidenceKnown: false,
       coReferencePendingCandidates: [],
-      coReferenceConfirmedPairings: []
+      coReferenceConfirmedPairings: [],
+      coReferenceAskCandidates: []
     };
     const outcomes = await runConcurrent(N, 10, async (i) => {
       const decision = await routerDecisionFor(request);

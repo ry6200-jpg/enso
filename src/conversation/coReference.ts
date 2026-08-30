@@ -21,6 +21,29 @@ import type { ReplySentPayload } from "./chatPipeline.js";
  * the same slot — never on ordinary multiplicity (two named parents on one
  * child must never fire; neither is a placeholder, so no pairing exists to
  * propose).
+ *
+ * NOT part of the curiosity-turn pool (removed from it — see live-testing
+ * finding below). Consolidating a duplicated entity is not curiosity:
+ * every curiosity-turn candidate is Enso choosing to learn something NEW,
+ * while a co-reference ask is Enso resolving a contradiction in what it
+ * ALREADY holds — two entities for one person, corrupting the dossier,
+ * traversal, and every downstream answer about that person until fixed.
+ * findCuriosityAskCandidates (circleBack.ts) is a strict fallthrough that
+ * stops at the first non-empty list; thirdParty regenerates continuously
+ * because introducing new people is the app's core use case, so the
+ * coReference branch beneath it was effectively unreachable — live-tested
+ * directly (three real API runs; even after pre-seeding every self-fact,
+ * something else — a Layer 1 elicitation opener needing no anchor at all —
+ * still won the single slot on turn 1 and cooldown-blocked the rest). Not
+ * a one-turn lag: starvation with no natural exhaustion point, and worse
+ * for busier accounts (more people mentioned = more thirdParty
+ * competition = less chance the collision ever reaches the slot), which
+ * are also the accounts most likely to actually hold a collision. Now an
+ * independent gate, computed every turn in chatPipeline.ts, same shape as
+ * ambientContext/travelContext — never behind curiosityTurnEligible, never
+ * waiting on the shared cooldown. Its own bounds (MAX_CO_REFERENCE_ATTEMPTS,
+ * COOLDOWN_TURNS below) are unchanged and still the only thing preventing
+ * a repeated quiz on the same pairing.
  */
 
 const GATED_TYPES = ["parent_of", "spouse_of"] as const;
@@ -53,25 +76,54 @@ function anchorDisplayName(userId: string, anchorId: string, entityById: Map<str
   return entityById.get(anchorId)?.name ?? "unknown";
 }
 
-/** Groups open (interval_end === null) gated-type atoms by (type, anchor) — parent_of's anchor is always the CHILD (to_entity_id); spouse_of's anchor is either side (symmetric), so both sides are considered. */
-function groupByAnchor(atoms: StructuralAtomRow[]): Map<string, { type: GatedType; anchorId: string; counterpartyId: string }[]> {
-  const groups = new Map<string, { type: GatedType; anchorId: string; counterpartyId: string }[]>();
-  function add(type: GatedType, anchorId: string, counterpartyId: string) {
+/** Groups open (interval_end === null) gated-type atoms by (type, anchor) — parent_of's anchor is always the CHILD (to_entity_id); spouse_of's anchor is either side (symmetric), so both sides are considered. Carries each atom's own source_event_ids (not the counterparty entity's, which accumulates across every mention ever) so provenance-based liveness (below) can check exactly when THIS atom — the one that actually formed a collision — was created. */
+function groupByAnchor(atoms: StructuralAtomRow[]): Map<string, { type: GatedType; anchorId: string; counterpartyId: string; sourceEventIds: string[] }[]> {
+  const groups = new Map<string, { type: GatedType; anchorId: string; counterpartyId: string; sourceEventIds: string[] }[]>();
+  function add(type: GatedType, anchorId: string, counterpartyId: string, sourceEventIds: string[]) {
     const key = `${type}|${anchorId}`;
     const list = groups.get(key) ?? [];
-    list.push({ type, anchorId, counterpartyId });
+    list.push({ type, anchorId, counterpartyId, sourceEventIds });
     groups.set(key, list);
   }
   for (const atom of atoms) {
     if (atom.interval_end !== null) continue;
+    const sourceEventIds = JSON.parse(atom.source_event_ids) as string[];
     if (atom.type === "parent_of") {
-      add("parent_of", atom.to_entity_id, atom.from_entity_id);
+      add("parent_of", atom.to_entity_id, atom.from_entity_id, sourceEventIds);
     } else if (atom.type === "spouse_of") {
-      add("spouse_of", atom.from_entity_id, atom.to_entity_id);
-      add("spouse_of", atom.to_entity_id, atom.from_entity_id);
+      add("spouse_of", atom.from_entity_id, atom.to_entity_id, sourceEventIds);
+      add("spouse_of", atom.to_entity_id, atom.from_entity_id, sourceEventIds);
     }
   }
   return groups;
+}
+
+/**
+ * Provenance-based liveness (replaces the old literal-substring check on
+ * the current message, which missed any pronoun/paraphrase reference to
+ * the anchor — "her father is An Song" never mentions "Vanessa" by name,
+ * live-confirmed to produce zero candidates under the old check even
+ * though the collision is being formed in that exact sentence). "Live"
+ * now means: the real-name atom that FORMED the collision carries a
+ * source_event_id from the single most recently extracted user message —
+ * i.e. the collision was just created, not a stale one from many turns
+ * back the owner has moved on from. Deliberately a single most-recent
+ * message, not an N-turn lookback, to preserve that same "never spring a
+ * name on the owner they haven't just brought up themselves" intent.
+ * Extraction runs after the reply (turnMemoryRefresh.ts), so this is also
+ * exactly the earliest point any caller could observe the collision at
+ * all — the router routing turn N only ever sees extraction results
+ * through turn N-1.
+ */
+function mostRecentlyExtractedMessageId(eventLog: EventLog, userId: string): string | undefined {
+  const latest = [...eventLog.listForUser(userId)]
+    .reverse()
+    .find((e): e is EventRecord & { payload: { kind: string; sourceEventId: string } } => {
+      if (e.type !== "extraction_completed") return false;
+      const payload = e.payload as { kind?: string; sourceEventId?: string };
+      return payload.kind === "message" && typeof payload.sourceEventId === "string";
+    });
+  return latest?.payload.sourceEventId;
 }
 
 function userMessageTurns(eventLog: EventLog, userId: string): EventRecord[] {
@@ -99,15 +151,14 @@ function firedAttemptHistory(eventLog: EventLog, userId: string, userTurns: Even
 
 /**
  * The candidate pool for ASKING (EN-071-style stage 1 heuristic): every
- * currently-open role-word-vs-real-name collision on a gated slot, whose
- * anchor is mentioned in the CURRENT message (the "already live" gate —
- * this never springs a name on the owner they haven't just brought up
- * themselves), not yet at the attempt cap, and past cooldown since its
- * last attempt. Competes for the single router-arbitrated gate slot
- * alongside circleBack/elicitation via the SAME pooled curiosityCandidates
- * list (chatPipeline.ts) — this function only proposes, never fires.
+ * currently-open role-word-vs-real-name collision on a gated slot whose
+ * real-name atom is still live (provenance-based, see
+ * mostRecentlyExtractedMessageId above), not yet at the attempt cap, and
+ * past cooldown since its last attempt. No longer part of the curiosity
+ * pool — see this file's header comment. Independent gate, computed every
+ * turn in chatPipeline.ts; this function only proposes, never fires.
  */
-export function findEligibleCoReferenceCandidates(eventLog: EventLog, projections: ProjectionsDb, userId: string, currentMessage: string): CoReferenceCandidate[] {
+export function findEligibleCoReferenceCandidates(eventLog: EventLog, projections: ProjectionsDb, userId: string): CoReferenceCandidate[] {
   const entities = projections.listEntities(userId);
   const entityById = new Map(entities.map((e) => [e.id, e]));
   const atoms = projections.listStructuralAtoms(userId).filter((a) => GATED_TYPES.includes(a.type as GatedType));
@@ -123,7 +174,7 @@ export function findEligibleCoReferenceCandidates(eventLog: EventLog, projection
     lastAttemptTurn.set(h.pairKey, Math.max(lastAttemptTurn.get(h.pairKey) ?? -1, h.turnIndex));
   }
 
-  const lowerMessage = currentMessage.toLowerCase();
+  const mostRecentMessageId = mostRecentlyExtractedMessageId(eventLog, userId);
   const candidates: CoReferenceCandidate[] = [];
 
   for (const [key, group] of groups) {
@@ -136,7 +187,7 @@ export function findEligibleCoReferenceCandidates(eventLog: EventLog, projection
     if (placeholders.length === 0 || reals.length === 0) continue; // ordinary multiplicity (e.g. two named parents) — no placeholder, nothing to suspect
 
     const anchorName = anchorDisplayName(userId, anchorId, entityById);
-    if (anchorId !== primaryEntityId(userId) && !lowerMessage.includes(anchorName.toLowerCase())) continue; // anchor must already be live in this turn's message
+    const sourceEventIdsByRealId = new Map(group.map((g) => [g.counterpartyId, g.sourceEventIds]));
 
     for (const placeholder of placeholders) {
       const placeholderStableKey = stableKeyOf(placeholder);
@@ -144,6 +195,12 @@ export function findEligibleCoReferenceCandidates(eventLog: EventLog, projection
       for (const real of reals) {
         const realStableKey = stableKeyOf(real);
         if (!realStableKey) continue;
+
+        // Liveness: the real-name atom (this specific counterparty's own
+        // group entry, not the entity's full mention history) must trace
+        // back to the single most recently extracted user message.
+        const realAtomSourceIds = sourceEventIdsByRealId.get(real.id) ?? [];
+        if (!mostRecentMessageId || !realAtomSourceIds.includes(mostRecentMessageId)) continue;
 
         const pairKey = `${placeholderStableKey}|${realStableKey}`;
         const attemptsSoFar = attemptCounts.get(pairKey) ?? 0;

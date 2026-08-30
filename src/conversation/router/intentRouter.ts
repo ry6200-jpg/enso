@@ -61,12 +61,6 @@ function validateDecision(raw: RouterDecision, request: RouterRequest): { decisi
         reasons.push(`curiosityTurn.attribute ${JSON.stringify(decision.curiosityTurn.attribute)} is not an eligible selfFact candidate — suppressed`);
         decision.curiosityTurn = NO_ACTION_CURIOSITY_TURN;
       }
-    } else if (decision.curiosityTurn.kind === "coReference") {
-      const known = request.curiosityCandidates.some((c) => c.kind === "coReference" && c.candidate.placeholderStableKey === decision.curiosityTurn.probeType);
-      if (!known) {
-        reasons.push(`curiosityTurn.probeType ${JSON.stringify(decision.curiosityTurn.probeType)} is not an eligible coReference candidate — suppressed`);
-        decision.curiosityTurn = NO_ACTION_CURIOSITY_TURN;
-      }
     } else if (decision.curiosityTurn.kind === "elicitation") {
       const known = request.curiosityCandidates.some(
         (c) =>
@@ -107,6 +101,12 @@ function validateDecision(raw: RouterDecision, request: RouterRequest): { decisi
       const known = request.coReferenceConfirmedPairings.some((c) => c.placeholderStableKey === decision.coReference.pendingStableKey);
       if (!known) {
         reasons.push(`coReference.pendingStableKey ${JSON.stringify(decision.coReference.pendingStableKey)} is not a confirmed co-reference pairing — suppressed`);
+        decision.coReference = NO_ACTION_CO_REFERENCE;
+      }
+    } else if (decision.coReference.direction === "ask") {
+      const known = request.coReferenceAskCandidates.some((c) => c.placeholderStableKey === decision.coReference.pendingStableKey);
+      if (!known) {
+        reasons.push(`coReference.pendingStableKey ${JSON.stringify(decision.coReference.pendingStableKey)} is not an eligible ask candidate — suppressed`);
         decision.coReference = NO_ACTION_CO_REFERENCE;
       }
     } else {
