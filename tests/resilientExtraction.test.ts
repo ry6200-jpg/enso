@@ -43,7 +43,7 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
           episodeMarkers: [],
           structuralAtoms: [{ type: "sibling_of", fromName: "me", toName: "Sarah", action: "assert", explicitlyNewPerson: false }],
           socialBonds: [{ type: "friend", fromName: "me", toName: "Sarah", qualifier: null, basis: "stated", action: "open", explicitlyNewPerson: false }],
-          attributes: [{ entityName: "Sarah", attribute: "location", value: "Boston", eventDate: null }]
+          attributes: [{ entityName: "Sarah", attribute: "location", value: "Boston", eventDate: null, action: "open" }]
         },
         usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 0 }
       })
@@ -63,7 +63,7 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
     // exactly why this assertion exists now.
     expect(payload.structuralAtoms).toEqual([{ type: "sibling_of", fromName: "me", toName: "Sarah", action: "assert", explicitlyNewPerson: false }]);
     expect(payload.socialBonds).toEqual([{ type: "friend", fromName: "me", toName: "Sarah", qualifier: null, basis: "stated", action: "open", explicitlyNewPerson: false }]);
-    expect(payload.attributes).toEqual([{ entityName: "Sarah", attribute: "location", value: "Boston", eventDate: null }]);
+    expect(payload.attributes).toEqual([{ entityName: "Sarah", attribute: "location", value: "Boston", eventDate: null, action: "open" }]);
   });
 
   it("passes the message's own told-time as referenceDate, not whenever extraction happens to run (EN-016)", async () => {

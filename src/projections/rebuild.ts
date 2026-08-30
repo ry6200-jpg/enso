@@ -1,7 +1,7 @@
 import { newId } from "../ids.js";
 import type { EventRecord } from "../events/schema.js";
 import { UpcasterRegistry } from "../upcasters/registry.js";
-import { assertAttribute } from "../perception/attributes.js";
+import { assertAttribute, ATTRIBUTE_MUTABILITY } from "../perception/attributes.js";
 import { computeEclipsedEventIds } from "../attachments/uploadDeletion.js";
 import {
   findFuzzyNameMatch,
@@ -30,7 +30,7 @@ interface ExtractionCompletedPayload {
     action: "open" | "close";
     explicitlyNewPerson?: boolean;
   }[];
-  attributes?: { entityName: string; attribute: AttributeType; value: string; eventDate: string | null }[];
+  attributes?: { entityName: string; attribute: AttributeType; value: string; eventDate: string | null; action?: "open" | "close" }[];
   episodeMarkers?: { kind: EpisodeMarkerKind; text: string }[];
 }
 interface ExtractionFailedPayload {
@@ -400,7 +400,43 @@ export function rebuildProjections(
     const extractorVersion = payload.extractorVersion ?? UNKNOWN_EXTRACTOR_VERSION;
     for (const attr of payload.attributes ?? []) {
       const entityId = resolveName(attr.entityName, event.id, extractorVersion, [payload.sourceEventId, event.id]);
-      const row = assertAttribute(projections, userId, entityId, attr.attribute, attr.value, [payload.sourceEventId, event.id]);
+      // Absent action = "open": every extraction cached before Phase 2
+      // (message-v3 and earlier) has no action field at all, and resolves
+      // exactly as it always did — an unconditional "open" default is what
+      // makes that backward-compatible, not merely convenient.
+      const action = attr.action ?? "open";
+
+      // Phase 2 temporal markers, CLOSE branch — mutable attributes only
+      // (birthdate has no closed state; ATTRIBUTE_MUTABILITY gates it out
+      // here exactly as it already does in resolveAttribute). Two real
+      // shapes, same "close" instruction: (1) the value being closed is
+      // ALREADY on record as open — "I finally moved out of Toledo last
+      // month" after Toledo was the current location — close that EXISTING
+      // row, mirroring closeBond/closeStructuralAtom's own established
+      // find-the-open-one-and-close-it pattern; (2) the more common
+      // historical-aside shape — "I grew up in Toledo, moved away in
+      // 1995" — where Toledo was never asserted as open at all, so there is
+      // nothing to find; it falls through and gets inserted below, ALREADY
+      // closed, so the real historical fact is still recorded (never
+      // silently discarded) but can never win attribute currency.
+      if (action === "close" && ATTRIBUTE_MUTABILITY[attr.attribute] === "mutable") {
+        const existingOpen = projections
+          .listEntityAttributeHistory(userId, entityId, attr.attribute)
+          .find((r) => !r.interval_end && r.value === attr.value);
+        if (existingOpen) {
+          projections.closeEntityAttribute(existingOpen.id, event.recordedAt, event.id);
+          attributesApplied++;
+          continue; // the existing row's own perception log already covers it — no new row, no new log
+        }
+      }
+
+      const row = assertAttribute(projections, userId, entityId, attr.attribute, attr.value, [payload.sourceEventId, event.id], undefined, {
+        intervalStart: attr.eventDate,
+        // Told-time (event.recordedAt), never a parsed historical date —
+        // same precedent closeBond/closeStructuralAtom already establish
+        // for interval_end (see EntityAttributeRow's own doc comment).
+        intervalEnd: action === "close" ? event.recordedAt : null
+      });
       if (!row) continue; // rejected at write time (assertAttribute already logged loudly) — nothing to record a perception-log entry against
       projections.insertPerceptionLog({
         id: newId(),

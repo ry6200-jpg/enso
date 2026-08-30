@@ -17,6 +17,11 @@ function inferredRow(id: string, attribute: EntityAttributeRow["attribute"], val
   return { ...row(id, attribute, value), provenance_kind: "inferred" };
 }
 
+/** Phase 2 temporal markers: a row explicitly closed as of intervalEnd (told-time, per closeEntityAttribute's own precedent). */
+function closedRow(id: string, attribute: EntityAttributeRow["attribute"], value: string, intervalEnd: string): EntityAttributeRow {
+  return { ...row(id, attribute, value), interval_end: intervalEnd };
+}
+
 describe("resolveAttribute — pure function (R36/R37: mutability, not format, is the real distinction)", () => {
   it("returns null for empty history", () => {
     expect(resolveAttribute([])).toBeNull();
@@ -111,11 +116,11 @@ describe("resolveAttribute — pure function (R36/R37: mutability, not format, i
 describe("resolveAttribute — eventDate-aware mutable resolution (owner-reported hardening: cap future-dated aspirations, and order multiple dated facts by their real date instead of text order)", () => {
   const NOW = "2026-08-29T00:00:00.000Z";
 
-  it("KNOWN, ACCEPTED GAP (not this fix's scope): an undated current value CAN still be overridden by a later mention with an explicit past eventDate — undecidable from eventDate alone, since this schema has no started/ended marker for attributes the way structuralAtoms/socialBonds have action open/close, so a lone past date can't say whether the state it describes is still ongoing or already superseded; unchanged, legacy last-wins behavior", () => {
+  it("PARTIALLY SUPERSEDED BY PHASE 2 (see the open/closed describe block below): when NEITHER row uses the new interval_end marker, an undated current value CAN still be overridden by a later mention with only an explicit past eventDate — undecidable from eventDate alone, with no started/ended marker in play. This gap is now genuinely closeable (interval_end), but only when a caller actually uses it; eventDate alone still resolves exactly as before.", () => {
     const history = [row("a", "location", "LA"), row("b", "location", "Toledo")]; // "b" (Toledo) is textually last, exactly the shape that used to win under plain last-inserted-wins
     const eventDates = new Map([["b", "1995-06-01"]]); // "a" (LA) stays undated — an ordinary present-tense "I live in LA"
     const resolved = resolveAttribute(history, eventDates, NOW)!;
-    expect(resolved.value).toBe("Toledo"); // NOT fixed by this change — documented, not silently promised
+    expect(resolved.value).toBe("Toledo"); // unaffected by eventDate alone — see closedRow-based tests below for the real fix
   });
 
   it("an undated ORIGINAL value correctly loses to a LATER mention with a genuinely recent, non-future eventDate — the ordinary update case, unaffected by the future-date cap", () => {
@@ -167,6 +172,47 @@ describe("resolveAttribute — eventDate-aware mutable resolution (owner-reporte
   });
 });
 
+describe("resolveAttribute — Phase 2 temporal markers (interval_end): an open row can never lose to a closed one, unconditionally", () => {
+  const NOW = "2026-08-29T00:00:00.000Z";
+
+  it("THE FIX: an undated, OPEN current value now correctly beats a later mention with an explicit past eventDate, once that mention is actually marked closed — no eventDate comparison needed at all", () => {
+    const history = [row("a", "location", "LA"), closedRow("b", "location", "Toledo", "2026-01-01T00:00:00.000Z")]; // "b" (Toledo) is textually last AND has a "later" eventDate below — both signals that used to win, neither wins now
+    const eventDates = new Map([["b", "1995-06-01"]]);
+    const resolved = resolveAttribute(history, eventDates, NOW)!;
+    expect(resolved.value).toBe("LA");
+    expect(resolved.row.id).toBe("a");
+  });
+
+  it("open beats closed regardless of insertion order — a closed row asserted FIRST still can't beat an open row asserted later", () => {
+    const history = [closedRow("a", "location", "Toledo", "2026-01-01T00:00:00.000Z"), row("b", "location", "LA")];
+    expect(resolveAttribute(history)!.value).toBe("LA");
+  });
+
+  it("open beats closed even when the closed row's own eventDate is MORE recent than the open row's", () => {
+    const history = [row("a", "location", "LA"), closedRow("b", "location", "Toledo", "2026-01-01T00:00:00.000Z")];
+    const eventDates = new Map([["b", "2025-01-01"]]); // Toledo's stated date is more recent than LA's (undated) — still loses, because it's closed
+    expect(resolveAttribute(history, eventDates, NOW)!.value).toBe("LA");
+  });
+
+  it("when EVERY row for the attribute is closed, resolution falls back to the closed rows themselves — a stale-but-real answer beats none at all", () => {
+    const history = [closedRow("a", "location", "Toledo", "2020-01-01T00:00:00.000Z"), closedRow("b", "location", "Chicago", "2023-01-01T00:00:00.000Z")];
+    const resolved = resolveAttribute(history)!;
+    expect(resolved.value).toBe("Chicago"); // the existing tie-break (last-wins, unaffected) still decides WHICH closed row, once there's no open candidate
+  });
+
+  it("among multiple OPEN rows, a closed row never even enters the comparison — the existing eventDate/insertion-order tie-break is unchanged for the open pool", () => {
+    const history = [row("a", "location", "Austin"), closedRow("b", "location", "Toledo", "2026-01-01T00:00:00.000Z"), row("c", "location", "Seattle")];
+    expect(resolveAttribute(history)!.value).toBe("Seattle"); // last OPEN row wins, exactly as it would with "b" removed entirely
+  });
+
+  it("immutable (birthdate) resolution ignores interval_end entirely — oldest-valid-wins regardless of any closed marker", () => {
+    const history = [row("a", "birthdate", "1970-04-24"), closedRow("b", "birthdate", "1983", "2026-01-01T00:00:00.000Z")];
+    const resolved = resolveAttribute(history)!;
+    expect(resolved.value).toBe("1970-04-24");
+    expect(resolved.conflicting.map((r) => r.value)).toEqual(["1983"]); // still surfaced as a conflict, not silently excluded for being "closed" — closing has no meaning for an immutable attribute
+  });
+});
+
 describe("resolveEntityAttribute — eventDate-aware resolution end-to-end through rebuild (perception_logs.event_at)", () => {
   let eventLog: EventLog;
   let projections: ProjectionsDb;
@@ -187,11 +233,11 @@ describe("resolveEntityAttribute — eventDate-aware resolution end-to-end throu
 
   const NOW = "2026-08-29T00:00:00.000Z"; // fixed, not wall-clock — keeps the future-date test from breaking once real time passes 2030
 
-  it("KNOWN, ACCEPTED GAP through full rebuild: a childhood location mentioned AFTER the current one, with an explicit past eventDate, still overwrites the current location — undated-vs-dated is undecidable from eventDate alone (see the pure-function test of the same name); unchanged, legacy behavior", () => {
+  it("without action: 'close' (e.g. old cached extraction, message-v3 and earlier), a childhood location mentioned AFTER the current one still overwrites it through full rebuild — see the Phase 2 describe block below for the real fix using action: 'close'", () => {
     const msg1 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "I live in LA.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
     appendExtraction(msg1.id, { attributes: [{ entityName: "me", attribute: "location", value: "LA", eventDate: null }] });
     const msg2 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "I grew up in Toledo back in the 90s, moved away in 1995.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
-    appendExtraction(msg2.id, { attributes: [{ entityName: "me", attribute: "location", value: "Toledo", eventDate: "1995-01-01" }] });
+    appendExtraction(msg2.id, { attributes: [{ entityName: "me", attribute: "location", value: "Toledo", eventDate: "1995-01-01" }] }); // no action field — defaults to "open"
 
     rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
 
@@ -218,6 +264,87 @@ describe("resolveEntityAttribute — eventDate-aware resolution end-to-end throu
     rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
 
     expect(resolveEntityAttribute(projections, PRIMARY_USER_ID, primaryEntityId(PRIMARY_USER_ID), "location", NOW)!.value).toBe("Seattle");
+  });
+});
+
+describe("rebuild.ts — Phase 2 action: 'close', end-to-end (the real fix for the undated-vs-dated gap)", () => {
+  let eventLog: EventLog;
+  let projections: ProjectionsDb;
+
+  beforeEach(() => {
+    eventLog = new EventLog(freshTestDbPath(import.meta.url, "events"));
+    projections = new ProjectionsDb(freshTestDbPath(import.meta.url, "projections"));
+  });
+
+  function appendExtraction(sourceEventId: string, payload: Record<string, unknown>) {
+    return eventLog.append({
+      type: "extraction_completed",
+      actor: "system",
+      payload: { sourceEventId, extractorVersion: "message-v4", entities: [], structuralAtoms: [], socialBonds: [], attributes: [], ...payload },
+      userId: PRIMARY_USER_ID
+    });
+  }
+
+  const NOW = "2026-08-29T00:00:00.000Z";
+
+  it("THE FIX, end-to-end: a historical aside never previously on record, tagged action: 'close', is recorded but can never overwrite the current open location", () => {
+    const msg1 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "I live in LA.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    appendExtraction(msg1.id, { attributes: [{ entityName: "me", attribute: "location", value: "LA", eventDate: null, action: "open" }] });
+    const msg2 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "I grew up in Toledo, moved away in 1995.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    appendExtraction(msg2.id, { attributes: [{ entityName: "me", attribute: "location", value: "Toledo", eventDate: "1995-01-01", action: "close" }] });
+
+    rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+
+    expect(resolveEntityAttribute(projections, PRIMARY_USER_ID, primaryEntityId(PRIMARY_USER_ID), "location", NOW)!.value).toBe("LA");
+    // The historical fact is still genuinely RECORDED, never silently discarded — just excluded from currency.
+    const history = projections.listEntityAttributeHistory(PRIMARY_USER_ID, primaryEntityId(PRIMARY_USER_ID), "location");
+    const toledo = history.find((r) => r.value === "Toledo")!;
+    expect(toledo.interval_end).not.toBeNull();
+    expect(toledo.interval_start).toBe("1995-01-01");
+  });
+
+  it("closing a value that IS currently on record as open closes that EXISTING row (told-time, not a parsed date) rather than inserting a duplicate", () => {
+    const msg1 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "I live in Toledo.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    appendExtraction(msg1.id, { attributes: [{ entityName: "me", attribute: "location", value: "Toledo", eventDate: null, action: "open" }] });
+    const msg2 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "I finally moved out of Toledo last month.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    appendExtraction(msg2.id, { attributes: [{ entityName: "me", attribute: "location", value: "Toledo", eventDate: null, action: "close" }] });
+
+    rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+
+    const history = projections.listEntityAttributeHistory(PRIMARY_USER_ID, primaryEntityId(PRIMARY_USER_ID), "location");
+    expect(history).toHaveLength(1); // closed the EXISTING row — no duplicate second row for the same value
+    expect(history[0]!.value).toBe("Toledo");
+    expect(history[0]!.interval_end).not.toBeNull();
+    // resolution now has nothing open at all — falls back to the best closed row, never silently returning nothing.
+    expect(resolveEntityAttribute(projections, PRIMARY_USER_ID, primaryEntityId(PRIMARY_USER_ID), "location", NOW)!.value).toBe("Toledo");
+  });
+
+  it("a NEW open location after a closed one resolves correctly — closing the old value doesn't block a genuine subsequent update", () => {
+    const msg1 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "I live in Toledo.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    appendExtraction(msg1.id, { attributes: [{ entityName: "me", attribute: "location", value: "Toledo", eventDate: null, action: "open" }] });
+    const msg2 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "I moved out of Toledo.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    appendExtraction(msg2.id, { attributes: [{ entityName: "me", attribute: "location", value: "Toledo", eventDate: null, action: "close" }] });
+    const msg3 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "I live in Seattle now.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    appendExtraction(msg3.id, { attributes: [{ entityName: "me", attribute: "location", value: "Seattle", eventDate: null, action: "open" }] });
+
+    rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+
+    expect(resolveEntityAttribute(projections, PRIMARY_USER_ID, primaryEntityId(PRIMARY_USER_ID), "location", NOW)!.value).toBe("Seattle");
+  });
+
+  it("a rebuild wipes and correctly re-derives closed rows, never accumulating duplicate closures across repeated rebuilds", () => {
+    const msg1 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "I live in Toledo.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    appendExtraction(msg1.id, { attributes: [{ entityName: "me", attribute: "location", value: "Toledo", eventDate: null, action: "open" }] });
+    const msg2 = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "I moved out of Toledo.", attachmentOnly: false }, userId: PRIMARY_USER_ID });
+    appendExtraction(msg2.id, { attributes: [{ entityName: "me", attribute: "location", value: "Toledo", eventDate: null, action: "close" }] });
+
+    rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+    rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+    rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+
+    const history = projections.listEntityAttributeHistory(PRIMARY_USER_ID, primaryEntityId(PRIMARY_USER_ID), "location");
+    expect(history).toHaveLength(1);
+    expect(history[0]!.interval_end).not.toBeNull();
   });
 });
 

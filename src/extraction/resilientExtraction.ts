@@ -29,7 +29,17 @@ import { DEFAULT_RETRY_CONFIG, retryWithBackoff, type RetryConfig } from "./retr
 // may already contain a false-positive place-as-person entity. Leaving the
 // version unchanged would keep serving that stale, wrong extraction forever
 // instead of ever re-running under the fixed prompt.
-export const MESSAGE_EXTRACTOR_VERSION = "message-v3";
+//
+// v4 (Phase 2 temporal markers): AttributeMention gained a new REQUIRED
+// field, `action: "open" | "close"` (providers/types.ts, taxonomySchema.ts)
+// — a genuine extraction schema shape change. A message cached under v3 has
+// no `action` field on its attributes at all; rebuild.ts's local payload
+// type treats a missing action as "open" for backward compatibility, so
+// old cached output still resolves correctly, but bumping ensures any
+// FUTURE re-extraction of that same content is eligible to pick up a real
+// "close" the fixed prompt can now express, rather than being silently
+// served the old, action-less cached result forever.
+export const MESSAGE_EXTRACTOR_VERSION = "message-v4";
 export const ATTACHMENT_EXTRACTOR_VERSION = "attachment-v1";
 
 export interface MessageExtractionCompletedPayload {

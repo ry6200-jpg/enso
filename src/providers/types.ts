@@ -75,6 +75,17 @@ export interface AttributeMention {
   attribute: AttributeType;
   value: string;
   eventDate: string | null;
+  /**
+   * Phase 2 temporal markers: "open" (the person's current, still-active
+   * state) or "close" (explicitly framed as historical/ended — a past
+   * location moved away from, a former job). Required by the JSON schema
+   * for every attribute type including birthdate, which has no real closed
+   * state — the prompt tells the model to always use "open" for birthdate;
+   * resolution (ATTRIBUTE_MUTABILITY-gated, perception/attributes.ts) only
+   * ever consults this for mutable attributes, so an ignored "open" on an
+   * immutable one is harmless.
+   */
+  action: "open" | "close";
 }
 
 export interface ExtractionTaxonomy {

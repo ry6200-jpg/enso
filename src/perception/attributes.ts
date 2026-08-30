@@ -59,6 +59,12 @@ import { MONTH_NAMES, parseIsoDate } from "../zodiac/zodiac.js";
  * existing — see enso-rebuild-requirements.md's "Residence inference"
  * note) passes 'inferred' explicitly.
  */
+/** Phase 2 temporal markers, both optional/default-null (open) — see EntityAttributeRow's own doc comment for the started/ended semantics. */
+export interface AttributeInterval {
+  intervalStart?: string | null;
+  intervalEnd?: string | null;
+}
+
 export function assertAttribute(
   projections: ProjectionsDb,
   userId: string,
@@ -66,7 +72,8 @@ export function assertAttribute(
   attribute: EntityAttributeRow["attribute"],
   value: string,
   sourceEventIds: string[],
-  provenanceKind: ProvenanceKind = "stated"
+  provenanceKind: ProvenanceKind = "stated",
+  interval: AttributeInterval = {}
 ): EntityAttributeRow | null {
   if (!isPlausibleWriteTimeValue(attribute, value)) {
     // eslint-disable-next-line no-console
@@ -87,7 +94,9 @@ export function assertAttribute(
     // EN-116: always 0 — no caller of assertAttribute (the only real
     // application-level writer) can currently set this true. No UI, no
     // consent flow exists yet; that's a separate, later decision.
-    matching_eligible: 0
+    matching_eligible: 0,
+    interval_start: interval.intervalStart ?? null,
+    interval_end: interval.intervalEnd ?? null
   };
   projections.insertEntityAttribute(row);
   return row;
@@ -311,7 +320,25 @@ export function resolveAttribute(
   const valid = eligibleHistory.filter((row) => isValidAttributeValue(attribute, row.value));
   if (valid.length === 0) return null;
 
-  const resolvedRow = ATTRIBUTE_MUTABILITY[attribute] === "mutable" ? pickCurrentMutableRow(valid, eventDateByRowId, nowIso.slice(0, 10)) : valid[0]!;
+  // Phase 2 temporal markers: a genuinely CLOSED row (interval_end set —
+  // the text explicitly framed it as historical/ended, EN-013's
+  // stated-basis rule) can never win against an OPEN one, full stop,
+  // regardless of any date or insertion-order comparison — this is what
+  // permanently closes the undated-vs-dated gap the prior fix could only
+  // narrow: an undated, open "I live in LA" now always beats an explicitly
+  // closed "grew up in Toledo, moved away in 1995," no eventDate needed on
+  // either side. Only when EVERY row for this (entity, attribute) has been
+  // explicitly closed (no open candidate exists at all) does resolution
+  // fall back to the closed rows themselves — a stale-but-real answer
+  // still beats no answer, same "prefer a real fact over silence"
+  // philosophy this file already applies elsewhere (e.g. R36/R37's
+  // implausible-but-preserved birthdate). pickCurrentMutableRow's own
+  // eventDate/insertion-order tie-break, unchanged, still decides WHICH
+  // open (or, in that fallback case, closed) row wins.
+  const openRows = valid.filter((row) => !row.interval_end);
+  const mutableCandidates = openRows.length > 0 ? openRows : valid;
+
+  const resolvedRow = ATTRIBUTE_MUTABILITY[attribute] === "mutable" ? pickCurrentMutableRow(mutableCandidates, eventDateByRowId, nowIso.slice(0, 10)) : valid[0]!;
   const conflicting = ATTRIBUTE_MUTABILITY[attribute] === "immutable" ? eligibleHistory.filter((row) => row.id !== resolvedRow.id && row.value !== resolvedRow.value) : [];
 
   return { value: resolvedRow.value, row: resolvedRow, conflicting };

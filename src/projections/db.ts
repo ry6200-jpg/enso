@@ -93,6 +93,29 @@ export interface EntityAttributeRow {
    * currently set it true (no consent flow exists yet).
    */
   matching_eligible?: 0 | 1;
+  /**
+   * Phase 2 temporal markers (owner-requested schema migration): mirrors
+   * structural_atoms/social_bonds' own interval_start/interval_end naming
+   * exactly, for a MUTABLE attribute only (location, occupation,
+   * gender, sexual_orientation, life_stage — never birthdate, which has no
+   * closed state). interval_start is the real narrative date the value
+   * became true (from the extractor's own eventDate, when stated);
+   * interval_end, following the SAME precedent closeBond/closeStructuralAtom
+   * already use, is the TOLD-time (event.recordedAt) of the message that
+   * stated the value had ended — never a parsed historical date, and never
+   * set by silence or recency (EN-013's stated-basis rule, extended here).
+   * NULL/absent on both ends means "open" — the CURRENT, still-active
+   * state, and is what every pre-migration legacy row reads as once the
+   * columns exist (ADD COLUMN with no DEFAULT, per
+   * migrateEntityAttributesAddColumn below), never a breaking distinction.
+   * Optional on this interface for the same reason provenance_kind/
+   * matching_eligible are: existing call sites across the test suite
+   * constructed a row literal before these fields existed and keep
+   * compiling unchanged; assertAttribute defaults both to null when
+   * omitted.
+   */
+  interval_start?: string | null;
+  interval_end?: string | null;
 }
 
 /**
@@ -245,7 +268,9 @@ export class ProjectionsDb {
         source_event_ids TEXT NOT NULL,
         created_at TEXT NOT NULL,
         provenance_kind TEXT NOT NULL DEFAULT 'stated',
-        matching_eligible INTEGER NOT NULL DEFAULT 0
+        matching_eligible INTEGER NOT NULL DEFAULT 0,
+        interval_start TEXT,
+        interval_end TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_attributes_user_id ON entity_attributes(user_id);
       CREATE INDEX IF NOT EXISTS idx_attributes_entity_id ON entity_attributes(entity_id);
@@ -284,6 +309,13 @@ export class ProjectionsDb {
     this.migrateEntityAttributesCheckConstraint();
     this.migrateEntityAttributesAddColumn("provenance_kind", `TEXT NOT NULL DEFAULT 'stated'`);
     this.migrateEntityAttributesAddColumn("matching_eligible", `INTEGER NOT NULL DEFAULT 0`);
+    // Phase 2 temporal markers: no DEFAULT — a nullable column with no
+    // DEFAULT clause reads back as NULL on every pre-existing row, which is
+    // exactly "open" (see EntityAttributeRow's own doc comment) — legacy
+    // rows are correctly treated as open/current with zero backfill logic
+    // needed, never a rebuild-breaking distinction.
+    this.migrateEntityAttributesAddColumn("interval_start", `TEXT`);
+    this.migrateEntityAttributesAddColumn("interval_end", `TEXT`);
   }
 
   /**
@@ -482,10 +514,37 @@ export class ProjectionsDb {
   insertEntityAttribute(row: EntityAttributeRow): void {
     this.db
       .prepare(
-        `INSERT INTO entity_attributes (id, user_id, entity_id, attribute, value, source_event_ids, created_at, provenance_kind, matching_eligible)
-         VALUES (@id, @user_id, @entity_id, @attribute, @value, @source_event_ids, @created_at, @provenance_kind, @matching_eligible)`
+        `INSERT INTO entity_attributes (id, user_id, entity_id, attribute, value, source_event_ids, created_at, provenance_kind, matching_eligible, interval_start, interval_end)
+         VALUES (@id, @user_id, @entity_id, @attribute, @value, @source_event_ids, @created_at, @provenance_kind, @matching_eligible, @interval_start, @interval_end)`
       )
-      .run({ ...row, provenance_kind: row.provenance_kind ?? "stated", matching_eligible: row.matching_eligible ?? 0 });
+      .run({
+        ...row,
+        provenance_kind: row.provenance_kind ?? "stated",
+        matching_eligible: row.matching_eligible ?? 0,
+        interval_start: row.interval_start ?? null,
+        interval_end: row.interval_end ?? null
+      });
+  }
+
+  /**
+   * Phase 2 temporal markers: closes an OPEN entity_attributes row — same
+   * "every call is a stated closure by construction" discipline
+   * closeSocialBond/closeStructuralAtom already enforce (EN-013's
+   * stated-basis rule): there is no scheduled job, idle-timeout check, or
+   * silence-based path anywhere that calls this. A no-op if already closed,
+   * matching closeBond's own "closing twice is a no-op, not an error"
+   * precedent.
+   */
+  closeEntityAttribute(id: string, intervalEnd: string, closingSourceEventId: string): void {
+    const row = this.getEntityAttributeById(id);
+    if (!row) throw new Error(`No entity attribute with id ${id}`);
+    if (row.interval_end) return; // already closed — no-op
+    const sourceEventIds = [...new Set([...(JSON.parse(row.source_event_ids) as string[]), closingSourceEventId])].sort();
+    this.db.prepare(`UPDATE entity_attributes SET interval_end = ?, source_event_ids = ? WHERE id = ?`).run(intervalEnd, JSON.stringify(sourceEventIds), id);
+  }
+
+  getEntityAttributeById(id: string): EntityAttributeRow | undefined {
+    return this.db.prepare(`SELECT * FROM entity_attributes WHERE id = ?`).get(id) as EntityAttributeRow | undefined;
   }
 
   /**

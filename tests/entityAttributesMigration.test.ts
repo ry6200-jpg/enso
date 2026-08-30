@@ -113,3 +113,52 @@ describe("entity_attributes ADD COLUMN migrations (EN-115/116)", () => {
     expect(history[0]!.matching_eligible).toBe(0);
   });
 });
+
+describe("entity_attributes ADD COLUMN migration (Phase 2 temporal markers)", () => {
+  it("a table with no interval_start/interval_end columns gets both added; every pre-existing row reads back as OPEN, never breaking during a rebuild", () => {
+    const dbPath = freshTestDbPath(import.meta.url, "pre-phase2");
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    const raw = new Database(dbPath);
+    raw.exec(`
+      CREATE TABLE entity_attributes (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        attribute TEXT NOT NULL CHECK (attribute IN ('birthdate', 'location', 'occupation', 'gender', 'sexual_orientation', 'life_stage')),
+        value TEXT NOT NULL,
+        source_event_ids TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        provenance_kind TEXT NOT NULL DEFAULT 'stated',
+        matching_eligible INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    const entityId = primaryEntityId(PRIMARY_USER_ID);
+    raw.prepare(
+      `INSERT INTO entity_attributes (id, user_id, entity_id, attribute, value, source_event_ids, created_at)
+       VALUES ('pre-1', ?, ?, 'location', 'Toledo', '[]', '2026-01-01T00:00:00.000Z')`
+    ).run(PRIMARY_USER_ID, entityId);
+    raw.close();
+
+    const projections = new ProjectionsDb(dbPath);
+    const history = projections.listEntityAttributeHistory(PRIMARY_USER_ID, entityId, "location");
+    expect(history).toHaveLength(1);
+    expect(history[0]!.interval_start ?? null).toBeNull();
+    expect(history[0]!.interval_end ?? null).toBeNull(); // NULL = open — never a breaking distinction for legacy data
+
+    // A fresh insert with a real closed interval now works.
+    projections.insertEntityAttribute({
+      id: "post-1",
+      user_id: PRIMARY_USER_ID,
+      entity_id: entityId,
+      attribute: "location",
+      value: "Seattle",
+      source_event_ids: "[]",
+      created_at: new Date().toISOString(),
+      interval_start: "2020-01-01",
+      interval_end: "2022-01-01"
+    });
+    const updated = projections.getEntityAttributeById("post-1")!;
+    expect(updated.interval_start).toBe("2020-01-01");
+    expect(updated.interval_end).toBe("2022-01-01");
+  });
+});
