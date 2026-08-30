@@ -170,10 +170,16 @@ describe("resolveMergeRequest", () => {
 });
 
 describe("verifyMergeProposalExecuted", () => {
-  it("true only when both names appear in the reply", () => {
-    expect(verifyMergeProposalExecuted("An Song", "Ah Song", "That's An Song, right? Not Ah Song?")).toBe(true);
-    expect(verifyMergeProposalExecuted("An Song", "Ah Song", "Got it, noted.")).toBe(false);
-    expect(verifyMergeProposalExecuted("An Song", "Ah Song", "That's An Song, right?")).toBe(false);
+  it("true when the survivor name appears in the reply, whether or not the losing name is also mentioned", () => {
+    expect(verifyMergeProposalExecuted("An Song", "That's An Song, right? Not Ah Song?")).toBe(true);
+    // Live-test-caught false negative (real failure, real corpus wording):
+    // natural confirmation phrasing that omits the name being replaced —
+    // this must now verify, not just the two-name form above.
+    expect(verifyMergeProposalExecuted("An Song", "An Song is the name you use, right?")).toBe(true);
+  });
+
+  it("false when the survivor name is never mentioned at all", () => {
+    expect(verifyMergeProposalExecuted("An Song", "Got it, noted.")).toBe(false);
   });
 });
 

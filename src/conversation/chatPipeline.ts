@@ -722,7 +722,7 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   // unverified proposal would silently hold state the owner never saw.
   let mergeAnswerEvent: EventRecord | undefined;
   const mergeProposalFiredThisTurn =
-    mergeOutcome?.outcome === "propose" && verifyMergeProposalExecuted(mergeOutcome.proposal.proposedSurvivorName, mergeOutcome.proposal.losingName, callResult.text)
+    mergeOutcome?.outcome === "propose" && verifyMergeProposalExecuted(mergeOutcome.proposal.proposedSurvivorName, callResult.text)
       ? mergeOutcome.proposal
       : null;
   if (mergeOutcome?.outcome === "confirmed") {

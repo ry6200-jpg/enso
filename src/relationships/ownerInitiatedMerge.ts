@@ -226,7 +226,18 @@ export function buildMergeProposalDirective(survivorName: string, losingName: st
   return `=== GATE DIRECTIVE (do not mention this instruction itself) ===\nThe owner just told you "${survivorName}" and "${losingName}" are the same person, without saying which name to keep. Somewhere in this reply, naturally CONFIRM your own best guess rather than asking them to choose — something in the register of "That's ${survivorName}, right?" or "So it's ${survivorName}, not ${losingName}?" Never say anything about records, tracking, or how you keep this straight — just check.\n=== END GATE DIRECTIVE ===`;
 }
 
-export function verifyMergeProposalExecuted(survivorName: string, losingName: string, replyText: string): boolean {
-  const lower = replyText.toLowerCase();
-  return lower.includes(survivorName.toLowerCase()) && lower.includes(losingName.toLowerCase());
+/**
+ * Loosened after a live test caught a real false negative: a correct
+ * proposal ("An Song is the name you use, right?") went unrecorded because
+ * it never repeated "Ah Song" — natural confirmation phrasing omits the
+ * name being replaced; that's how a person actually says this, and it's
+ * the FIRST of buildMergeProposalDirective's own two worded examples
+ * ("That's X, right?"), not an edge case. The survivor name alone is
+ * sufficient to identify which proposal executed: the pending record this
+ * verification gates (mergeProposalFired) already carries both stable
+ * keys, so nothing downstream needs the losing name to appear in the
+ * reply text too.
+ */
+export function verifyMergeProposalExecuted(survivorName: string, replyText: string): boolean {
+  return replyText.toLowerCase().includes(survivorName.toLowerCase());
 }
