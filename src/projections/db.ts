@@ -114,6 +114,31 @@ export interface PerceptionLogRow {
 }
 
 /**
+ * EN-037 episode clustering, Phase 8.5: one clustered incident, built from
+ * `episodeMarkers` (taxonomySchema.ts's day-one taxonomy — extraction
+ * schema unchanged by this feature) rather than a new extraction category
+ * — see src/projections/episodes.ts's clusterEpisodeMarkers for how
+ * boundary_start/incident_reference/boundary_end markers fold into these
+ * rows. told_start/told_end are the dual-time span's TOLD-time boundary
+ * (always known — every marker traces to a real message's recordedAt);
+ * narrative_year is the EVENT-time boundary, best-effort and often null
+ * (see episodes.ts's extractNarrativeYear doc comment for the honest scope
+ * limit: only an explicit year stated directly in a marker's own text is
+ * ever captured — never a guessed/inferred relative date).
+ */
+export interface EpisodeRow {
+  id: string;
+  user_id: string;
+  title: string;
+  told_start: string;
+  told_end: string;
+  narrative_year: string | null;
+  participant_entity_ids: string; // JSON array of entity ids
+  source_event_ids: string; // JSON array of event ULIDs (extraction_completed + the message_sent events it traces to)
+  created_at: string;
+}
+
+/**
  * Storage for derived, disposable projection data (EN-052). This is a
  * physically separate SQLite file from the event log, deliberately — the
  * authority boundary between "system of record" and "rebuildable cache"
@@ -240,6 +265,21 @@ export class ProjectionsDb {
       );
       CREATE INDEX IF NOT EXISTS idx_perception_user_id ON perception_logs(user_id);
       CREATE INDEX IF NOT EXISTS idx_perception_fact_ref ON perception_logs(fact_ref);
+
+      -- EN-037 episode clustering (Phase 8.5), built from the existing
+      -- episodeMarkers taxonomy — see EpisodeRow's own doc comment above.
+      CREATE TABLE IF NOT EXISTS episodes (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        told_start TEXT NOT NULL,
+        told_end TEXT NOT NULL,
+        narrative_year TEXT,
+        participant_entity_ids TEXT NOT NULL,
+        source_event_ids TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_episodes_user_id ON episodes(user_id);
     `);
     this.migrateEntityAttributesCheckConstraint();
     this.migrateEntityAttributesAddColumn("provenance_kind", `TEXT NOT NULL DEFAULT 'stated'`);
@@ -314,7 +354,7 @@ export class ProjectionsDb {
    */
   clearProjections(): void {
     this.db.exec(
-      `DELETE FROM entities; DELETE FROM structural_atoms; DELETE FROM social_bonds; DELETE FROM entity_attributes; DELETE FROM perception_logs; DELETE FROM entity_aliases;`
+      `DELETE FROM entities; DELETE FROM structural_atoms; DELETE FROM social_bonds; DELETE FROM entity_attributes; DELETE FROM perception_logs; DELETE FROM entity_aliases; DELETE FROM episodes;`
     );
   }
 
@@ -499,6 +539,35 @@ export class ProjectionsDb {
 
   getPerceptionLogForFact(factRef: string): PerceptionLogRow | undefined {
     return this.db.prepare(`SELECT * FROM perception_logs WHERE fact_ref = ?`).get(factRef) as PerceptionLogRow | undefined;
+  }
+
+  insertEpisode(row: EpisodeRow): void {
+    this.db
+      .prepare(
+        `INSERT INTO episodes (id, user_id, title, told_start, told_end, narrative_year, participant_entity_ids, source_event_ids, created_at)
+         VALUES (@id, @user_id, @title, @told_start, @told_end, @narrative_year, @participant_entity_ids, @source_event_ids, @created_at)`
+      )
+      .run(row);
+  }
+
+  getEpisodeById(id: string): EpisodeRow | undefined {
+    return this.db.prepare(`SELECT * FROM episodes WHERE id = ?`).get(id) as EpisodeRow | undefined;
+  }
+
+  /**
+   * Chronological by the episode's real NARRATIVE date (narrative_year),
+   * never by insertion/created_at — the requirement this exists for. A
+   * dated row (narrative_year IS NOT NULL, sorts first per the boolean
+   * ASC trick below) orders among other dated rows by that year; an
+   * undated row has no real chronological anchor at all, so it sorts
+   * after every dated row, ordered internally by told_start (the best
+   * available fallback — when it was TALKED about, never when the SQLite
+   * row happened to be written).
+   */
+  listEpisodesByNarrativeOrder(userId: string): EpisodeRow[] {
+    return this.db
+      .prepare(`SELECT * FROM episodes WHERE user_id = ? ORDER BY (narrative_year IS NULL) ASC, narrative_year ASC, told_start ASC`)
+      .all(userId) as EpisodeRow[];
   }
 
   close(): void {

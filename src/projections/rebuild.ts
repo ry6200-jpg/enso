@@ -14,6 +14,7 @@ import { assertParentOf, assertSiblingOf, assertSpouseOf, closeSpouseOf, deriveS
 import { closeBond, openBond } from "../relationships/socialBonds.js";
 import type { ProjectionsDb } from "./db.js";
 import type { AttributeType } from "./attributeVocabulary.js";
+import { clusterEpisodeMarkers, type EpisodeMarkerEvent, type EpisodeMarkerKind } from "./episodes.js";
 
 interface ExtractionCompletedPayload {
   sourceEventId: string;
@@ -30,6 +31,7 @@ interface ExtractionCompletedPayload {
     explicitlyNewPerson?: boolean;
   }[];
   attributes?: { entityName: string; attribute: AttributeType; value: string; eventDate: string | null }[];
+  episodeMarkers?: { kind: EpisodeMarkerKind; text: string }[];
 }
 interface ExtractionFailedPayload {
   sourceEventId: string;
@@ -74,6 +76,8 @@ export interface RebuildResult {
   attributesApplied: number;
   /** Entities created via the lowest-confidence fuzzy/phonetic path or a same-counterparty kinship conflict — flagged, never auto-merged (EN-012). */
   pendingDisambiguations: number;
+  /** EN-037 Phase 8.5: episodes clustered from episodeMarkers this rebuild — see projections/episodes.ts's clusterEpisodeMarkers. */
+  episodesBuilt: number;
 }
 
 const UNKNOWN_EXTRACTOR_VERSION = "unknown";
@@ -413,6 +417,46 @@ export function rebuildProjections(
     }
   }
 
+  // EN-037 Phase 8.5: episode clustering, built on the existing
+  // episodeMarkers taxonomy rather than a new extraction category (owner
+  // decision — see spec's EN-037 entry and src/projections/episodes.ts's
+  // own header comment for the full reasoning). Run AFTER the
+  // entities/structuralAtoms/socialBonds pass and the attributes pass
+  // above, so mentionResolution already holds every entity this rebuild is
+  // ever going to resolve for these events — participant entity ids are
+  // derived from that cache, never re-resolved independently, so an
+  // episode's participants always agree with what the rest of the
+  // projection already knows about who was mentioned in the same message.
+  const participantEntityIdsByEventId = new Map<string, Set<string>>();
+  for (const [key, entityId] of mentionResolution) {
+    const eventId = key.slice(0, key.indexOf("|"));
+    if (!participantEntityIdsByEventId.has(eventId)) participantEntityIdsByEventId.set(eventId, new Set());
+    participantEntityIdsByEventId.get(eventId)!.add(entityId);
+  }
+
+  const markerEvents: EpisodeMarkerEvent[] = [];
+  for (const event of events) {
+    if (event.type !== "extraction_completed") continue;
+    if (eclipsedEventIds.has(event.id)) continue; // EN-065: same exclusion as every other pass
+    const payload = event.payload as ExtractionCompletedPayload;
+    const participantEntityIds = [...(participantEntityIdsByEventId.get(event.id) ?? [])];
+    for (const marker of payload.episodeMarkers ?? []) {
+      markerEvents.push({
+        extractionEventId: event.id,
+        sourceEventId: payload.sourceEventId,
+        toldAt: event.recordedAt,
+        kind: marker.kind,
+        text: marker.text,
+        participantEntityIds
+      });
+    }
+  }
+
+  const episodeRows = clusterEpisodeMarkers(markerEvents);
+  for (const row of episodeRows) {
+    projections.insertEpisode({ id: newId(), user_id: userId, created_at: new Date().toISOString(), ...row });
+  }
+
   /**
    * Ambient/register/zodiac batch, item 4 #2: a pre-existing bug found
    * (not introduced) while wiring attribute-value corrections through
@@ -522,6 +566,7 @@ export function rebuildProjections(
     structuralAtomsApplied,
     socialBondsApplied,
     attributesApplied,
-    pendingDisambiguations
+    pendingDisambiguations,
+    episodesBuilt: episodeRows.length
   };
 }
