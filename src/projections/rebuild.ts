@@ -84,6 +84,19 @@ export interface RebuildResult {
   attributeCorrectionsApplied: number;
   confirmationsApplied: number;
   structuralAtomsApplied: number;
+  /** Bug fix 3 of 3: parent_of/spouse_of/sibling_of atoms rejected by assertParentOf/assertSpouseOf/assertSiblingOf's semantic validation (a cycle, a self-loop, or a cross-type conflict) — never written, logged loudly, never thrown. Visible here so a rejection is never silent to a caller, matching every other write-outcome counter on this struct. */
+  structuralAtomsRejected: number;
+  /**
+   * Bug fix 3 of 3, change 2: plain observability, not a bound — the
+   * highest number of open parent_of atoms held toward any single child,
+   * across every entity in this rebuild. Nothing rejects a third (or
+   * further) parent; this exists so a caller can SEE when the count is
+   * unusual (3+, most often a genuine step/adoptive family shape, but
+   * also the shape an extraction error would produce) without the code
+   * ever guessing which case it is. 0 when there are no parent_of atoms
+   * at all.
+   */
+  maxOpenParentsForAnyChild: number;
   socialBondsApplied: number;
   attributesApplied: number;
   /** Entities created via the lowest-confidence fuzzy/phonetic path or a same-counterparty kinship conflict — flagged, never auto-merged (EN-012). */
@@ -521,6 +534,7 @@ export function rebuildProjections(
 
   let extractionsConsumed = 0;
   let structuralAtomsApplied = 0;
+  let structuralAtomsRejected = 0;
   let socialBondsApplied = 0;
 
   for (const event of events) {
@@ -558,20 +572,26 @@ export function rebuildProjections(
       );
 
       if (atom.type === "parent_of") {
-        assertParentOf(projections, userId, fromId, toId, provenance);
+        const written = assertParentOf(projections, userId, fromId, toId, provenance);
+        if (written) structuralAtomsApplied++;
+        else structuralAtomsRejected++;
       } else if (atom.type === "spouse_of") {
         if (isAssert) {
-          assertSpouseOf(projections, userId, fromId, toId, provenance);
+          const written = assertSpouseOf(projections, userId, fromId, toId, provenance);
+          if (written) structuralAtomsApplied++;
+          else structuralAtomsRejected++;
         } else {
           const existing = projections
             .listStructuralAtoms(userId, "spouse_of")
             .find((a) => (a.from_entity_id === fromId && a.to_entity_id === toId) || (a.from_entity_id === toId && a.to_entity_id === fromId));
           if (existing) closeSpouseOf(projections, existing.id, event.recordedAt, event.id);
+          structuralAtomsApplied++;
         }
       } else {
-        assertSiblingOf(projections, userId, fromId, toId, provenance);
+        const written = assertSiblingOf(projections, userId, fromId, toId, provenance);
+        if (written) structuralAtomsApplied++;
+        else structuralAtomsRejected++;
       }
-      structuralAtomsApplied++;
     }
 
     for (const bond of payload.socialBonds ?? []) {
@@ -832,6 +852,23 @@ export function rebuildProjections(
     if (outcome === "failed") messagesCurrentlyFailed++;
   }
 
+  // Bug fix 3 of 3, change 2: plain observability over the final parent_of
+  // shape — computed once, after every write this rebuild will ever make
+  // to parent_of (deriveSiblingsFromParents, run earlier, only writes
+  // sibling_of and never changes parent_of). See RebuildResult's own doc
+  // comment on maxOpenParentsForAnyChild for why this exists instead of a cap.
+  let maxOpenParentsForAnyChild = 0;
+  {
+    const openParentCountByChild = new Map<string, number>();
+    for (const atom of projections.listStructuralAtoms(userId, "parent_of")) {
+      if (atom.interval_end !== null) continue;
+      openParentCountByChild.set(atom.to_entity_id, (openParentCountByChild.get(atom.to_entity_id) ?? 0) + 1);
+    }
+    for (const count of openParentCountByChild.values()) {
+      if (count > maxOpenParentsForAnyChild) maxOpenParentsForAnyChild = count;
+    }
+  }
+
   return {
     entitiesWritten: projections.listEntities(userId).length,
     extractionsConsumed,
@@ -840,6 +877,8 @@ export function rebuildProjections(
     attributeCorrectionsApplied,
     confirmationsApplied,
     structuralAtomsApplied,
+    structuralAtomsRejected,
+    maxOpenParentsForAnyChild,
     socialBondsApplied,
     attributesApplied,
     pendingDisambiguations,

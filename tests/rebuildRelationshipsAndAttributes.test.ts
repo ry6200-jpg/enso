@@ -144,3 +144,52 @@ describe("rebuild persists third-party attributes with dual-time perception logs
     expect(getCurrentAttribute(projections, PRIMARY_USER_ID, priya.id, "location")!.value).toBe("Seattle");
   });
 });
+
+describe("structural atom semantic validation at rebuild time (Bug fix 3 of 3)", () => {
+  it("rebuild completes rather than throwing when a historical extraction contains a semantic violation, and structuralAtomsRejected reflects it", () => {
+    const msg = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "Mom and Kid, somehow both ways." }, userId: PRIMARY_USER_ID });
+    appendExtraction(msg.id, {
+      entities: [
+        { name: "Mom", type: "person" },
+        { name: "Kid", type: "person" }
+      ],
+      structuralAtoms: [
+        { type: "parent_of", fromName: "Mom", toName: "Kid", action: "assert" },
+        { type: "parent_of", fromName: "Kid", toName: "Mom", action: "assert" } // inverted against the first — a cycle
+      ]
+    });
+
+    let result: ReturnType<typeof rebuildProjections> | undefined;
+    expect(() => {
+      result = rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+    }).not.toThrow();
+
+    expect(result!.structuralAtomsApplied).toBe(1);
+    expect(result!.structuralAtomsRejected).toBe(1);
+    expect(projections.listStructuralAtoms(PRIMARY_USER_ID, "parent_of")).toHaveLength(1);
+  });
+
+  it("a third parent_of for the same child is now accepted (no cap), and maxOpenParentsForAnyChild reflects it", () => {
+    const msg = eventLog.append({ type: "message_sent", actor: "user", payload: { text: "Birth mom, birth dad, and stepmom, all parents." }, userId: PRIMARY_USER_ID });
+    appendExtraction(msg.id, {
+      entities: [
+        { name: "BirthMom", type: "person" },
+        { name: "BirthDad", type: "person" },
+        { name: "StepMom", type: "person" },
+        { name: "Kid", type: "person" }
+      ],
+      structuralAtoms: [
+        { type: "parent_of", fromName: "BirthMom", toName: "Kid", action: "assert" },
+        { type: "parent_of", fromName: "BirthDad", toName: "Kid", action: "assert" },
+        { type: "parent_of", fromName: "StepMom", toName: "Kid", action: "assert" }
+      ]
+    });
+
+    const result = rebuildProjections(eventLog.listForUser(PRIMARY_USER_ID), projections, PRIMARY_USER_ID);
+
+    expect(result.structuralAtomsApplied).toBe(3);
+    expect(result.structuralAtomsRejected).toBe(0);
+    expect(result.maxOpenParentsForAnyChild).toBe(3);
+    expect(projections.listStructuralAtoms(PRIMARY_USER_ID, "parent_of")).toHaveLength(3);
+  });
+});

@@ -80,7 +80,8 @@ describe("traversal (EN-014): derived relations are computed, never stored", () 
 
   it("getSpouses respects active vs closed intervals, and historical evaluation via asOfDate (EN-013 ex-in-law paths)", () => {
     const marriage = assertSpouseOf(projections, PRIMARY_USER_ID, "me", "ex", ["e1"], "2010-01-01");
-    closeSpouseOf(projections, marriage.id, "2015-01-01", "ev-divorce");
+    expect(marriage).not.toBeNull();
+    closeSpouseOf(projections, marriage!.id, "2015-01-01", "ev-divorce");
 
     expect(getSpouses(projections, PRIMARY_USER_ID, "me")).toEqual([]); // active-only default excludes it
     expect(getSpouses(projections, PRIMARY_USER_ID, "me", "2012-01-01")).toEqual(["ex"]); // was active as of that date
