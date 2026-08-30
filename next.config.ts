@@ -50,10 +50,67 @@ const nextConfig: NextConfig = {
   turbopack: {
     resolveExtensions: [".tsx", ".ts", ".jsx", ".js", ".mjs", ".json"]
   },
-  webpack(config) {
+  webpack(config, { nextRuntime, webpack }) {
     config.resolve.extensionAlias = {
       ".js": [".ts", ".tsx", ".js"]
     };
+    // instrumentation.ts build fix, confirmed live (`next dev --webpack`,
+    // fresh boot): Next.js compiles instrumentation.ts for BOTH the node
+    // and edge server compilers unconditionally in dev mode — there's no
+    // per-file "runtime" export it reads to skip the edge pass the way it
+    // does for ordinary route/page files (checked directly against
+    // next's own build/entries.js: getInstrumentationEntry and
+    // finalizeEntrypoint never inspect the file's own exports; the ONLY
+    // pruning of an edge-only instrumentation entry — "no other edge
+    // entry exists, delete it" — lives in build/entries.js's
+    // createEntrypoints, which next dev's on-demand entry handler doesn't
+    // go through). instrumentation.ts's register() only ever reaches
+    // src/storage/userSession.js (-> eventLog.ts -> better-sqlite3) under
+    // `NEXT_RUNTIME === "nodejs"` (see instrumentation.ts's own runtime
+    // guard) — genuinely unreachable under edge — but webpack still has
+    // to RESOLVE that whole dependency graph to build the edge bundle,
+    // and better-sqlite3's native bindings.js does a bare `require('fs')`
+    // edge has no polyfill for, which previously crashed the entire dev
+    // server on boot. Aliasing the package to `false` for the edge
+    // compiler pass only (nextRuntime === "edge") makes webpack treat any
+    // edge-side import of it as an empty stub instead of resolving into
+    // it — safe specifically because that code path never executes under
+    // edge; the real, working import stays completely untouched for the
+    // node compiler pass, which is the only one that ever runs it.
+    if (nextRuntime === "edge") {
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        "better-sqlite3": false
+      };
+      // userSession.ts (imported transitively from instrumentation.ts's
+      // register(), same unreachable-under-edge code path as above)
+      // imports real Node core modules directly (`import fs from
+      // "node:fs"`) — it's a first-party file that must stay fully
+      // compiled for the node pass, so unlike better-sqlite3 it can't be
+      // aliased away wholesale; only the specific Node builtins its
+      // import graph touches need stubbing for edge. resolve.fallback
+      // alone doesn't cover this: it only matches BARE specifiers
+      // ("fs"), and confirmed live that a "node:fs"-style specifier hits
+      // webpack's UnhandledSchemeError before fallback is ever consulted
+      // (webpack has no built-in handler for the node: URI scheme at
+      // all) — NormalModuleReplacementPlugin strips the node: prefix
+      // first, onto the bare specifier resolve.fallback below already
+      // maps to an empty stub.
+      config.plugins.push(new webpack.NormalModuleReplacementPlugin(/^node:/, (resource) => {
+        resource.request = resource.request.replace(/^node:/, "");
+      }));
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        path: false,
+        os: false,
+        crypto: false,
+        stream: false,
+        util: false,
+        events: false,
+        buffer: false
+      };
+    }
     return config;
   }
 };

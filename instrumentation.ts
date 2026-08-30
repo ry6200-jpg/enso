@@ -21,7 +21,28 @@
  * running to reach their own normal checkpoint/upload/release, the same
  * way they would if nothing had interrupted them — turning a rollout back
  * into a clean handoff instead of a crash.
+ *
+ * runtime = "nodejs" (build fix, confirmed live): this app has no
+ * middleware.ts and no other edge-runtime entry point, so Next.js's own
+ * "no edge server entry exists, drop the edge instrumentation bundle"
+ * optimization (build/entries.js) should skip building this file for
+ * edge at all — in practice, `next dev --webpack` still attempts an edge
+ * compilation pass for it, pulling in the dynamic userSession.js import
+ * (-> eventLog.ts -> better-sqlite3 -> node-gyp-build/bindings.js's own
+ * `require('fs')`) into that pass, which the edge runtime has no `fs` to
+ * satisfy — a real, reproduced crash (`Module not found: Can't resolve
+ * 'fs'`), not a hypothetical one. This is the documented, canonical way
+ * to tell Next.js this file is nodejs-only and skip the edge compilation
+ * pass entirely, rather than relying on the runtime-only
+ * `process.env.NEXT_RUNTIME !== "nodejs"` guard below, which only stops
+ * the code from EXECUTING under edge — by then webpack has already tried
+ * to BUNDLE it. serverExternalPackages (next.config.ts) doesn't help
+ * here either: it only externalizes native/Node packages for the nodejs
+ * server runtime, never for edge, which has no concept of an external
+ * native module at all.
  */
+export const runtime = "nodejs";
+
 const GRACE_MS = 8000;
 
 export async function register(): Promise<void> {
