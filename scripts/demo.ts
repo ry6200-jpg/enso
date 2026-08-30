@@ -22,6 +22,10 @@ function main(): void {
 
   const eventLog = new EventLog(path.join(root, "events.db"));
   const blobs = new BlobStore(path.join(root, "blobs"));
+  // Explicit reference date (EN-057) — shared across both rebuild runs
+  // below so section 5's own A/B strict-exact comparison stays correct by
+  // construction.
+  const referenceDate = new Date();
 
   section("1. Emitting a scripted sequence covering all ten event types (EN-050)");
 
@@ -147,7 +151,7 @@ function main(): void {
   section("3. Building projections via the rebuild command (EN-054 v1.5 — payload-reading, no extraction)");
 
   const projectionsA = new ProjectionsDb(path.join(root, "projections-run-a.db"));
-  const resultA = rebuildProjections(allEvents, projectionsA, USER_ID);
+  const resultA = rebuildProjections(allEvents, projectionsA, USER_ID, undefined, referenceDate);
   console.log(`Rebuild run A: ${JSON.stringify(resultA)}`);
   console.log(`(no extractor function was passed — there is no code path here that could call a provider)`);
 
@@ -160,7 +164,7 @@ function main(): void {
 
   section("4. Re-running rebuild from scratch — proving it is routine, not scary (EN-054)");
   const projectionsB = new ProjectionsDb(path.join(root, "projections-run-b.db"));
-  const resultB = rebuildProjections(allEvents, projectionsB, USER_ID);
+  const resultB = rebuildProjections(allEvents, projectionsB, USER_ID, undefined, referenceDate);
   console.log(`Rebuild run B: ${JSON.stringify(resultB)}`);
 
   section("5. Strict-exact comparator: two independent rebuilds must match exactly (EN-057 v1.5)");

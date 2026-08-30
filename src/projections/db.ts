@@ -671,6 +671,30 @@ export class ProjectionsDb {
     this.db.prepare(`DELETE FROM entity_attributes WHERE id = ?`).run(id);
   }
 
+  /**
+   * The real cascade for the unnamed-entity purge (rebuild.ts's final
+   * pass) — used ONLY there, never for an ordinary correction. Removes
+   * every row referencing this entity id (structural atoms and social
+   * bonds checked on BOTH from/to sides, since either could be the
+   * purged entity), then the entity row itself, all in one transaction
+   * so a crash mid-purge can never leave an entity half-deleted (its
+   * attributes gone but its atoms still pointing at a live-looking row,
+   * or vice versa). Safe against "never edited in place" for the same
+   * reason deleteEntityAttribute already is: this is a derived
+   * projection, fully rebuilt from the event log every call, never a
+   * mutation of the event log itself.
+   */
+  purgeEntity(entityId: string): void {
+    const purge = this.db.transaction(() => {
+      this.db.prepare(`DELETE FROM structural_atoms WHERE from_entity_id = ? OR to_entity_id = ?`).run(entityId, entityId);
+      this.db.prepare(`DELETE FROM social_bonds WHERE from_entity_id = ? OR to_entity_id = ?`).run(entityId, entityId);
+      this.db.prepare(`DELETE FROM entity_attributes WHERE entity_id = ?`).run(entityId);
+      this.db.prepare(`DELETE FROM entity_aliases WHERE entity_id = ?`).run(entityId);
+      this.db.prepare(`DELETE FROM entities WHERE id = ?`).run(entityId);
+    });
+    purge();
+  }
+
   /** All versions, oldest first (created_at ascending — ULID ids sort the same way). */
   listEntityAttributeHistory(userId: string, entityId: string, attribute: EntityAttributeRow["attribute"]): EntityAttributeRow[] {
     return this.db

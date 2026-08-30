@@ -77,6 +77,10 @@ export async function refreshMemoryAfterTurn(deps: TurnMemoryRefreshDeps, userId
   await extractMessageWithResilience(deps.eventLog, deps.extractionRouter, messageEvent, undefined, knownPeopleNames, precedingReplyText);
 
   const allEvents = deps.eventLog.listForUser(userId);
-  rebuildProjections(allEvents, deps.projectionsDb, userId);
+  // Explicit reference date (EN-057) — see rebuildProjections' own doc
+  // comment. This runs after every real turn, so "now" is the only
+  // sensible value; passed explicitly rather than relied on as a default
+  // so the intent reads plainly at the call site.
+  rebuildProjections(allEvents, deps.projectionsDb, userId, undefined, new Date());
   await rebuildRetrievalIndex(allEvents, deps.retrievalDb, userId, deps.embedder);
 }

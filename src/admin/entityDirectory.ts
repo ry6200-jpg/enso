@@ -2,6 +2,7 @@ import type { ProjectionsDb } from "../projections/db.js";
 import { primaryEntityId } from "../projections/rebuild.js";
 import { resolveEntityAttribute } from "../perception/attributes.js";
 import { ATTRIBUTE_TYPES, type AttributeType } from "../projections/attributeVocabulary.js";
+import { resolveMentionDates } from "../projections/mentionDates.js";
 
 /**
  * Admin-only entity view (part 2). Reads only the SIGNED-IN admin's own
@@ -113,9 +114,7 @@ export function computeEntityDirectory(projections: ProjectionsDb, userId: strin
     }
 
     const ids = sourceIdsOf(entity);
-    const resolvedTimestamps = ids.map((id) => recordedAtByMessageId.get(id)).filter((t): t is string => t !== undefined);
-    const firstMentionAt = resolvedTimestamps[0] ?? null;
-    const lastMentionAt = resolvedTimestamps[resolvedTimestamps.length - 1] ?? null;
+    const { firstMentionAt, lastMentionAt } = resolveMentionDates(entity, recordedAtByMessageId);
     const daysSinceLastMention = lastMentionAt ? (now - new Date(lastMentionAt).getTime()) / (24 * 60 * 60 * 1000) : null;
 
     return {

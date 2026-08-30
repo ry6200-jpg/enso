@@ -49,6 +49,11 @@ async function main() {
   const costTracker = new CostTracker();
   const router = createDefaultRouter({ openai: openaiKey, gemini: geminiKey }, costTracker);
   const scratchProjections = new ProjectionsDb(path.join(root, "scratch.db"));
+  // Explicit reference date (EN-057) — one shared value for every rebuild
+  // in this script run, so scenario 5's own A/B strict-exact comparison
+  // stays correct by construction rather than by two independent
+  // `new Date()` calls happening to land close enough together.
+  const referenceDate = new Date();
 
   // Rebuilds after every message so each subsequent extraction call can be
   // given the current known-people list (EN-012's buildKnownPeopleBlock
@@ -60,7 +65,7 @@ async function main() {
     console.log(`  "${text}"`);
     console.log(`  known people given to extractor: [${knownPeople.join(", ")}]`);
     console.log(`  -> ${JSON.stringify(extraction.payload)}`);
-    rebuildProjections(eventLog.listForUser(USER_ID), scratchProjections, USER_ID);
+    rebuildProjections(eventLog.listForUser(USER_ID), scratchProjections, USER_ID, undefined, referenceDate);
     return { message, extraction };
   }
 
@@ -70,7 +75,7 @@ async function main() {
   await sendAndExtract("Oh, I should mention — my sister Amy's birthday is May 12, 1990.");
 
   let projections = new ProjectionsDb(path.join(root, "projections-1.db"));
-  rebuildProjections(eventLog.listForUser(USER_ID), projections, USER_ID);
+  rebuildProjections(eventLog.listForUser(USER_ID), projections, USER_ID, undefined, referenceDate);
   const amy = findEntityByName(projections, "Amy");
   const birthdate = amy ? getCurrentAttribute(projections, USER_ID, amy.id, "birthdate") : undefined;
   console.log(`\nEntity "Amy" found: ${!!amy}`);
@@ -84,7 +89,7 @@ async function main() {
   await sendAndExtract("Also — a completely different Amy, my friend from work, invited me to her birthday party.");
 
   projections = new ProjectionsDb(path.join(root, "projections-2.db"));
-  rebuildProjections(eventLog.listForUser(USER_ID), projections, USER_ID);
+  rebuildProjections(eventLog.listForUser(USER_ID), projections, USER_ID, undefined, referenceDate);
   const amys = projections.listEntities(USER_ID).filter((e) => e.name === "Amy");
   console.log(`\nEntities named "Amy": ${amys.length}`);
   for (const a of amys) {
@@ -99,7 +104,7 @@ async function main() {
   await sendAndExtract("My mom's sister is my aunt Ines, and her son is my cousin Tomas.");
 
   projections = new ProjectionsDb(path.join(root, "projections-3.db"));
-  rebuildProjections(eventLog.listForUser(USER_ID), projections, USER_ID);
+  rebuildProjections(eventLog.listForUser(USER_ID), projections, USER_ID, undefined, referenceDate);
 
   const me = primaryEntityId(USER_ID);
   const siblings = getSiblings(projections, USER_ID, me);
@@ -118,14 +123,14 @@ async function main() {
   await sendAndExtract("My neighbor Diego waved at me this morning.");
 
   projections = new ProjectionsDb(path.join(root, "projections-4a.db"));
-  rebuildProjections(eventLog.listForUser(USER_ID), projections, USER_ID);
+  rebuildProjections(eventLog.listForUser(USER_ID), projections, USER_ID, undefined, referenceDate);
   let priya = findEntityByName(projections, "Priya")!;
   console.log(`\nBonds between me and Priya after accretion: ${JSON.stringify(findBondsBetween(projections, USER_ID, me, priya.id).map((b) => ({ type: b.type, open: b.interval_end === null })))}`);
 
   await sendAndExtract("Priya and I had a falling out and don't talk anymore.");
 
   projections = new ProjectionsDb(path.join(root, "projections-4b.db"));
-  rebuildProjections(eventLog.listForUser(USER_ID), projections, USER_ID);
+  rebuildProjections(eventLog.listForUser(USER_ID), projections, USER_ID, undefined, referenceDate);
   priya = findEntityByName(projections, "Priya")!;
   const diego = findEntityByName(projections, "Diego")!;
   const priyaBonds = findBondsBetween(projections, USER_ID, me, priya.id);
@@ -140,8 +145,8 @@ async function main() {
   const allEvents = eventLog.listForUser(USER_ID);
   const runA = new ProjectionsDb(path.join(root, "projections-5a.db"));
   const runB = new ProjectionsDb(path.join(root, "projections-5b.db"));
-  const resultA = rebuildProjections(allEvents, runA, USER_ID);
-  const resultB = rebuildProjections(allEvents, runB, USER_ID);
+  const resultA = rebuildProjections(allEvents, runA, USER_ID, undefined, referenceDate);
+  const resultB = rebuildProjections(allEvents, runB, USER_ID, undefined, referenceDate);
   console.log(`\nRebuild A: ${JSON.stringify(resultA)}`);
   console.log(`Rebuild B: ${JSON.stringify(resultB)}`);
 

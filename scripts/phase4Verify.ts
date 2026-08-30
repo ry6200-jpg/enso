@@ -105,6 +105,10 @@ async function main() {
 
   const eventLog = new EventLog(path.join(root, "events.db"));
   const blobStore = new BlobStore(path.join(root, "blobs"));
+  // Explicit reference date (EN-057) — one shared value for every rebuild
+  // in this script run, so VERIFICATION 8's own strict-exact comparison
+  // stays correct by construction.
+  const referenceDate = new Date();
   const costTracker = new CostTracker(); // extraction only — embeddings never touch this
   const messageRouter = createDefaultRouter({ openai: openaiKey, gemini: geminiKey }, costTracker);
   const documentRouter = createDocumentRouter({ openai: openaiKey, gemini: geminiKey }, costTracker);
@@ -122,7 +126,7 @@ async function main() {
   for (const m of MESSAGES) {
     const message = captureMessage(eventLog, { userId: USER_ID, text: m.text, occurredAt: m.occurredAt });
     await extractMessageWithResilience(eventLog, messageRouter, message, undefined, knownPeople());
-    rebuildProjections(eventLog.listForUser(USER_ID), scratchProjections, USER_ID);
+    rebuildProjections(eventLog.listForUser(USER_ID), scratchProjections, USER_ID, undefined, referenceDate);
     console.log(`  captured: "${m.text}"`);
   }
 
@@ -137,7 +141,7 @@ async function main() {
   console.log(`  uploaded: field.png (${imageBytes.length} bytes)`);
 
   const projections = new ProjectionsDb(path.join(root, "projections.db"));
-  rebuildProjections(eventLog.listForUser(USER_ID), projections, USER_ID);
+  rebuildProjections(eventLog.listForUser(USER_ID), projections, USER_ID, undefined, referenceDate);
   const retrievalDb = new RetrievalDb(path.join(root, "retrieval.db"));
   const indexResult = await rebuildRetrievalIndex(eventLog.listForUser(USER_ID), retrievalDb, USER_ID, embedder);
   console.log(`\nIndex built: ${JSON.stringify(indexResult)}`);
@@ -258,7 +262,7 @@ async function main() {
   const allEvents = eventLog.listForUser(USER_ID);
   const projB = new ProjectionsDb(path.join(root, "projections-b.db"));
   const retrievalB = new RetrievalDb(path.join(root, "retrieval-b.db"));
-  rebuildProjections(allEvents, projB, USER_ID);
+  rebuildProjections(allEvents, projB, USER_ID, undefined, referenceDate);
   await rebuildRetrievalIndex(allEvents, retrievalB, USER_ID, embedder);
 
   const retrievalComparison = compareRetrievalIndexExact(retrievalDb, retrievalB, USER_ID);

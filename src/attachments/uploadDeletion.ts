@@ -199,7 +199,11 @@ export async function deleteUpload(deps: DeleteUploadDeps, userId: string, uploa
   const tombstoneEvent = deps.eventLog.append({ type: "upload_deleted", actor: "user", payload, userId });
 
   const allEvents = deps.eventLog.listForUser(userId);
-  rebuildProjections(allEvents, deps.projectionsDb, userId);
+  // Explicit reference date (EN-057) — see rebuildProjections' own doc
+  // comment. This is a real per-request rebuild, so "now" is the only
+  // sensible value; passed explicitly rather than relied on as a default
+  // so the intent reads plainly at the call site.
+  rebuildProjections(allEvents, deps.projectionsDb, userId, undefined, new Date());
   await rebuildRetrievalIndex(allEvents, deps.retrievalDb, userId, deps.embedder);
 
   return { tombstoneEvent, impact };

@@ -5,6 +5,7 @@ import { assertAttribute, ATTRIBUTE_MUTABILITY, resolveEntityAttribute } from ".
 import { computeEclipsedEventIds } from "../attachments/uploadDeletion.js";
 import { computeCoReferenceMerges } from "../relationships/coReferenceMerge.js";
 import { findRetractionTarget, type RelationshipRetractionPayload } from "../relationships/relationshipRetraction.js";
+import { resolveMentionDates } from "./mentionDates.js";
 import {
   findFuzzyNameMatch,
   findUnambiguousPartialNameMatch,
@@ -113,6 +114,8 @@ export interface RebuildResult {
   deprecatedAttributesSkipped: number;
   /** Entities created via the lowest-confidence fuzzy/phonetic path or a same-counterparty kinship conflict — flagged, never auto-merged (EN-012). */
   pendingDisambiguations: number;
+  /** Unnamed entities (role_word OR an exact NO_REAL_NAME_WORDS match) whose last message mention was 30+ days before referenceDate — purged this rebuild, along with every atom/bond/attribute/alias that referenced them. 0 whenever nothing qualifies (the overwhelmingly common case). */
+  entitiesPurged: number;
   /** EN-037 Phase 8.5: episodes clustered from episodeMarkers this rebuild — see projections/episodes.ts's clusterEpisodeMarkers. */
   episodesBuilt: number;
 }
@@ -182,6 +185,63 @@ function normalize(name: string): string {
   return name.trim().toLowerCase();
 }
 
+/**
+ * The unnamed-entity purge's second test (approved, see the design
+ * report): `name_kind === "role_word"` alone misses any mention the
+ * extractor failed to flag as one — confirmed on the real corpus, not
+ * hypothesized: "husband", "mother", and "she" all sit with `name_kind`
+ * null today, literal role words/pronouns extraction never flagged.
+ * Matched via `normalize()` against the entity's FULL name, EXACT match
+ * only — never a substring or partial match. A real person named "May"
+ * or "Sister Mary" must not qualify just because a role word appears
+ * inside their actual name.
+ *
+ * UNLIKE ROLE_WORD_GENDER/ROLE_WORD_RELATION above, a miss here is not
+ * symmetric with a false positive: ROLE_WORD_GENDER missing a word only
+ * means no gender gets inferred — annoying, never destructive. This list
+ * DECIDES WHAT GETS DELETED (rebuild.ts's purge pass, below) — a false
+ * positive here is real, permanent data loss, not a missed convenience.
+ * Keep this list conservative: when in doubt, leave a word OUT rather
+ * than risk purging someone's actual name.
+ */
+const NO_REAL_NAME_WORDS = new Set([
+  // ROLE_WORD_GENDER's own vocabulary, unchanged.
+  "father", "dad", "papa", "husband", "brother", "uncle", "son", "grandfather", "grandpa", "nephew", "boyfriend",
+  "mother", "mom", "mama", "wife", "sister", "aunt", "daughter", "grandmother", "grandma", "niece", "girlfriend",
+  // Personal pronouns.
+  "he", "she", "they", "him", "her", "them",
+  // Generic/plural relationship words — confirmed in real use on the
+  // production corpus ("parents", "coworkers", "friends", "sisters",
+  // "former spouse" all exist as real entities today).
+  "parent", "parents", "spouse", "former spouse", "sibling", "siblings", "child", "children",
+  "friend", "friends", "colleague", "colleagues", "coworker", "coworkers",
+  "neighbor", "neighbors", "classmate", "classmates", "mentor",
+  "sisters", "brothers", "cousins"
+]);
+
+function hasNoRealName(entityName: string, nameKind: "role_word" | null | undefined): boolean {
+  return nameKind === "role_word" || NO_REAL_NAME_WORDS.has(normalize(entityName));
+}
+
+/**
+ * Purge exemption: an entity that has ever picked up a genuine alternate
+ * name — most often via a coReference merge with aliasSuppressed: false —
+ * is never purged, regardless of what its own `name`/`name_kind` field
+ * currently reads as. Checked against the SAME word list and SAME exact
+ * full-string match hasNoRealName uses for the entity's own name, and
+ * deliberately so: confirmed on the real corpus that `registerAlias`
+ * unconditionally self-aliases every entity created via the ordinary
+ * (non-role-word) path, including the exact extraction-fault entities
+ * this purge exists to catch ("husband" aliased as "husband", "she"
+ * aliased as "she") — an alias that's ITSELF a role word is that
+ * self-registration artifact, never evidence a real name was learned,
+ * and must not count toward this exemption. Only an alias that is NOT a
+ * role word — a genuine name variant — exempts.
+ */
+function hasNonRoleWordAlias(aliases: { alias: string }[]): boolean {
+  return aliases.some((a) => !NO_REAL_NAME_WORDS.has(normalize(a.alias)));
+}
+
 function wordCount(name: string): number {
   return name.trim().split(/\s+/).filter(Boolean).length;
 }
@@ -226,7 +286,19 @@ export function rebuildProjections(
   rawEvents: EventRecord[],
   projections: ProjectionsDb,
   userId: string,
-  upcasters: UpcasterRegistry = new UpcasterRegistry()
+  upcasters: UpcasterRegistry = new UpcasterRegistry(),
+  // EN-057: rebuilds are deterministic, so rebuild verification is strict
+  // — two rebuilds of the same log must match exactly, and any difference
+  // is a bug. An explicit parameter, not a read of the system clock
+  // inside this function, is what keeps that true once ANY part of this
+  // fold becomes time-sensitive (the not-yet-built purge pass): a rebuild
+  // stays a pure function of (events, referenceDate), so the same pair of
+  // inputs always produces the same output regardless of when it's
+  // actually run. Defaults to "now" so every existing caller that has no
+  // reason to care keeps behaving exactly as before this parameter
+  // existed — see CLAUDE.md/the design report for the explicit list of
+  // callers updated to pass this deliberately.
+  referenceDate: Date = new Date()
 ): RebuildResult {
   projections.clearProjections();
 
@@ -1125,6 +1197,36 @@ export function rebuildProjections(
     }
   }
 
+  // Unnamed-entity purge (30-day rule): the FINAL pass, after every other
+  // fold above has run. Can never be a decline-to-materialize check
+  // inside resolveName/resolveRoleWordName — "last mention" isn't
+  // knowable until the entire log has been walked, so a correct decision
+  // needs each entity's real, final source_event_ids, which only exists
+  // once the main loop and every post-pass (corrections, confirmations,
+  // episodes) have finished. A real cascade, not a soft delete:
+  // projections.purgeEntity removes every atom/bond/attribute/alias
+  // referencing the entity in the same transaction as the entity row
+  // itself, so nothing is left orphaned for a later pass to clean up.
+  // referenceDate (EN-057) is what keeps this a pure function of
+  // (events, referenceDate) rather than the system clock — two rebuilds
+  // with the same referenceDate must purge exactly the same entities.
+  const PURGE_THRESHOLD_DAYS = 30;
+  const recordedAtByMessageId = new Map(events.filter((e) => e.type === "message_sent").map((e) => [e.id, e.recordedAt]));
+  let entitiesPurged = 0;
+  for (const entity of projections.listEntities(userId)) {
+    if (!hasNoRealName(entity.name, entity.name_kind)) continue;
+    // Exemption (confirmed against the real corpus before building this):
+    // a real name learned at some point — never the entity's own role-word
+    // string self-aliased by ordinary creation — exempts permanently.
+    if (hasNonRoleWordAlias(projections.listEntityAliases(userId, entity.id))) continue;
+    const { lastMentionAt } = resolveMentionDates(entity, recordedAtByMessageId);
+    if (!lastMentionAt) continue; // no resolvable message mention to measure against — never guess, leave it
+    const daysSinceLastMention = (referenceDate.getTime() - new Date(lastMentionAt).getTime()) / (24 * 60 * 60 * 1000);
+    if (daysSinceLastMention < PURGE_THRESHOLD_DAYS) continue;
+    projections.purgeEntity(entity.id);
+    entitiesPurged++;
+  }
+
   return {
     entitiesWritten: projections.listEntities(userId).length,
     extractionsConsumed,
@@ -1140,6 +1242,7 @@ export function rebuildProjections(
     attributesApplied,
     deprecatedAttributesSkipped,
     pendingDisambiguations,
+    entitiesPurged,
     episodesBuilt: episodeRows.length
   };
 }
