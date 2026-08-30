@@ -32,6 +32,15 @@ import {
   type CoReferenceConfirmedPairing
 } from "./coReference.js";
 import { buildSelfBirthdateDirective, isSelfBirthdateEligible, verifySelfBirthdateAskExecuted } from "./selfBirthdateGate.js";
+import {
+  buildAmbiguousMergeDirective,
+  buildMergeProposalDirective,
+  buildUnresolvableMergeDirective,
+  findPendingMergeProposal,
+  resolveMergeRequest,
+  verifyMergeProposalExecuted,
+  type PendingMergeProposal
+} from "../relationships/ownerInitiatedMerge.js";
 import { recentAttributeClaims, resolveAttestation, type FactConfirmedPayload } from "./attestation.js";
 import { decideVoiceMode, hasZenTriggerPhrase } from "./voiceMode.js";
 import type { IntentRouter, RouterResult } from "./router/intentRouter.js";
@@ -191,6 +200,23 @@ export interface ReplySentPayload {
     coReferenceAskFired: { placeholderStableKey: string; placeholderName: string; realStableKey: string; realName: string; anchorName: string } | null;
     /** The fact_confirmed or fact_corrected event id this turn produced, if the co-reference axis recognized a validated confirm/retract answer. */
     coReferenceAnswerEventId: string | null;
+    /**
+     * Owner-initiated merge: non-null only when a survivor was PROPOSED
+     * this turn (both names resolved, unambiguous, distinct, no survivor
+     * stated) AND EN-073-style verification confirmed the reply actually
+     * asked (verifyMergeProposalExecuted) — same decided-vs-executed
+     * discipline as coReferenceAskFired above, since this is the one merge
+     * outcome with real state to protect: findPendingMergeProposal derives
+     * next turn's pending-proposal recognition from a scan of this field,
+     * never a new event type. A merge that resolved outright this turn
+     * (survivor already stated, or answering an already-pending proposal)
+     * needs no verification — see mergeAnswerEventId below — since that is
+     * recognizing something the OWNER already said, not something Enso's
+     * own reply needs to have executed.
+     */
+    mergeProposalFired: PendingMergeProposal | null;
+    /** The fact_confirmed event id this turn produced, if the mergeRequest axis resolved an owner-initiated merge outright (survivor stated, or answering a pending proposal). */
+    mergeAnswerEventId: string | null;
   };
   /**
    * Item 8 round-trip survival: non-null whenever this turn had an
@@ -437,6 +463,7 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
   let coReferencePendingCandidates: CoReferenceConfirmedPairing[] = [];
   let coReferenceConfirmedPairings: CoReferenceConfirmedPairing[] = [];
   let coReferenceAskCandidates: CoReferenceCandidate[] = [];
+  let mergePendingProposal: PendingMergeProposal | null = null;
 
   if (input.retrievalOverride) {
     // Test/override hook (Part 1): bypasses the router entirely, no gates.
@@ -471,6 +498,11 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     // hasOpenLoop deliberately does NOT apply here, see the same header
     // comment) suppresses it down to no candidates for this turn.
     coReferenceAskCandidates = isWindingDown(recentTurns) ? [] : findEligibleCoReferenceCandidates(deps.eventLog, deps.projectionsDb, input.userId);
+    // Owner-initiated merge: computed unconditionally, same reasoning as
+    // coReferencePendingCandidates above — recognizing an answer to a
+    // standing proposal is never a proactive-curiosity action gated by
+    // curiosityTurnEligible.
+    mergePendingProposal = findPendingMergeProposal(deps.eventLog, input.userId);
 
     routerResult = await deps.intentRouter.route({
       message: effectiveText,
@@ -490,7 +522,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       primaryResidenceKnown: getPrimaryUserAttribute(deps.projectionsDb, input.userId, "location") !== null,
       coReferencePendingCandidates,
       coReferenceConfirmedPairings,
-      coReferenceAskCandidates
+      coReferenceAskCandidates,
+      mergePendingProposal
     });
 
     const r = routerResult.decision.retrieval;
@@ -565,6 +598,36 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
       : null;
   const coReferenceAskDirective = coReferenceAskCandidateMatched ? buildCoReferenceAskDirective(coReferenceAskCandidateMatched) : null;
 
+  // Owner-initiated merge: resolved once, here, so its directive (for
+  // unresolvable/ambiguous/propose) can reach assembleContext below —
+  // never mutually exclusive with any gate above, same independent-
+  // directive treatment as coReferenceAskDirective. A "confirmed" outcome
+  // needs no directive (recognizing what the owner already said, not
+  // something Enso's own reply needs to execute) and is appended after
+  // the reply below, alongside the co-reference answer handling it mirrors.
+  const mergeDecision = routerResult?.decision.mergeRequest;
+  const mergeOutcome =
+    mergeDecision?.fire && mergeDecision.firstName && mergeDecision.secondName
+      ? resolveMergeRequest(
+          mergeDecision.firstName,
+          mergeDecision.secondName,
+          mergeDecision.survivingName,
+          deps.projectionsDb.listEntities(input.userId),
+          deps.projectionsDb.listEntityAliases(input.userId),
+          deps.projectionsDb.listStructuralAtoms(input.userId),
+          deps.projectionsDb.listSocialBonds(input.userId),
+          deps.projectionsDb.listAllEntityAttributes(input.userId)
+        )
+      : null;
+  const mergeRequestDirective =
+    mergeOutcome?.outcome === "unresolvable"
+      ? buildUnresolvableMergeDirective(mergeOutcome.name)
+      : mergeOutcome?.outcome === "ambiguous"
+        ? buildAmbiguousMergeDirective(mergeOutcome.name, mergeOutcome.matchNames)
+        : mergeOutcome?.outcome === "propose"
+          ? buildMergeProposalDirective(mergeOutcome.proposal.proposedSurvivorName, mergeOutcome.proposal.losingName)
+          : null;
+
   // EN-047/048: cheap literal-trigger layer always wins outright; otherwise
   // the router's own register judgment (already fail-safed to "natural" on
   // any failure or uncertified tier — SAFE_DEFAULT_DECISION); with no
@@ -603,7 +666,8 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
     dateContextBlock,
     ambientContextBlock,
     suppressedEntitiesDirective,
-    coReferenceAskDirective
+    coReferenceAskDirective,
+    mergeRequestDirective
   );
 
   const callResult = await deps.chatRouter.reply({ system: assembled.systemPrompt, history: [], latestMessage: effectiveText });
@@ -646,6 +710,23 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
         coReferenceAnswerEvent = deps.eventLog.append({ type: "fact_corrected", actor: "user", payload: resolved, userId: input.userId });
       }
     }
+  }
+
+  // Owner-initiated merge: a "confirmed" outcome (survivor already stated,
+  // or answering an already-pending proposal) is appended unconditionally,
+  // same "recognizing what the owner already said" discipline as
+  // attestation/coReference-confirm above — no reply-text verification
+  // needed. A "propose" outcome DOES need EN-073 verification, since
+  // findPendingMergeProposal derives next turn's recognition from this
+  // turn's reply having actually asked (mergeProposalFired below) — an
+  // unverified proposal would silently hold state the owner never saw.
+  let mergeAnswerEvent: EventRecord | undefined;
+  const mergeProposalFiredThisTurn =
+    mergeOutcome?.outcome === "propose" && verifyMergeProposalExecuted(mergeOutcome.proposal.proposedSurvivorName, mergeOutcome.proposal.losingName, callResult.text)
+      ? mergeOutcome.proposal
+      : null;
+  if (mergeOutcome?.outcome === "confirmed") {
+    mergeAnswerEvent = deps.eventLog.append({ type: "fact_confirmed", actor: "user", payload: mergeOutcome.payload, userId: input.userId });
   }
 
   const payload: ReplySentPayload = {
@@ -722,7 +803,9 @@ export async function sendMessage(deps: SendMessageDeps, input: SendMessageInput
             anchorName: coReferenceAskFiredCandidate.anchorName
           }
         : null,
-      coReferenceAnswerEventId: coReferenceAnswerEvent?.id ?? null
+      coReferenceAnswerEventId: coReferenceAnswerEvent?.id ?? null,
+      mergeProposalFired: mergeProposalFiredThisTurn,
+      mergeAnswerEventId: mergeAnswerEvent?.id ?? null
     },
     attachmentContext: attachmentInfo
       ? { sourceEventId: input.attachmentEventId!, filename: attachmentInfo.filename, kind: attachmentInfo.kind, contentInjected: attachmentBlock !== null }

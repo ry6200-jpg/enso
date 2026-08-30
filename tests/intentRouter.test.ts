@@ -17,7 +17,8 @@ const BASE_REQUEST: RouterRequest = {
   primaryResidenceKnown: true,
   coReferencePendingCandidates: [],
   coReferenceConfirmedPairings: [],
-  coReferenceAskCandidates: []
+  coReferenceAskCandidates: [],
+  mergePendingProposal: null
 };
 
 function fakeResult(provider: "openai" | "gemini", decision: RouterDecision): RouterCallResult {
@@ -202,6 +203,36 @@ describe("createIntentRouter — per-axis validation against candidate lists", (
     const result = await router.route(request);
 
     expect(result.decision.coReference).toEqual({ fire: true, direction: "ask", pendingStableKey: "stable-p1" });
+  });
+
+  it("owner-initiated merge: keeps mergeRequest as reported — free-text name spans, no candidate list to validate against", async () => {
+    const primary = vi.fn<RouterAdapter>(async () =>
+      fakeResult("openai", decisionWith({ mergeRequest: { fire: true, firstName: "Ah Song", secondName: "An Song", survivingName: "An Song" } }))
+    );
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.mergeRequest).toEqual({ fire: true, firstName: "Ah Song", secondName: "An Song", survivingName: "An Song" });
+  });
+
+  it("owner-initiated merge: suppresses mergeRequest.fire when the model omits firstName or secondName", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ mergeRequest: { fire: true, firstName: "Ah Song", secondName: null, survivingName: null } })));
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.mergeRequest).toEqual({ fire: false, firstName: null, secondName: null, survivingName: null });
+    expect(result.failureReason).toContain("firstName/secondName missing");
+  });
+
+  it("owner-initiated merge: suppresses a sub-field left set while fire=false", async () => {
+    const primary = vi.fn<RouterAdapter>(async () => fakeResult("openai", decisionWith({ mergeRequest: { fire: false, firstName: "Ah Song", secondName: null, survivingName: null } })));
+    const router = createIntentRouter(primary, primary);
+
+    const result = await router.route(BASE_REQUEST);
+
+    expect(result.decision.mergeRequest).toEqual({ fire: false, firstName: null, secondName: null, survivingName: null });
   });
 
   it("suppresses attestation when the (entityName, attribute, value) triple doesn't exactly match a recent claim", async () => {

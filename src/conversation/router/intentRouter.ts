@@ -118,6 +118,25 @@ function validateDecision(raw: RouterDecision, request: RouterRequest): { decisi
     decision.coReference = NO_ACTION_CO_REFERENCE;
   }
 
+  // Owner-initiated merge: firstName/secondName/survivingName are free
+  // text (never validated against a candidate list — resolution against
+  // the real roster happens downstream, in chatPipeline.ts, exactly like
+  // ambientContext.namedPlaceForDistance/travelContext.destinationHint
+  // below). The only structural check here is the same "never a sub-field
+  // set while fire=false" discipline every other axis gets, plus the
+  // minimum a merge statement needs to mean anything at all: both names
+  // present when fire=true.
+  const NO_ACTION_MERGE_REQUEST = { fire: false, firstName: null, secondName: null, survivingName: null } as const;
+  if (decision.mergeRequest.fire) {
+    if (!decision.mergeRequest.firstName || !decision.mergeRequest.secondName) {
+      reasons.push("mergeRequest.fire=true but firstName/secondName missing — suppressed");
+      decision.mergeRequest = NO_ACTION_MERGE_REQUEST;
+    }
+  } else if (decision.mergeRequest.firstName !== null || decision.mergeRequest.secondName !== null || decision.mergeRequest.survivingName !== null) {
+    reasons.push("mergeRequest had a sub-field set while fire=false — suppressed entirely");
+    decision.mergeRequest = NO_ACTION_MERGE_REQUEST;
+  }
+
   const NO_ACTION_AMBIENT_CONTEXT = { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null } as const;
 
   if (decision.ambientContext.relevant) {
@@ -215,6 +234,7 @@ export function createIntentRouter(
         (decision.curiosityTurn.fire ||
           decision.attestation.isAffirmation ||
           decision.coReference.fire ||
+          decision.mergeRequest.fire ||
           decision.register.mode === "zen" ||
           decision.ambientContext.relevant ||
           decision.travelContext.relevant)
@@ -225,6 +245,7 @@ export function createIntentRouter(
           curiosityTurn: { fire: false, kind: null, entityId: null, attribute: null, probeType: null },
           attestation: { isAffirmation: false, entityName: null, attribute: null, value: null },
           coReference: { fire: false, direction: null, pendingStableKey: null },
+          mergeRequest: { fire: false, firstName: null, secondName: null, survivingName: null },
           register: { mode: "natural" },
           ambientContext: { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null },
           travelContext: { relevant: false, destinationHint: null }

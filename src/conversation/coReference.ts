@@ -66,7 +66,7 @@ export interface CoReferenceCandidate {
   attemptNumber: 1 | 2;
 }
 
-function stableKeyOf(entity: { source_event_ids: string }): string | undefined {
+export function stableKeyOf(entity: { source_event_ids: string }): string | undefined {
   const ids = (JSON.parse(entity.source_event_ids) as string[]).slice().sort();
   return ids[0];
 }

@@ -54,6 +54,17 @@ export const ROUTER_JSON_SCHEMA = {
       required: ["fire", "direction", "pendingStableKey"],
       additionalProperties: false
     },
+    mergeRequest: {
+      type: "object",
+      properties: {
+        fire: { type: "boolean" },
+        firstName: { type: ["string", "null"] },
+        secondName: { type: ["string", "null"] },
+        survivingName: { type: ["string", "null"] }
+      },
+      required: ["fire", "firstName", "secondName", "survivingName"],
+      additionalProperties: false
+    },
     register: {
       type: "object",
       properties: {
@@ -83,7 +94,7 @@ export const ROUTER_JSON_SCHEMA = {
       additionalProperties: false
     }
   },
-  required: ["retrieval", "curiosityTurn", "attestation", "coReference", "register", "ambientContext", "travelContext"],
+  required: ["retrieval", "curiosityTurn", "attestation", "coReference", "mergeRequest", "register", "ambientContext", "travelContext"],
   additionalProperties: false
 } as const;
 
@@ -148,8 +159,11 @@ export function buildRouterSystemPrompt(request: RouterRequest): string {
     request.ambientLocationCandidates.length > 0
       ? request.ambientLocationCandidates.map((c) => `- ${c.name} (id: ${c.entityId}) — location on record: ${c.location}`).join("\n")
       : "(no one on record has a known location)";
+  const mergePendingProposalBlock = request.mergePendingProposal
+    ? `- "${request.mergePendingProposal.firstName}" and "${request.mergePendingProposal.secondName}" are being merged; proposed survivor: "${request.mergePendingProposal.proposedSurvivorName}" — awaiting the owner's yes or a correction`
+    : "(no merge proposal currently awaiting an answer)";
 
-  return `You are a routing judgment layer for a personal journaling assistant, deciding seven things about the CURRENT user message below. Return ONLY the JSON the schema requires — no prose.
+  return `You are a routing judgment layer for a personal journaling assistant, deciding eight things about the CURRENT user message below. Return ONLY the JSON the schema requires — no prose.
 
 CURRENT MESSAGE: ${JSON.stringify(request.message)}
 
@@ -199,9 +213,20 @@ ${coReferencePendingBlock}
 Co-reference pairings currently confirmed (retractable):
 ${coReferenceConfirmedBlock}
 
-5. REGISTER — should the reply use the quieter, more restrained "zen" register instead of the ordinary conversational one? Default to "natural" — this is the overwhelming majority case. Choose "zen" only when the CURRENT message shows genuine overwhelm, the owner visibly looping on the same problem without new ground being covered across recent turns, or an explicit ask to zoom out or step back — judge this from the actual content and tone of the message and recent conversation, not from whether it contains a specific trigger word: someone genuinely overwhelmed frequently does NOT use that word at all. Do not choose "zen" for an ordinary emotional moment that a warm, plain reply already handles well, and do not choose it for a technical or practical exchange with no emotional weight at all.
+5. MERGE REQUEST — is the owner telling you two people already on record are actually one person, and confirming (or being asked to confirm) which name survives?
 
-6. AMBIENT CONTEXT — is a real weather/local-time/walking-distance lookup worth making for THIS turn? Default to relevant=false — this is the overwhelming majority case, and it costs real API calls, so only fire it when there's real value. GOVERNING RULE, the ONLY question that matters: is there a live decision or concern already on the table that this data would actually inform? Location being merely KNOWN is never enough on its own — that produces an assistant appending a helpful fact to every turn, which is exactly the failure this gate exists to prevent.
+This never guesses on its own; it only ever recognizes what the owner's own words, right now, are doing. Two shapes it can recognize:
+- A FRESH statement that two names on record are the same person (e.g. "Ah Song and An Song are the same person," "wait, that's actually my mom, not just 'my aunt'"). Set fire=true, firstName and secondName to the two names AS THE OWNER SAID THEM — verbatim spans from the CURRENT message, never looked up or matched against a list; resolving them against the real roster happens afterward, in code. If the owner also said which name to keep (e.g. "...it's An Song, not Ah Song"), set survivingName to that name; otherwise leave survivingName null — do not guess one.
+- An ANSWER to the merge proposal below, if one is pending — a plain agreement ("yes," "right," "that's him") OR a correction naming the other one. Set fire=true, firstName and secondName to the SAME two names from the pending proposal below (even though the current message likely doesn't repeat them), and survivingName to whichever name is now confirmed: the proposed name for a plain agreement, the OTHER name for a correction.
+
+fire MUST be false, and every other field null, whenever the current message does neither of these — an ordinary continuer or an unrelated reply is never enough, and when in doubt, fire=false.
+
+Merge proposal awaiting an answer:
+${mergePendingProposalBlock}
+
+6. REGISTER — should the reply use the quieter, more restrained "zen" register instead of the ordinary conversational one? Default to "natural" — this is the overwhelming majority case. Choose "zen" only when the CURRENT message shows genuine overwhelm, the owner visibly looping on the same problem without new ground being covered across recent turns, or an explicit ask to zoom out or step back — judge this from the actual content and tone of the message and recent conversation, not from whether it contains a specific trigger word: someone genuinely overwhelmed frequently does NOT use that word at all. Do not choose "zen" for an ordinary emotional moment that a warm, plain reply already handles well, and do not choose it for a technical or practical exchange with no emotional weight at all.
+
+7. AMBIENT CONTEXT — is a real weather/local-time/walking-distance lookup worth making for THIS turn? Default to relevant=false — this is the overwhelming majority case, and it costs real API calls, so only fire it when there's real value. GOVERNING RULE, the ONLY question that matters: is there a live decision or concern already on the table that this data would actually inform? Location being merely KNOWN is never enough on its own — that produces an assistant appending a helpful fact to every turn, which is exactly the failure this gate exists to prevent.
 
 Owner's own coordinates available this turn: ${request.ownLocationAvailable ? "yes" : "no"}. If "no", ownSituation MUST be false no matter what — there is nothing to fetch.
 
@@ -215,7 +240,7 @@ ${ambientCandidatesBlock}
 
 If none of the above genuinely applies, relevant MUST be false and every other field null/false — do not set relevant=true "just in case" one of the fields might end up useful.
 
-7. TRAVEL CONTEXT — is a real, live-traffic drive-time/distance lookup worth making for THIS turn? Default to relevant=false — this costs a real API call and, like ambient context above, is worth almost nothing on most turns. GOVERNING RULE, the same shape as ambient context's: the owner must be facing an actual timing or attendance decision right now — whether to leave, how much time to allow, whether a drive is worth it — never "a destination is knowable, so check it." This is never for idle travel trivia and never volunteered into a reply as an ETA — see the ambient-travel persona instruction for how the data (once fetched) is actually allowed to shape a reply.
+8. TRAVEL CONTEXT — is a real, live-traffic drive-time/distance lookup worth making for THIS turn? Default to relevant=false — this costs a real API call and, like ambient context above, is worth almost nothing on most turns. GOVERNING RULE, the same shape as ambient context's: the owner must be facing an actual timing or attendance decision right now — whether to leave, how much time to allow, whether a drive is worth it — never "a destination is knowable, so check it." This is never for idle travel trivia and never volunteered into a reply as an ETA — see the ambient-travel persona instruction for how the data (once fetched) is actually allowed to shape a reply.
 
 Owner's own home/residence on record: ${request.primaryResidenceKnown ? "yes" : "no"}.
 

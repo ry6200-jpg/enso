@@ -14,6 +14,8 @@ export type { AmbientLocationCandidate };
 import type { AttributeType } from "../../projections/attributeVocabulary.js";
 import type { CoReferenceCandidate, CoReferenceConfirmedPairing } from "../coReference.js";
 export type { CoReferenceCandidate, CoReferenceConfirmedPairing };
+import type { PendingMergeProposal } from "../../relationships/ownerInitiatedMerge.js";
+export type { PendingMergeProposal };
 
 export interface CircleBackCandidate {
   /** The entity's CURRENT projection id — valid for this turn's router selection only. Never persisted for cross-turn matching (see stableKey): entity ids are reassigned on every rebuild (EN-054), a real bug found live in Phase 7 when attempt-tracking briefly keyed off this instead. */
@@ -140,6 +142,13 @@ export interface RouterRequest {
    * here is.
    */
   coReferenceAskCandidates: CoReferenceCandidate[];
+  /**
+   * Owner-initiated merge: the latest merge proposal still awaiting an
+   * answer, if any — the router needs to SEE this to correctly recognize a
+   * plain "yes" or a correction as an answer, since neither restates the
+   * two names on its own. Null whenever no proposal is pending.
+   */
+  mergePendingProposal: PendingMergeProposal | null;
 }
 
 export type RetrievalModeDecision = "hybrid" | "entity" | "recency";
@@ -204,6 +213,26 @@ export interface RouterDecision {
     fire: boolean;
     direction: "confirm" | "retract" | "ask" | null;
     pendingStableKey: string | null;
+  };
+  /**
+   * Owner-initiated merge. Open-world by design (see the design report):
+   * firstName/secondName are verbatim spans from the CURRENT message, not
+   * validated against a rendered candidate list the way coReference's
+   * pendingStableKey is — resolution against the real roster happens
+   * afterward, entirely in code (resolveMergeRequest). Two shapes this can
+   * recognize:
+   * - a FRESH statement that two people on record are the same person
+   *   (survivingName set only if the owner also said which name to keep);
+   * - an ANSWER to mergePendingProposal (a plain agreement or a
+   *   correction) — firstName/secondName copied from the pending proposal,
+   *   survivingName set to whichever name is now confirmed.
+   * fire MUST be false, every other field null, whenever neither applies.
+   */
+  mergeRequest: {
+    fire: boolean;
+    firstName: string | null;
+    secondName: string | null;
+    survivingName: string | null;
   };
   /**
    * EN-048's "real layer": the router's own semantic judgment on whether
@@ -277,6 +306,7 @@ export const SAFE_DEFAULT_DECISION: RouterDecision = {
   curiosityTurn: { fire: false, kind: null, entityId: null, attribute: null, probeType: null },
   attestation: { isAffirmation: false, entityName: null, attribute: null, value: null },
   coReference: { fire: false, direction: null, pendingStableKey: null },
+  mergeRequest: { fire: false, firstName: null, secondName: null, survivingName: null },
   register: { mode: "natural" },
   ambientContext: { relevant: false, ownSituation: false, thirdPartyEntityId: null, namedPlaceForDistance: null },
   travelContext: { relevant: false, destinationHint: null }

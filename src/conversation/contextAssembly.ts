@@ -265,7 +265,8 @@ export function assembleContext(
   dateContextBlock: string | null = null,
   ambientContextBlock: string | null = null,
   suppressedEntitiesDirective: string | null = null,
-  coReferenceAskDirective: string | null = null
+  coReferenceAskDirective: string | null = null,
+  mergeRequestDirective: string | null = null
 ): AssembledContext {
   const { injectedTurns, truncated: recentTruncated } = truncateRecentTurnsToCharBudget(recentTurns, budgets.maxRecentWindowChars, budgets.lowWatermarkRecentWindowChars);
 
@@ -299,7 +300,11 @@ export function assembleContext(
   // coReference.ts's file header) — never mutually exclusive with
   // gateDirective, since a correction and a curiosity ask are genuinely
   // distinct gaps (EN-041).
-  const trailingDirectives = [gateDirective, coReferenceAskDirective, suppressedEntitiesDirective].filter((d): d is string => d !== null);
+  // mergeRequestDirective is appended the same independent way as
+  // coReferenceAskDirective, for the same reason: an owner-initiated merge
+  // recognition is never mutually exclusive with a curiosity ask, an
+  // attestation, or a role-word co-reference ask in the same turn.
+  const trailingDirectives = [gateDirective, coReferenceAskDirective, suppressedEntitiesDirective, mergeRequestDirective].filter((d): d is string => d !== null);
   const systemPrompt = trailingDirectives.length > 0 ? `${baseSystemPrompt}\n\n${trailingDirectives.join("\n\n")}` : baseSystemPrompt;
 
   return {

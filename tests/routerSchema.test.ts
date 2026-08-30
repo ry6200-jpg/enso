@@ -14,7 +14,8 @@ const BASE_REQUEST: RouterRequest = {
   primaryResidenceKnown: false,
   coReferencePendingCandidates: [],
   coReferenceConfirmedPairings: [],
-  coReferenceAskCandidates: []
+  coReferenceAskCandidates: [],
+  mergePendingProposal: null
 };
 
 describe("ROUTER_JSON_SCHEMA (EN-048's register axis)", () => {
@@ -38,7 +39,7 @@ describe("ROUTER_JSON_SCHEMA (EN-048's register axis)", () => {
 describe("buildRouterSystemPrompt (EN-048's register section)", () => {
   it("instructs the router to default to natural and judge zen from content, not a trigger word", () => {
     const prompt = buildRouterSystemPrompt(BASE_REQUEST);
-    expect(prompt).toMatch(/5\. REGISTER/);
+    expect(prompt).toMatch(/6\. REGISTER/);
     expect(prompt).toMatch(/Default to "natural"/);
     expect(prompt).toMatch(/not from whether it contains a specific trigger word/);
   });
@@ -110,7 +111,7 @@ describe("ROUTER_JSON_SCHEMA (part 4: travelContext axis)", () => {
 describe("buildRouterSystemPrompt (part 4: travelContext section)", () => {
   it("names the governing rule (a real timing/attendance decision, not mere knowability) and states whether a residence is on record", () => {
     const prompt = buildRouterSystemPrompt({ ...BASE_REQUEST, primaryResidenceKnown: true });
-    expect(prompt).toMatch(/7\. TRAVEL CONTEXT/);
+    expect(prompt).toMatch(/8\. TRAVEL CONTEXT/);
     expect(prompt).toMatch(/Owner's own home\/residence on record: yes/);
     expect(prompt).toMatch(/never "a destination is knowable, so check it\."/);
   });

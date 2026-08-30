@@ -92,6 +92,8 @@ function recordReply(inReplyToEventId: string, gateActions: Partial<ReplySentPay
       elicitationFired: null,
       coReferenceAskFired: null,
       coReferenceAnswerEventId: null,
+      mergeProposalFired: null,
+      mergeAnswerEventId: null,
       ...gateActions
     }
   };
