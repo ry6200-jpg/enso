@@ -83,6 +83,131 @@ describe("entity_attributes CHECK-constraint migration (EN-114)", () => {
   });
 });
 
+/**
+ * Sexual_orientation deprecation batch: the detector originally checked
+ * only for the vocabulary's LAST marker's presence — a real, live gap,
+ * since sexual_orientation sat BEFORE life_stage (the marker) in
+ * ATTRIBUTE_TYPES, so a mid-list removal never changed what that check
+ * looked at and an already-EN-114-migrated production database was never
+ * re-detected as stale. Widened to match the full, exact generated CHECK
+ * clause text instead — these tests prove that directly, both directions.
+ */
+describe("entity_attributes CHECK-constraint migration: exact-clause detection (deprecation batch)", () => {
+  it("a stored CHECK containing a value no longer in ATTRIBUTE_TYPES (mid-list, not the last marker) triggers a rebuild — deprecated rows dropped, everything else survives with its real column values intact", () => {
+    const dbPath = freshTestDbPath(import.meta.url, "stale-mid-list-value");
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    const raw = new Database(dbPath);
+    // Exactly today's real production shape: sexual_orientation still in
+    // the stored CHECK, all four EN-115/116/Phase-2 columns already
+    // present with REAL, non-default values on some rows — the shape
+    // that would have silently lost data under the ORIGINAL copy step
+    // (which only ever selected the base seven columns).
+    raw.exec(`
+      CREATE TABLE entity_attributes (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        attribute TEXT NOT NULL CHECK (attribute IN ('birthdate', 'location', 'occupation', 'gender', 'sexual_orientation', 'life_stage')),
+        value TEXT NOT NULL,
+        source_event_ids TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        provenance_kind TEXT NOT NULL DEFAULT 'stated',
+        matching_eligible INTEGER NOT NULL DEFAULT 0,
+        interval_start TEXT,
+        interval_end TEXT
+      );
+    `);
+    const entityId = primaryEntityId(PRIMARY_USER_ID);
+    raw.prepare(
+      `INSERT INTO entity_attributes (id, user_id, entity_id, attribute, value, source_event_ids, created_at, provenance_kind, matching_eligible, interval_start, interval_end)
+       VALUES ('keep-1', ?, ?, 'location', 'Seattle', '[]', '2026-01-01T00:00:00.000Z', 'stated', 0, '1993-01-01', NULL)`
+    ).run(PRIMARY_USER_ID, entityId);
+    raw.prepare(
+      `INSERT INTO entity_attributes (id, user_id, entity_id, attribute, value, source_event_ids, created_at, provenance_kind, matching_eligible, interval_start, interval_end)
+       VALUES ('keep-2', ?, ?, 'occupation', 'Engineer', '[]', '2026-01-01T00:00:00.000Z', 'stated', 0, NULL, '2026-06-01T00:00:00.000Z')`
+    ).run(PRIMARY_USER_ID, entityId);
+    raw.prepare(
+      `INSERT INTO entity_attributes (id, user_id, entity_id, attribute, value, source_event_ids, created_at, provenance_kind, matching_eligible, interval_start, interval_end)
+       VALUES ('drop-1', ?, ?, 'sexual_orientation', 'gay', '[]', '2026-01-01T00:00:00.000Z', 'stated', 0, NULL, NULL)`
+    ).run(PRIMARY_USER_ID, entityId);
+    raw.close();
+
+    const projections = new ProjectionsDb(dbPath);
+
+    // The deprecated-attribute row is gone.
+    expect(projections.listEntityAttributeHistory(PRIMARY_USER_ID, entityId, "sexual_orientation" as never)).toHaveLength(0);
+
+    // Everything else survived, INCLUDING its non-default column values —
+    // the exact thing the original seven-column-only copy would have lost.
+    const location = projections.listEntityAttributeHistory(PRIMARY_USER_ID, entityId, "location");
+    expect(location).toHaveLength(1);
+    expect(location[0]!.id).toBe("keep-1");
+    expect(location[0]!.interval_start).toBe("1993-01-01");
+    expect(location[0]!.interval_end).toBeNull();
+
+    const occupation = projections.listEntityAttributeHistory(PRIMARY_USER_ID, entityId, "occupation");
+    expect(occupation).toHaveLength(1);
+    expect(occupation[0]!.id).toBe("keep-2");
+    expect(occupation[0]!.interval_end).toBe("2026-06-01T00:00:00.000Z");
+
+    // The new, narrower constraint genuinely rejects the deprecated value now.
+    expect(() =>
+      projections.insertEntityAttribute({
+        id: "post-1",
+        user_id: PRIMARY_USER_ID,
+        entity_id: entityId,
+        attribute: "sexual_orientation" as never,
+        value: "test",
+        source_event_ids: "[]",
+        created_at: new Date().toISOString()
+      })
+    ).toThrow();
+  });
+
+  it("a stored CHECK matching the current vocabulary EXACTLY does not trigger a rebuild — a hand-seeded table, not just ProjectionsDb's own fresh-create", () => {
+    const dbPath = freshTestDbPath(import.meta.url, "already-exact-match");
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    const raw = new Database(dbPath);
+    raw.exec(`
+      CREATE TABLE entity_attributes (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        attribute TEXT NOT NULL CHECK (attribute IN ('birthdate', 'location', 'occupation', 'gender', 'life_stage')),
+        value TEXT NOT NULL,
+        source_event_ids TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        provenance_kind TEXT NOT NULL DEFAULT 'stated',
+        matching_eligible INTEGER NOT NULL DEFAULT 0,
+        interval_start TEXT,
+        interval_end TEXT
+      );
+    `);
+    const entityId = primaryEntityId(PRIMARY_USER_ID);
+    raw.prepare(
+      `INSERT INTO entity_attributes (id, user_id, entity_id, attribute, value, source_event_ids, created_at)
+       VALUES ('untouched-1', ?, ?, 'location', 'Portland', '[]', '2026-01-01T00:00:00.000Z')`
+    ).run(PRIMARY_USER_ID, entityId);
+    const sqlBefore = (raw.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'entity_attributes'`).get() as { sql: string }).sql;
+    raw.close();
+
+    const projections = new ProjectionsDb(dbPath);
+
+    // The row survived either way (a rebuild preserves ids too), so that
+    // alone wouldn't prove non-rebuild — the real proof is that the
+    // table's OWN stored SQL is byte-identical before and after: a rebuild
+    // would replace it with the code's own generated CREATE TABLE text
+    // (different formatting from this hand-seeded one), so exact equality
+    // here is only possible if no rename/recreate/copy ever ran.
+    const sqlAfter = (projections.db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'entity_attributes'`).get() as { sql: string }).sql;
+    expect(sqlAfter).toBe(sqlBefore);
+
+    const history = projections.listEntityAttributeHistory(PRIMARY_USER_ID, entityId, "location");
+    expect(history).toHaveLength(1);
+    expect(history[0]!.id).toBe("untouched-1");
+  });
+});
+
 describe("entity_attributes ADD COLUMN migrations (EN-115/116)", () => {
   it("a table with the CURRENT CHECK constraint but no provenance_kind/matching_eligible columns gets both added, existing rows backfilled correctly", () => {
     const dbPath = freshTestDbPath(import.meta.url, "post-en114-pre-en115");

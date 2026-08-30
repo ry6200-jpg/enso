@@ -381,27 +381,56 @@ export class ProjectionsDb {
   }
 
   /**
-   * EN-114: a pre-existing on-disk entity_attributes table (real production
-   * data included — this file round-trips via GCS checkout/checkin, it is
-   * never rebuilt from scratch) has its OLD CHECK constraint baked into its
+   * EN-114, detection widened (sexual_orientation deprecation batch): a
+   * pre-existing on-disk entity_attributes table (real production data
+   * included — this file round-trips via GCS checkout/checkin, it is never
+   * rebuilt from scratch) has its OLD CHECK constraint baked into its
    * stored schema. `CREATE TABLE IF NOT EXISTS` above is a no-op against an
    * already-existing table — SQLite has no `ALTER TABLE` for changing a
    * CHECK constraint, unlike a simple new column (see the ADD COLUMN
-   * migrations below, EN-115/116). Detected by checking the table's own
-   * stored CREATE-TABLE SQL (sqlite_master) for the last entry in the
-   * current vocabulary; if absent, the table predates this migration and is
-   * rebuilt in place — SQLite's standard pattern for a CHECK-constraint
-   * change: rename, recreate with the CURRENT schema, copy every row across
+   * migrations below, EN-115/116).
+   *
+   * Detected by checking whether the table's own stored CREATE-TABLE SQL
+   * (sqlite_master) contains the CURRENT vocabulary's full, EXACT generated
+   * CHECK clause text — the same string the CREATE TABLE template above
+   * builds. Originally (EN-114) this checked only for the LAST vocabulary
+   * entry's marker string, which only ever detects growth: a value removed
+   * from the middle of the list (real case — sexual_orientation sat before
+   * life_stage; the last-marker check never noticed) or removed as the
+   * last entry, or any reordering that changes the generated text without
+   * changing which values are present, all pass the old check silently
+   * un-migrated. Matching the FULL clause text catches any of those, not
+   * just append-only widening — this is a real, general fix, not specific
+   * to the sexual_orientation case that surfaced it.
+   *
+   * If the current clause is absent, the table predates it and is rebuilt
+   * in place — SQLite's standard pattern for a CHECK-constraint change:
+   * rename, recreate with the CURRENT schema, copy every row across
    * unchanged, drop the renamed original — inside one transaction so a
    * crash mid-migration can't leave both/neither table present. Idempotent:
    * a no-op on every open once the table is current (true for every fresh
    * test/dev database from the moment it's created, since CREATE TABLE
    * above already has the current CHECK).
+   *
+   * COLUMN LIST, fixed alongside the detection widening: the copy step
+   * below now explicitly lists every column entity_attributes currently
+   * has (id/user_id/entity_id/attribute/value/source_event_ids/created_at
+   * plus EN-115/116's provenance_kind/matching_eligible and Phase 2's
+   * interval_start/interval_end), not just the original seven. The
+   * ORIGINAL EN-114 copy step only ever selected those seven — harmless
+   * the one time it ran, since the table it migrated genuinely predated
+   * the other four columns entirely, but a real, confirmed-live data-loss
+   * bug waiting to happen if this function is ever re-triggered (as it now
+   * is, for the narrowing case) against a table that already has real,
+   * non-default provenance_kind/interval_start/interval_end values — this
+   * account's own production data has 10 such rows today. Copying only
+   * the base seven would have silently reset all of them to their column
+   * defaults on this exact migration.
    */
   private migrateEntityAttributesCheckConstraint(): void {
-    const currentMarker = ATTRIBUTE_TYPES[ATTRIBUTE_TYPES.length - 1];
+    const currentCheckClause = `attribute IN (${ATTRIBUTE_TYPES.map((a) => `'${a}'`).join(", ")})`;
     const existing = this.db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'entity_attributes'`).get() as { sql: string } | undefined;
-    if (!existing || existing.sql.includes(`'${currentMarker}'`)) return;
+    if (!existing || existing.sql.includes(currentCheckClause)) return;
 
     const rebuild = this.db.transaction(() => {
       this.db.exec(`ALTER TABLE entity_attributes RENAME TO entity_attributes_pre_en114`);
@@ -410,15 +439,43 @@ export class ProjectionsDb {
           id TEXT PRIMARY KEY,
           user_id TEXT NOT NULL,
           entity_id TEXT NOT NULL,
-          attribute TEXT NOT NULL CHECK (attribute IN (${ATTRIBUTE_TYPES.map((a) => `'${a}'`).join(", ")})),
+          attribute TEXT NOT NULL CHECK (${currentCheckClause}),
           value TEXT NOT NULL,
           source_event_ids TEXT NOT NULL,
-          created_at TEXT NOT NULL
+          created_at TEXT NOT NULL,
+          provenance_kind TEXT NOT NULL DEFAULT 'stated',
+          matching_eligible INTEGER NOT NULL DEFAULT 0,
+          interval_start TEXT,
+          interval_end TEXT
         );
       `);
+      // Column existence checked defensively (same PRAGMA table_info
+      // pattern migrateEntityAttributesAddColumn below already uses) —
+      // this migration now runs BEFORE the ADD COLUMN migrations
+      // (constructor order, unchanged), so a table old enough to predate
+      // BOTH this CHECK-constraint migration and EN-115/116/Phase 2's
+      // columns genuinely wouldn't have provenance_kind/matching_eligible/
+      // interval_start/interval_end yet — selecting them unconditionally
+      // would throw "no such column" for that (now purely hypothetical,
+      // no known real account in this state) case. Falls back to the same
+      // defaults CREATE TABLE and the ADD COLUMN migrations already use.
+      const oldColumns = new Set((this.db.prepare(`PRAGMA table_info(entity_attributes_pre_en114)`).all() as { name: string }[]).map((c) => c.name));
+      const provenanceKindSelect = oldColumns.has("provenance_kind") ? "COALESCE(provenance_kind, 'stated')" : "'stated'";
+      const matchingEligibleSelect = oldColumns.has("matching_eligible") ? "COALESCE(matching_eligible, 0)" : "0";
+      const intervalStartSelect = oldColumns.has("interval_start") ? "interval_start" : "NULL";
+      const intervalEndSelect = oldColumns.has("interval_end") ? "interval_end" : "NULL";
+      // WHERE clause, not a separate DELETE step: rows whose attribute is
+      // no longer in the current vocabulary (e.g. a deprecated value like
+      // sexual_orientation) would violate the new table's own CHECK
+      // constraint if copied — filtering them out of the SELECT is both
+      // required for the INSERT to succeed at all and the correct way to
+      // drop exactly those rows, atomically, inside the same transaction.
       this.db.exec(`
-        INSERT INTO entity_attributes (id, user_id, entity_id, attribute, value, source_event_ids, created_at)
-        SELECT id, user_id, entity_id, attribute, value, source_event_ids, created_at FROM entity_attributes_pre_en114;
+        INSERT INTO entity_attributes (id, user_id, entity_id, attribute, value, source_event_ids, created_at, provenance_kind, matching_eligible, interval_start, interval_end)
+        SELECT id, user_id, entity_id, attribute, value, source_event_ids, created_at,
+          ${provenanceKindSelect}, ${matchingEligibleSelect}, ${intervalStartSelect}, ${intervalEndSelect}
+        FROM entity_attributes_pre_en114
+        WHERE ${currentCheckClause};
       `);
       this.db.exec(`DROP TABLE entity_attributes_pre_en114`);
       this.db.exec(`CREATE INDEX IF NOT EXISTS idx_attributes_user_id ON entity_attributes(user_id)`);
