@@ -3,16 +3,25 @@ import OpenAI from "openai";
 import type { ChatAdapter, ChatCallResult, ChatRequest } from "./chatTypes.js";
 import { classifyProviderError } from "./errors.js";
 
-export const OPENAI_CHAT_MODEL = "gpt-5.6-sol";
+// EN-075 budget-tier validation: switched from "gpt-5.6-sol" to the
+// cheapest configured OpenAI tier after a manual live persona check (this
+// call has no automated bank -- persona properties are judged by reading
+// actual replies, never by inspecting prompt text, per AGENTS.md). 5 live
+// scenario replies (ordinary update, direct factual question, an
+// emotionally weighty moment with 3 competing facts available, a vague
+// structural gap, a named-relationship moment) were read and approved:
+// warmth, register, and the one-fact budget all held on gpt-5.6-luna.
+// Revert to "gpt-5.6-sol" if a later live reading finds otherwise.
+export const OPENAI_CHAT_MODEL = "gpt-5.6-luna";
 export const GEMINI_CHAT_MODEL = "gemini-3.7-flash";
 
 /**
- * OpenAI chat adapter (EN-081/082) — gpt-5.6-sol, OpenAI's top conversational
- * tier (verified live against developers.openai.com/api/docs/models on
- * 2026-08-21: "frontier model for complex professional work," $5/$30 per M —
- * see pricing.ts), not gpt-5.6-terra (the extraction adapter's model):
- * persona/voice quality is the entire point of this call, where extraction's
- * structured-output correctness is not. Free-text output, no schema.
+ * OpenAI chat adapter (EN-081/082/EN-075). Free-text output, no schema.
+ * Originally pinned to gpt-5.6-sol, OpenAI's top conversational tier
+ * (verified live on 2026-08-21: "frontier model for complex professional
+ * work," $5/$30 per M -- see pricing.ts) on the reasoning that persona/
+ * voice quality is the entire point of this call. Switched to gpt-5.6-luna
+ * after EN-075 live validation (see OPENAI_CHAT_MODEL's own comment above).
  */
 export function createOpenAiChatAdapter(apiKey: string): ChatAdapter {
   const client = new OpenAI({ apiKey });
