@@ -3,15 +3,22 @@ import { classifyProviderError } from "./errors.js";
 import { buildExtractionSystemPrompt, TAXONOMY_JSON_SCHEMA } from "./taxonomySchema.js";
 import type { ExtractionRequest, ExtractionTaxonomy, ProviderAdapter, ProviderCallResult } from "./types.js";
 
-export const OPENAI_EXTRACTION_MODEL = "gpt-5.6-terra";
+// EN-075 budget-tier validation: switched from "gpt-5.6-terra" to the
+// cheapest configured OpenAI tier after the live N=20 bank
+// (tests/validationBank.live.test.ts) passed all 8 assertion-guard
+// extraction cases at >=19/20 on gpt-5.6-luna (280-call combined run,
+// actual spend $0.2374). Unlike the router model (reverted to terra after
+// failing the B1 circle-back case), extraction's judgment held up cleanly.
+export const OPENAI_EXTRACTION_MODEL = "gpt-5.6-luna";
 
 /**
- * OpenAI adapter (EN-080/081/082). Verified live against the Responses API
- * on 2026-08-21: gpt-5.6-terra + Structured Outputs (json_schema, strict)
- * returns schema-conformant JSON. `reasoning.effort: "low"` keeps cost down
- * for extraction, which needs light judgment but not deep reasoning
- * (EN-086) — verified live that "none" is also available if this proves
- * unnecessary once real usage data exists.
+ * OpenAI adapter (EN-080/081/082/EN-075). Structured Outputs (json_schema,
+ * strict) verified live to return schema-conformant JSON on both
+ * gpt-5.6-terra (2026-08-21) and gpt-5.6-luna (EN-075 bank, see above).
+ * `reasoning.effort: "low"` keeps cost down for extraction, which needs
+ * light judgment but not deep reasoning (EN-086) — verified live that
+ * "none" is also available if this proves unnecessary once real usage
+ * data exists.
  */
 export function createOpenAiAdapter(apiKey: string): ProviderAdapter {
   const client = new OpenAI({ apiKey });
