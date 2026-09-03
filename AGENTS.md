@@ -67,3 +67,25 @@ Do not re-litigate settled decisions. Section 12 questions marked RESOLVED are c
 - No blanket capability prohibitions in any prompt ("no maps access", see R3). Behaviors that must happen reliably get explicit gates, not prompt paragraphs (EN-070).
 - Judgment gates run on a mid-tier model minimum; per-model certification is required, and uncertified failover tiers bypass gates to no-action (EN-074, EN-083).
 - RESPECT THE EXTRACTION CACHE: Do not trigger a historical "reprocess" (sending data back through the LLM) to test projection logic or schema changes. Use Enso's deterministic "rebuild" function (dropping projections and replaying the event log using existing `extraction_completed` payloads). Never bump the `extractor_version` in the codebase unless actively redesigning the extraction prompt.
+
+### Prompting Architecture & Token Constraints
+
+When modifying prompt construction logic, context assembly, or token management, strictly adhere to the following architectural constraints established by the token audit:
+
+1. **Strict Prefix Caching (DO NOT conditionally remove "dead" constants):**
+   - The `chatRouter.reply` call utilizes a massive persona block (~15k+ tokens) generated via `buildPersonaBlock`.
+   - **Crucial Rule:** Constants like `CURRENT_LOCATION_INSTRUCTION` and `AMBIENT_TRAVEL_INSTRUCTION` must ALWAYS be injected unconditionally, even when their corresponding data blocks (e.g., GPS or routing data) resolve to zero characters.
+   - *Reasoning:* Conditionally dropping these instructions breaks the stable byte-prefix required for provider-level prompt caching (Group A/B design). The token cost of the "dead weight" instruction is significantly cheaper than breaking the cache and paying full compute for the entire persona block.
+
+2. **Instruction Redundancy & Fact Budgeting:**
+   - The system governs context recitation through a single, centralized `ONE-FACT BUDGET` located within `PERSONA_INSTRUCTION`.
+   - **Crucial Rule:** Do not add redundant one-echo rules to isolated instructions. Rely on the global persona instruction to enforce the budget.
+
+3. **Latent Attribute Vocabulary (Data Visibility):**
+   - The extraction layer currently supports `birthdate`, `location`, `occupation`, `gender`, and `life_stage`.
+   - **Crucial Rule:** `gender` and `life_stage` are intentionally structurally invisible to the reply, gates, and router. They are excluded from `SELF_PROFILE_ATTRIBUTE_ORDER` in `peopleView.ts` by design. 
+   - *Action:* If a feature requires reasoning over gender or life stage, `peopleView.ts` must be explicitly updated to expose those fields; otherwise, assume the agent cannot see them despite successful extraction.
+
+4. **Schema Tax (Gate Candidate Lists):**
+   - The router prompt (`intentRouter.route`) dedicates significant token budget to candidate lists for rare axes. 
+   - **Crucial Rule:** Never remove or truncate schema definitions or candidate lists to save tokens. Doing so silently disables the model's ability to trigger these gates, reverting known regressions (e.g., EN-101, EN-134).
