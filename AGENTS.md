@@ -89,3 +89,15 @@ When modifying prompt construction logic, context assembly, or token management,
 4. **Schema Tax (Gate Candidate Lists):**
    - The router prompt (`intentRouter.route`) dedicates significant token budget to candidate lists for rare axes. 
    - **Crucial Rule:** Never remove or truncate schema definitions or candidate lists to save tokens. Doing so silently disables the model's ability to trigger these gates, reverting known regressions (e.g., EN-101, EN-134).
+
+### Persona evaluation: the Fabrication Check is mandatory
+
+Fact-count budgets (PERSONA_INSTRUCTION's ONE-FACT BUDGET, MEMORY_HYPERDRIVE_INSTRUCTION's at-most-one-echo) bound how many context facts a reply may cite. They do NOT detect a reply that stays within budget while adding a specific -- a location, a duration, a physical detail, an attributed feeling -- that no context fact or the user's current-turn message actually supports. These are two different failure classes and only the second one is fabrication.
+
+A persona leg (a manual read, a rubric score, an approval) that did not also run the Fabrication Check (src/persona/fabricationCheck.ts, tests/fabricationCheck.live.test.ts) is NOT validated for fabrication, regardless of how the rubric or the manual read scored it. Do not treat "reply quality looked good on a manual read" as equivalent to "the Fabrication Check passed" -- they check different things. The manual persona check that approved gpt-5.6-luna for chatRouter.reply did not run this check at the time; the Fabrication Check's own baseline run against those same 5 replies afterward found 2 unanimous (19-20/20) ADDED details in one of them (scenario 4: "a chapter you once enjoyed," "unexpected" -- neither ever stated by the user), which the manual read missed. Re-run the Fabrication Check on that persona leg's actual replies before treating it as fabrication-clean.
+
+Rules for using the check:
+- A detail embedded inside a question is in scope. A reply that offers an unsupported specific as one candidate among several ("was it X, or Y, or Z?") is still asserting X, Y, and Z as candidates -- SOFT_ADDED, not exempt.
+- The judge model must never be the model under evaluation (runFabricationCheck throws structurally if they match -- this is enforced in code, not left to caller discipline). gpt-5.6-terra is the fixed judge. This means gpt-5.6-terra's OWN fabrication rate cannot be measured by this mechanism -- a genuine, documented gap (tests/fabricationCheck.live.test.ts's baseline describe block), not an oversight. Measuring terra's own rate would need a second, independent judge model, not yet built.
+- ADDED fails the case. SOFT_ADDED is recorded and reported, never gated, until a cross-model baseline exists to pick a threshold from.
+- N=20 majority vote per detail (EN-075's own N=20 discipline, reused here), ties broken toward the more severe label.
