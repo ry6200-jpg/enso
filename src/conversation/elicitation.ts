@@ -503,7 +503,7 @@ function findLayer1Candidate(eventLog: EventLog, userId: string): ElicitationCan
  * as it would for an ordinary friend, asking how the two of them met —
  * nonsensical for someone whose relationship to the owner is structural,
  * not one that began at a meeting. A structural_atom is a stronger, more
- * specific fact than a social_bond ever is (it's the one CLAUDE.md and the
+ * specific fact than a social_bond ever is (it's the one AGENTS.md and the
  * spec both treat as authoritative kinship data, not an inferred or
  * volunteered bond), so its presence disqualifies the entity from Layer 3
  * (Social Bond / Key Scenes) elicitation entirely, regardless of any

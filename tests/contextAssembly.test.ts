@@ -24,7 +24,7 @@ function chunk(id: string, text: string, sourceEventId: string = "evt-" + id): C
 
 const RETRIEVAL_META = { mode: "hybrid" as const, query: "test query" };
 
-describe("assembleContext — retrieval budget (round-trip survival, CLAUDE.md)", () => {
+describe("assembleContext — retrieval budget (round-trip survival, AGENTS.md)", () => {
   it("no candidates: reports zero candidates, empty injected ids, and truncated=false — never omits the fields", () => {
     const result = assembleContext([], RETRIEVAL_META, []);
     expect(result.retrieval.candidateCount).toBe(0);

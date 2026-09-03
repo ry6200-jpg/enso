@@ -1,5 +1,5 @@
 /**
- * Phase 6 Part 4 — the N=20 validation bank (EN-075/CLAUDE.md testing
+ * Phase 6 Part 4 — the N=20 validation bank (EN-075/AGENTS.md testing
  * policy): every router flag and the attestation gate, N=20 runs per
  * case, ≥19 to pass, scored as per-flag confusion matrices. Also includes
  * (per this phase's explicit instruction) the assertion-guard cases

@@ -9,7 +9,7 @@ import { getDrivingRoute } from "../location/drivingRoute.js";
  * (already validated by intentRouter.ts, same trust discipline as
  * ambientContextFetch.ts's own callers). Per-turn context only: never an
  * event, never an entity attribute, excluded from extraction input, same
- * discipline as ambientContextFetch.ts's own data (see CLAUDE.md's
+ * discipline as ambientContextFetch.ts's own data (see AGENTS.md's
  * round-trip-survival maxim) — nothing here is ever persisted.
  *
  * HONESTY: a failed lookup at any step (no origin, no resolvable

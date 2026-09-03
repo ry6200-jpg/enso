@@ -296,7 +296,7 @@ export function rebuildProjections(
   // inputs always produces the same output regardless of when it's
   // actually run. Defaults to "now" so every existing caller that has no
   // reason to care keeps behaving exactly as before this parameter
-  // existed — see CLAUDE.md/the design report for the explicit list of
+  // existed — see AGENTS.md/the design report for the explicit list of
   // callers updated to pass this deliberately.
   referenceDate: Date = new Date()
 ): RebuildResult {

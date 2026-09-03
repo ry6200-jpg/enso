@@ -142,7 +142,7 @@ describe("extractMessageWithResilience (EN-059/060)", () => {
     expect(received).toBeUndefined();
   });
 
-  it("round-trip survival (CLAUDE.md): the knownPeopleNames that shaped this extraction are recorded in its own payload", async () => {
+  it("round-trip survival (AGENTS.md): the knownPeopleNames that shaped this extraction are recorded in its own payload", async () => {
     const message = captureTestMessage("My mom called.");
     const router: ExtractionRouter = {
       extract: async () => ({

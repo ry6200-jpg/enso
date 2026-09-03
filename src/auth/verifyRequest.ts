@@ -2,7 +2,7 @@
  * Real user identity (Cloud migration prerequisite batch, item 1). Every
  * API route's identity now comes from a verified Google ID token, never
  * from a client-supplied value — the same "fail loudly, never silently
- * default" discipline CLAUDE.md already requires for the test DB path
+ * default" discipline AGENTS.md already requires for the test DB path
  * (EN-091), extended here to user identity itself.
  *
  * This file is the injectable, pure core: token extraction and the

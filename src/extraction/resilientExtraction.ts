@@ -13,7 +13,7 @@ import { DEFAULT_RETRY_CONFIG, retryWithBackoff, type RetryConfig } from "./retr
 // accept gender/sexual_orientation/life_stage — a real change to the
 // extraction schema sent to the model, even though the prompt TEXT (what
 // actually drives extraction behavior) is unchanged, so real extraction
-// output is unaffected today. Bumped per CLAUDE.md's "any change to the
+// output is unaffected today. Bumped per AGENTS.md's "any change to the
 // extraction schema MUST bump MESSAGE_EXTRACTOR_VERSION" maxim regardless:
 // a cached entry keyed on the OLD version string carries no information about
 // whether it was produced under a schema that could even represent these
@@ -94,7 +94,7 @@ export interface MessageExtractionCompletedPayload {
   attributes: AttributeMention[];
   classifierDecision: ClassifierDecision;
   /**
-   * Round-trip survival (CLAUDE.md): the known-people list injected into
+   * Round-trip survival (AGENTS.md): the known-people list injected into
    * this extraction call (EN-012's known-people context) directly shaped
    * its output ("mom" resolving to "Elena" or not) — recorded here so this
    * observation is self-describing for a future reprocess diff, instead of

@@ -9,7 +9,7 @@ import type { ReportWindowMessage } from "./reportWindows.js";
  * for curiosity-turn/circle-back/ambient candidates (circleBack.ts,
  * ambientCandidates.ts). Confidence gating happens HERE, in code, not as
  * a prompt instruction the model might skip: "behaviors that must happen
- * reliably get explicit gates, not prompt paragraphs" (CLAUDE.md, EN-070).
+ * reliably get explicit gates, not prompt paragraphs" (AGENTS.md, EN-070).
  *
  * The numbers themselves — deviationInStdevs, HHI values, word counts,
  * every raw metric computeReport produces — are used ONLY to decide

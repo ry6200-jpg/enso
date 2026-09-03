@@ -40,7 +40,7 @@ export interface FileUploadedPayload {
  * treating the eclipsed events as if they don't exist when re-deriving
  * projections. removedFactCount/preservedFactCount are computed ONCE, at
  * the moment of deletion, and recorded here rather than left to be
- * recomputed later — round-trip survival (CLAUDE.md): what the user was
+ * recomputed later — round-trip survival (AGENTS.md): what the user was
  * actually told before confirming must stay reconstructable even if more
  * mentions accrue elsewhere afterward and would shift the count if
  * recomputed fresh.

@@ -92,7 +92,7 @@ export function isProvenanceKind(value: string): value is ProvenanceKind {
  * occupation, none of which are CHECK-constrained on value either, and
  * keeping any future widening a plain array edit rather than the
  * rebuild-in-place CHECK-constraint migration EN-114's own precedent
- * required (see CLAUDE.md's migration-discipline note). sexual_orientation
+ * required (see AGENTS.md's migration-discipline note). sexual_orientation
  * itself is no longer part of the vocabulary at all (deprecation batch,
  * post-EN-129) — it was never given a defined vocabulary while it existed,
  * having been abandoned for inference after the schema-decision

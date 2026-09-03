@@ -107,7 +107,7 @@ describe("sendMessage — mechanical guarantees on empty retrieval (EN-010/035/0
   });
 });
 
-describe("reply_sent always records contextProvenance, including when empty (round-trip survival, CLAUDE.md)", () => {
+describe("reply_sent always records contextProvenance, including when empty (round-trip survival, AGENTS.md)", () => {
   it("records an explicit empty injectedChunkIds array — never omits the field — when retrieval found nothing", async () => {
     const result = await sendMessage(deps, {
       userId: PRIMARY_USER_ID,

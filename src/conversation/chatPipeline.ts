@@ -72,7 +72,7 @@ export interface ReplySentPayload {
   /** The message_sent event this reply answers. */
   inReplyToEventId: string;
   /**
-   * Round-trip survival (CLAUDE.md): every retrieved chunk actually injected
+   * Round-trip survival (AGENTS.md): every retrieved chunk actually injected
    * into context, plus enough about the retrieval call itself and the
    * recent-window budget to reconstruct why the reply looked the way it did
    * — recorded even when retrieval found nothing (an empty array is still
